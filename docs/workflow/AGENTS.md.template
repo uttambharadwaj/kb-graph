@@ -1,0 +1,109 @@
+# Agent Operating Contract
+
+All AI agents operating in this project must follow these rules.
+Copy this to your project root as `AGENTS.md` and customize for your setup.
+
+This file ensures consistent behavior across Claude, Codex, Gemini, or any
+other AI agent that works on your codebase.
+
+---
+
+## 1. Knowledge Base First — ALWAYS
+
+Before starting ANY non-trivial task, search the knowledge base:
+
+```bash
+kb search "your topic"
+```
+
+Or use MCP tools: `kb_search`, `kb_context`, `kb_search_smart`
+
+**Why:** The KB accumulates institutional memory. Searching first prevents
+repeating solved problems, avoids known pitfalls, and saves tokens.
+
+**Token-efficient retrieval order:**
+1. `kb_context` — summaries only (~98% fewer tokens than full docs)
+2. `kb_search` — full-text ranked results with snippets
+3. `kb_read` — full document content (only when you need details)
+
+---
+
+## 2. NEVER Do Destructive Actions Without Backup
+
+**Rules:**
+- Before ANY destructive action (delete files, drop tables, destroy instances):
+  ask "Is there data that hasn't been backed up?"
+- BACKUP FIRST. Always. No exceptions.
+- Never `rm -rf` on user data without explicit confirmation
+- Never `git push --force` to main/master
+- Never drop database tables without backup confirmation
+
+---
+
+## 3. Capture Session Findings — MANDATORY
+
+At the END of every significant session, capture what happened.
+
+Use the KB MCP tools:
+- `kb_capture_session` — for debugging/implementation sessions
+- `kb_capture_fix` — for bug fixes with symptom/cause/resolution
+
+**What MUST be captured:**
+- Any error that took more than 5 minutes to diagnose
+- Any workaround or non-obvious fix
+- Any architectural decision and WHY
+- Any failed approach (so we don't try it again)
+
+**Why:** Agents lose context every session. The KB is shared memory.
+If you don't capture it, the next agent will waste time re-discovering it.
+
+---
+
+## 4. Multi-Agent Coordination
+
+When multiple agents work on the same project:
+- All agents read/write to the SAME knowledge base
+- Search KB before starting — another agent may have already solved it
+- Capture your work so other agents benefit
+- Don't contradict decisions another agent made without flagging it
+
+**Consensus model:** When agents disagree, go with what the majority agrees on
+and incorporate unique points from each perspective.
+
+---
+
+## 5. Code Standards
+
+- Simplicity over cleverness
+- Fix root causes, not symptoms
+- DRY, YAGNI — don't over-engineer
+- Run tests before claiming work is done
+- Prefer editing existing files over creating new ones
+- Never commit .env files, credentials, or API keys
+
+---
+
+## 6. The Self-Learning Loop
+
+This project uses a self-learning development workflow:
+
+```
+Agent works on task
+  -> Captures session findings to KB
+  -> KB synthesizes across sessions
+  -> Insights get promoted to lessons/decisions
+  -> Agent instructions auto-update
+  -> Next session starts smarter
+  -> Repeat
+```
+
+Every agent contributes to this loop. The system compounds intelligence over time.
+
+---
+
+## 7. When In Doubt
+
+- Search the KB first
+- Ask the user — don't guess on architectural decisions
+- Don't silently make destructive changes
+- Capture your findings before your session ends

@@ -1,0 +1,109 @@
+# Claude Code Operating Contract
+
+This document defines how Claude Code operates inside this repository.
+Copy this to your project root as `CLAUDE.md` and customize for your needs.
+
+---
+
+## 1. Knowledge Base First
+
+Before starting ANY non-trivial task, search the knowledge base:
+
+```
+kb search "your topic"
+```
+
+Or use MCP tools if available: `kb_search`, `kb_context`, `kb_search_smart`
+
+**Why:** The KB accumulates your project's institutional memory. Searching first prevents
+repeating solved problems and saves tokens. Over time, this becomes your biggest advantage.
+
+**Token-efficient workflow:**
+1. Use `kb_context` for topic briefings (90% fewer tokens than full docs)
+2. Only `kb_read` when you need implementation details
+3. Never read files just to "understand the codebase" — search first
+
+---
+
+## 2. Planning Discipline
+
+- Enter plan mode for ANY non-trivial task (3+ steps, architectural decisions, refactors).
+- If something deviates from plan, STOP and re-plan before proceeding.
+- Write clear specs before building.
+
+---
+
+## 3. Continuous Self-Learning
+
+After ANY user correction:
+1. Extract the mistake pattern
+2. Capture it: use `kb_capture_fix` or `kb_capture_session`
+3. The correction becomes permanent knowledge
+
+After ANY significant session:
+1. Use `kb_capture_session` to record what worked, what failed, what was learned
+2. This is NOT optional — it's how the system gets smarter
+
+**The loop:**
+```
+AI attempts task
+  -> Output evaluated (human judgment)
+  -> Corrections captured (kb_capture_fix)
+  -> KB ingests the session data
+  -> Synthesize organizes and connects to existing knowledge
+  -> Next session starts with better context
+  -> Repeat — compounding improvement
+```
+
+---
+
+## 4. Verification Before Completion
+
+Never mark work complete without proof.
+
+Required:
+- Run relevant tests
+- Check logs
+- Validate expected behavior
+
+Use binary (pass/fail) criteria, never scaled scoring:
+- "Does this compile/run? Y/N"
+- "Does the test pass? Y/N"
+- "Would a user understand this error? Y/N"
+
+---
+
+## 5. Session Capture is MANDATORY
+
+Before ending ANY significant session, capture findings.
+
+**What counts as significant:**
+- Any debugging that took more than 5 minutes
+- Any bug fix
+- Any architectural decision
+- Any failed approach (so we never try it again)
+- Any workaround or non-obvious configuration
+
+**How:** Use `kb_capture_session` or `kb_capture_fix` MCP tools.
+
+**Why:** A lesson not captured is a lesson repeated. Every session you capture
+makes every future session faster.
+
+---
+
+## 6. Code Standards
+
+- Simplicity over cleverness
+- Fix root causes, not symptoms
+- Minimal surface area changes
+- Prefer editing existing files over creating new ones
+- Never commit .env files, credentials, or API keys
+
+---
+
+## 7. When In Doubt
+
+- Search the KB first
+- Ask the user — don't guess on architectural decisions
+- Don't silently make destructive changes
+- Capture your findings before your session ends

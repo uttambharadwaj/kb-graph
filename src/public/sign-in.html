@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — Brain API</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0D0F14;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1a1d24;
+      border: 1px solid #2a2d35;
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+      max-width: 380px;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; color: #fff; }
+    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .info {
+      background: #1e2228;
+      border: 1px solid #2a2d35;
+      border-radius: 8px;
+      padding: 0.75rem;
+      margin-bottom: 1.5rem;
+      font-size: 0.82rem;
+      color: #999;
+      line-height: 1.4;
+    }
+    .info strong { color: #ccc; }
+    label { display: block; font-size: 0.85rem; color: #aaa; margin-bottom: 0.3rem; }
+    input {
+      width: 100%;
+      padding: 0.7rem 0.9rem;
+      background: #0D0F14;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 0.95rem;
+      margin-bottom: 1rem;
+      outline: none;
+    }
+    input:focus { border-color: #E53935; }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      background: #E53935;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #c62828; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error {
+      background: #2d1b1b;
+      border: 1px solid #E53935;
+      border-radius: 8px;
+      padding: 0.6rem;
+      color: #ff6b6b;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    .error[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Brain API</h1>
+    <p class="subtitle">Authorize access to your knowledge base</p>
+    <div class="info">
+      An AI assistant is requesting access to search and write to your knowledge base.
+    </div>
+    <div id="error" class="error" hidden></div>
+    <form id="form">
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autocomplete="email" autofocus>
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required autocomplete="current-password">
+      <button type="submit" id="btn">Authorize</button>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById('form');
+    const errorEl = document.getElementById('error');
+    const btn = document.getElementById('btn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Signing in...';
+
+      try {
+        const res = await fetch('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value,
+          }),
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || 'Invalid email or password');
+        }
+
+        // After successful sign-in, redirect back to the OAuth authorize endpoint
+        // better-auth passes the OAuth params as query params on /sign-in
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('response_type')) {
+          // OAuth flow: redirect back to authorize endpoint with all params
+          window.location.href = '/api/auth/mcp/authorize?' + params.toString();
+        } else {
+          const redirectTo = params.get('redirect') || params.get('callbackURL') || '/';
+          window.location.href = redirectTo;
+        }
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+        btn.disabled = false;
+        btn.textContent = 'Authorize';
+      }
+    });
+  </script>
+</body>
+</html>

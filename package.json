@@ -1,0 +1,40 @@
+{
+  "name": "kb-graph",
+  "version": "1.0.0",
+  "description": "Persistent memory for AI agents — capture, classify, synthesize, retrieve (MCP + REST)",
+  "type": "module",
+  "bin": {
+    "kb": "./bin/kb.js",
+    "bus-autobind": "./bin/bus-autobind.js",
+    "bus-bind": "./bin/bus-bind.js",
+    "bus-hook-current": "./bin/bus-hook-current.js",
+    "bus-send": "./bin/bus-send.js",
+    "bus-unbind": "./bin/bus-unbind.js",
+    "bus-read": "./bin/bus-read.js",
+    "bus-status": "./bin/bus-status.js",
+    "bus-session": "./bin/bus-session.js",
+    "bus-gateway": "./bin/bus-gateway.js",
+    "bus-agent": "./bin/bus-agent.js",
+    "bus-agentd": "./bin/bus-agentd.js",
+    "bus-hook": "./bin/bus-hook.js",
+    "bus-notifier": "./bin/bus-notifier.js"
+  },
+  "main": "./src/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "bcryptjs": "^2.4.3",
+    "better-auth": "^1.5.5",
+    "better-sqlite3": "^11.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "gray-matter": "^4.0.3",
+    "multer": "^1.4.5-lts.1",
+    "pdf-parse": "^1.1.1",
+    "zod": "^4.3.6"
+  }
+}

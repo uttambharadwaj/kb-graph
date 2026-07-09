@@ -1,0 +1,101 @@
+# knowledge-base-server
+
+> Portable AI knowledge base with SQLite FTS5, semantic search, Obsidian vault sync, and MCP server interface for multi-agent retrieval and self-learning.
+
+A personal knowledge base server that AI agents use to persist memory across sessions. Captures debugging sessions, bug fixes, web articles, YouTube transcripts, and research. Classifies and summarizes content automatically. Provides full-text search, semantic search, and token-efficient context briefings via MCP tools. Integrates with Claude, Codex, Gemini, ChatGPT, and any MCP-compatible client.
+
+## Quick Setup
+
+1. Clone the repo and install dependencies: `npm install`
+2. Start the server: `node bin/kb.js start` (prompts for dashboard password on first run)
+3. Set `KB_PASSWORD` env var to skip the interactive prompt
+4. Register as MCP server for Claude Code: `node bin/kb.js register`
+5. (Optional) Set `OBSIDIAN_VAULT_PATH` to enable vault indexing and note writing
+6. (Optional) Set API keys for remote access: `KB_API_KEY_CLAUDE`, `KB_API_KEY_OPENAI`, `KB_API_KEY_GEMINI`
+
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| kb_search | FTS5 keyword search across all documents. Returns ranked results with snippets. |
+| kb_search_smart | Hybrid keyword + semantic search. Better for conceptual queries. |
+| kb_context | Token-efficient briefing. Returns summaries only, ~98% fewer tokens than full reads. Use BEFORE kb_read. |
+| kb_read | Read full document content by ID. Use after kb_context identifies relevant docs. |
+| kb_list | List documents filtered by type or tag. |
+| kb_write | Write a new note to the Obsidian vault. Types: research, idea, workflow, lesson, fix, decision, session, capture. |
+| kb_ingest | Ingest raw text into the KB database directly. |
+| kb_classify | Auto-classify unprocessed notes using AI. Adds type, tags, summary, key_topics. |
+| kb_capture_session | Record a debugging/coding session with goal, commands, root causes, lessons. |
+| kb_capture_fix | Record a bug fix with symptom, cause, and resolution. |
+| kb_capture_web | Capture a web article or URL with content and metadata. |
+| kb_capture_youtube | Capture a YouTube video transcript with metadata. |
+| kb_promote | Promote a raw source note into structured knowledge (research, idea, lesson, etc.). |
+| kb_synthesize | Generate cross-source synthesis connecting recent knowledge. |
+| kb_vault_status | Show vault indexing stats: note counts by type and project. |
+| kb_safety_check | Review a destructive action against KB history before executing. |
+
+## Extension Points
+
+| File | What to Modify |
+|------|----------------|
+| src/tools.js | Add new MCP tools. Central registry for all tool definitions. |
+| src/ingest.js | Add new content source types. Extend TYPE_MAP and extractors. |
+| src/db.js | Database schema, queries, FTS5 config. Three tables: documents, vault_files, embeddings. |
+| src/server.js | Express routes, middleware, auth chain. |
+| src/mcp-http.js | HTTP MCP transport. Session management, StreamableHTTP. |
+| src/mcp.js | Stdio MCP transport. Local agent integration. |
+| bin/kb.js | CLI commands. Simple command map dispatcher. |
+| src/classify/classifier.js | AI classification pipeline. Uses Claude CLI by default, swappable. |
+| src/classify/processor.js | Batch processing of unclassified notes. |
+| src/classify/summarizer.js | AI summarization of unsummarized notes. |
+| src/embeddings/embed.js | Local embeddings via HuggingFace (Xenova/all-MiniLM-L6-v2). |
+| src/embeddings/search.js | Hybrid search combining FTS5 + cosine similarity. |
+| src/auth.js | Dashboard auth (bcrypt + session cookies). |
+| src/auth-oauth.js | OAuth provider via better-auth for remote MCP access. |
+| src/middleware/api-key.js | API key validation middleware. |
+| src/capture/ | Capture modules: youtube.js, web.js, terminal.js, x-bookmarks.js. |
+| src/vault/indexer.js | Obsidian vault scanner and incremental indexer. |
+| src/vault/parser.js | Vault note frontmatter parser. |
+| src/safety/review.js | Destructive action review with multi-model consensus. |
+| src/promotion/promoter.js | Knowledge promotion from sources to structured notes. |
+| src/synthesis/weekly-review.js | Weekly cross-source synthesis generator. |
+
+## Integration Patterns
+
+### Claude Code (local, stdio)
+Register with `node bin/kb.js register`. Uses stdio MCP transport. All 16 tools available.
+
+### Claude.ai (remote, HTTP MCP)
+Connect via remote MCP at `https://your-domain.com/mcp`. Authenticates with API key or OAuth. Admin-only tools are filtered out.
+
+### ChatGPT (Custom GPT Actions)
+Import OpenAPI spec from `https://your-domain.com/openapi.json`. Authenticate with X-API-Key header. REST API at `/api/v1/`.
+
+### Gemini / Codex (HTTP API)
+Use the REST API at `/api/v1/` with `X-API-Key` header. Endpoints: `/search`, `/search/smart`, `/context`, `/documents`, `/documents/:id`, `/ingest`, `/capture/session`, `/capture/fix`, `/capture/web`.
+
+### Ollama / Local Models
+Replace the Claude CLI classifier in `src/classify/classifier.js` with an Ollama HTTP call. See EXTENDING.md Recipe 1.
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| KB_PASSWORD | -- | Dashboard password (required on first run) |
+| KB_PORT | 3838 | HTTP server port |
+| OBSIDIAN_VAULT_PATH | -- | Obsidian vault path for indexing and writes |
+| KB_API_KEY_CLAUDE | -- | API key for Claude remote access |
+| KB_API_KEY_OPENAI | -- | API key for OpenAI/ChatGPT access |
+| KB_API_KEY_GEMINI | -- | API key for Gemini access |
+| BETTER_AUTH_SECRET | -- | OAuth token signing secret |
+| BETTER_AUTH_URL | https://brain.yourdomain.com | OAuth issuer base URL |
+| CLASSIFY_MODEL | claude-haiku-4-5-20251001 | Model for AI classification |
+| CLAUDE_PATH | claude | Path to Claude CLI binary |
+
+## Files to Read for Full Context
+
+- CODEMAP.md -- Full architecture map with file purposes, exports, and data flows (~140 lines)
+- EXTENDING.md -- Deep customization guide with patterns, recipes, and the intelligence pipeline
+- openapi.json -- OpenAPI 3.1 spec for the REST API
+- kb-server.service -- systemd service template
+- package.json -- Dependencies and entry points

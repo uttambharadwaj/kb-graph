@@ -1,0 +1,260 @@
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { join, relative, extname, isAbsolute } from 'path';
+import { createHash } from 'crypto';
+import { parseVaultNote } from './parser.js';
+import {
+  insertDocument, updateDocumentFull, getDb,
+  getVaultFile, upsertVaultFile, deleteVaultFile, getAllVaultPaths,
+} from '../db.js';
+
+let indexQueue = Promise.resolve();
+
+const IGNORE_DIRS = new Set(['.obsidian', '.trash', '.git', '_assets', '_system', 'node_modules', 'textgenerator']);
+const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db']);
+
+export function scanVault(vaultPath) {
+  const results = [];
+
+  function walk(dir) {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && IGNORE_DIRS.has(entry.name)) continue;
+      if (IGNORE_DIRS.has(entry.name)) continue;
+
+      const fullPath = join(dir, entry.name);
+      let linkedStat = null;
+      if (entry.isSymbolicLink()) {
+        try {
+          linkedStat = statSync(fullPath);
+        } catch {
+          continue;
+        }
+      }
+
+      const isDir = entry.isDirectory() || linkedStat?.isDirectory();
+      const isFile = entry.isFile() || linkedStat?.isFile();
+      if (isDir) {
+        walk(fullPath);
+      } else if (isFile) {
+        if (IGNORE_FILES.has(entry.name)) continue;
+        if (entry.name.startsWith('.sync-conflict')) continue;
+        if (extname(entry.name).toLowerCase() === '.md') {
+          results.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(vaultPath);
+  return results;
+}
+
+function hashContent(content) {
+  return createHash('sha256').update(content).digest('hex').slice(0, 16);
+}
+
+export async function indexVault(vaultPath, { embeddings = false } = {}) {
+  const queuedRun = indexQueue.then(
+    () => _indexVault(vaultPath, { embeddings }),
+    () => _indexVault(vaultPath, { embeddings }),
+  );
+  indexQueue = queuedRun.catch(() => {});
+  return queuedRun;
+}
+
+export async function indexVaultFile(vaultPath, vaultFilePath, { embeddings = false } = {}) {
+  const queuedRun = indexQueue.then(
+    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings }),
+    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings }),
+  );
+  indexQueue = queuedRun.catch(() => {});
+  return queuedRun;
+}
+
+async function _indexVaultFile(vaultPath, vaultFilePath, { embeddings = false } = {}) {
+  const filePath = isAbsolute(vaultFilePath) ? vaultFilePath : join(vaultPath, vaultFilePath);
+  const relPath = relative(vaultPath, filePath);
+  if (relPath.startsWith('..') || isAbsolute(relPath)) {
+    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [`${vaultFilePath}: outside vault`], total: 1 };
+  }
+
+  if (extname(filePath).toLowerCase() !== '.md') {
+    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [`${relPath}: unsupported file type`], total: 1 };
+  }
+
+  const existing = getVaultFile(relPath);
+  const content = readFileSync(filePath, 'utf-8');
+  const hash = hashContent(content);
+  if (existing?.content_hash === hash) {
+    return { indexed: 0, skipped: 1, deleted: 0, embedded: 0, errors: [], total: 1 };
+  }
+
+  const result = { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [], total: 1 };
+  const embeddingHelpers = embeddings ? await loadEmbeddingHelpers(result.errors) : false;
+  const embedded = await upsertVaultDocument({
+    filePath,
+    relPath,
+    content,
+    hash,
+    embeddings: embeddingHelpers,
+    errors: result.errors,
+  });
+  result.indexed = 1;
+  result.embedded = embedded;
+  return result;
+}
+
+async function _indexVault(vaultPath, { embeddings = false } = {}) {
+  const files = scanVault(vaultPath);
+  const existingPaths = new Map(getAllVaultPaths().map(r => [r.vault_path, r.content_hash]));
+  const seenPaths = new Set();
+
+  let indexed = 0;
+  let skipped = 0;
+  let deleted = 0;
+  let embedded = 0;
+  let errors = [];
+
+  const embeddingHelpers = embeddings ? await loadEmbeddingHelpers(errors) : false;
+
+  for (const filePath of files) {
+    const relPath = relative(vaultPath, filePath);
+    seenPaths.add(relPath);
+
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const hash = hashContent(content);
+
+      // Skip if unchanged — but self-heal missing embeddings so a backfill
+      // is just a reindex with embeddings enabled
+      if (existingPaths.get(relPath) === hash) {
+        if (embeddingHelpers) {
+          embedded += await embedIfMissing(relPath, embeddingHelpers, errors);
+        }
+        skipped++;
+        continue;
+      }
+
+      embedded += await upsertVaultDocument({
+        filePath,
+        relPath,
+        content,
+        hash,
+        embeddings: embeddingHelpers,
+        errors,
+      });
+
+      indexed++;
+    } catch (err) {
+      errors.push(`${relPath}: ${err.message}`);
+    }
+  }
+
+  // Delete tracking entries for files that no longer exist in vault
+  for (const [path] of existingPaths) {
+    if (!seenPaths.has(path)) {
+      deleteVaultFile(path);
+      deleted++;
+    }
+  }
+
+  return { indexed, skipped, deleted, embedded, errors, total: files.length };
+}
+
+async function embedIfMissing(relPath, embeddings, errors) {
+  const vf = getVaultFile(relPath);
+  if (!vf?.document_id) return 0;
+  const has = getDb().prepare('SELECT 1 FROM embeddings WHERE document_id = ? LIMIT 1').get(vf.document_id);
+  if (has) return 0;
+  const doc = getDb().prepare('SELECT content FROM documents WHERE id = ?').get(vf.document_id);
+  if (!doc?.content) return 0;
+  try {
+    const embedding = await embeddings.generateEmbedding(doc.content.slice(0, 2000));
+    const buffer = embeddings.embeddingToBuffer(embedding);
+    getDb().prepare(`
+      INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
+      VALUES (?, ?, 0, ?, ?, ?)
+    `).run(vf.document_id, relPath, doc.content.slice(0, 500), buffer, embedding.length);
+    return 1;
+  } catch (embErr) {
+    errors.push(`embedding ${relPath}: ${embErr.message}`);
+    return 0;
+  }
+}
+
+async function loadEmbeddingHelpers(errors) {
+  try {
+    const embedModule = await import('../embeddings/embed.js');
+    return {
+      generateEmbedding: embedModule.generateEmbedding,
+      embeddingToBuffer: embedModule.embeddingToBuffer,
+    };
+  } catch (err) {
+    errors.push(`embeddings init: ${err.message}`);
+    return false;
+  }
+}
+
+async function upsertVaultDocument({ filePath, relPath, content, hash, embeddings, errors }) {
+  const parsed = parseVaultNote(content, relPath);
+  const existing = getVaultFile(relPath);
+  let docId;
+
+  if (existing && existing.document_id) {
+    updateDocumentFull(existing.document_id, {
+      title: parsed.title,
+      content: parsed.body,
+      tags: parsed.tags.join(', '),
+      doc_type: parsed.type,
+      source: `vault:${relPath}`,
+      file_path: filePath,
+      file_size: statSync(filePath).size,
+    });
+    docId = existing.document_id;
+  } else {
+    const doc = insertDocument({
+      title: parsed.title,
+      content: parsed.body,
+      source: `vault:${relPath}`,
+      doc_type: parsed.type,
+      tags: parsed.tags.join(', '),
+      file_path: filePath,
+      file_size: statSync(filePath).size,
+    });
+    docId = doc.id;
+  }
+
+  upsertVaultFile({
+    vault_path: relPath,
+    content_hash: hash,
+    document_id: docId,
+    title: parsed.title,
+    note_type: parsed.type,
+    tags: parsed.tags.join(', '),
+    project: parsed.project,
+    status: parsed.status,
+    source: parsed.source,
+    confidence: parsed.confidence,
+    summary: parsed.frontmatter.summary || null,
+    key_topics: parsed.frontmatter.key_topics || null,
+  });
+
+  if (embeddings) {
+    try {
+      // Strip the auto-appended Related section before embedding — otherwise
+      // linked notes cite each other's titles and similarity self-reinforces.
+      const embedBody = parsed.body.replace(/\n+## Related\n[\s\S]*$/, '');
+      const embedding = await embeddings.generateEmbedding(embedBody.slice(0, 2000));
+      const buffer = embeddings.embeddingToBuffer(embedding);
+      getDb().prepare(`
+        INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
+        VALUES (?, ?, 0, ?, ?, ?)
+      `).run(docId, relPath, parsed.body.slice(0, 500), buffer, embedding.length);
+      return 1;
+    } catch (embErr) {
+      errors.push(`embedding ${relPath}: ${embErr.message}`);
+    }
+  }
+
+  return 0;
+}
