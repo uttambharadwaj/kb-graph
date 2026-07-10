@@ -15,6 +15,8 @@ import { getRecentNotes, generateSynthesisPrompt } from './synthesis/weekly-revi
 import { processNewClippings } from './classify/processor.js';
 import { reviewDestructiveAction } from './safety/review.js';
 import { getBusToolDefinitions } from './bus/tools.js';
+import { tunnel, tagNeighbors } from './tunnels.js';
+import { canonicalTag, getTagAliasMap } from './tags.js';
 
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
@@ -80,6 +82,33 @@ export function getToolDefinitions() {
         try {
           const results = searchDocuments(query, limit, { tags });
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+        }
+      },
+    },
+
+    {
+      name: 'kb_tunnels',
+      description: 'Explore cross-domain connections in the knowledge graph. With one tag: ranked neighboring domains by co-occurrence strength (lift-scored, so big generic tags do not dominate). With two tags: the bridge between them — notes tagged with both, plus entities mentioned in both domains\' notes.',
+      schema: {
+        from: z.string().describe('Domain tag to start from (e.g. "backend")'),
+        to: z.string().optional().describe('Second domain tag; when set, returns the bridge between the two domains'),
+        limit: z.number().optional().default(10).describe('Max bridge docs/entities or neighbors to return'),
+      },
+      handler: async ({ from, to, limit }) => {
+        try {
+          const db = getDb();
+          // Degenerate two-tag case: if `to` collapses to `from` (case/alias),
+          // tunnel(from, from) is nonsense — fall back to single-tag neighbors.
+          if (to) {
+            const aliasMap = getTagAliasMap(db);
+            if (canonicalTag(from, aliasMap) === canonicalTag(to, aliasMap)) to = undefined;
+          }
+          const result = to
+            ? tunnel(db, from, to, { limit })
+            : { from, neighbors: tagNeighbors(db, from, { limit }) };
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }

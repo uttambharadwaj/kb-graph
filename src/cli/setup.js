@@ -142,6 +142,10 @@ function buildEnvContent(cfg) {
     '# Obsidian vault path (leave empty if not using Obsidian)',
     `OBSIDIAN_VAULT_PATH=${cfg.vaultPath || ''}`,
     '',
+    '# Workstream autobind: regex that recognizes ticket ids in directory/branch names.',
+    '# Full match (lowercased) becomes the bus channel name. Default: pf-(\\d+)',
+    '# KB_TICKET_REGEX=jira-(\\d+)',
+    '',
   ];
 
   // API keys per agent

@@ -6,6 +6,7 @@ import { join, basename } from 'path';
 import { similarDocs } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { getVaultFile, getDb } from './db.js';
+import { splitTags } from './tags.js';
 
 export const DUP_THRESHOLD = 0.85;
 export const RELATED_MIN = 0.55;
@@ -89,7 +90,7 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   const filename = `${date}-${slug}.md`;
   const relPath = `${folder}/${filename}`;
 
-  const tagList = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+  const tagList = tags ? splitTags(tags) : [];
   const fm = [
     '---',
     // JSON.stringify escapes quotes/backslashes — a bare "${title}" breaks YAML when the title contains quotes

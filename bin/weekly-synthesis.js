@@ -10,7 +10,8 @@ import {
   getNearDupPairs, writeSynthesisNote,
 } from '../src/synthesis/weekly-review.js';
 import { runClaude } from '../src/claude-cli.js';
-import { setMeta } from '../src/db.js';
+import { strongestTunnels } from '../src/tunnels.js';
+import { setMeta, getDb } from '../src/db.js';
 
 import { homedir } from 'os';
 import { join } from 'path';
@@ -23,7 +24,10 @@ if (notes.length === 0) {
   process.exit(0);
 }
 
-const prompt = generateSynthesisPrompt(notes) + generateAnalysisRequest(getNearDupPairs());
+let tunnels = [];
+try { tunnels = strongestTunnels(getDb(), { limit: 10 }); } catch { /* synthesis proceeds without tunnels */ }
+
+const prompt = generateSynthesisPrompt(notes, { tunnels }) + generateAnalysisRequest(getNearDupPairs());
 
 // Synthesis is weekly and small — worth a stronger model than the classifier default.
 const model = process.env.SYNTHESIS_MODEL || 'claude-sonnet-5';

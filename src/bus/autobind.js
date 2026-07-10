@@ -2,8 +2,7 @@ import { existsSync, realpathSync } from 'fs';
 import { dirname, basename } from 'path';
 import { execFileSync } from 'child_process';
 import { readBusBinding, writeBusBinding } from './context.js';
-
-const TICKET_RE = /pf-(\d+)/i;
+import { getTicketRegex } from './config.js';
 
 function normalizeCwd(cwd) {
   if (!cwd || typeof cwd !== 'string') return '';
@@ -15,11 +14,12 @@ function normalizeCwd(cwd) {
 }
 
 export function findTicketInPath(cwd) {
+  const re = getTicketRegex();
   let current = normalizeCwd(cwd);
   while (current) {
-    const match = TICKET_RE.exec(basename(current));
+    const match = re.exec(basename(current));
     if (match) {
-      return { ticket: match[1], anchor: current };
+      return { ticket: match[1] ?? match[0], matched: match[0], anchor: current };
     }
     const parent = dirname(current);
     if (parent === current) break;
@@ -36,13 +36,13 @@ export function findTicketInGitBranch(cwd) {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    const match = TICKET_RE.exec(branch);
+    const match = getTicketRegex().exec(branch);
     if (!match) return null;
     const topLevel = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    return { ticket: match[1], anchor: normalizeCwd(topLevel) };
+    return { ticket: match[1] ?? match[0], matched: match[0], anchor: normalizeCwd(topLevel) };
   } catch {
     return null;
   }
@@ -67,7 +67,7 @@ export function autobind({ agent, cwd, env = process.env }) {
   const discovered = findTicketInPath(dir) ?? findTicketInGitBranch(dir);
   if (!discovered) return { bound: false, reason: 'no-ticket' };
 
-  const channel = `ws:pf-${discovered.ticket}`;
+  const channel = 'ws:' + discovered.matched.toLowerCase();
   const role = (env.CLAUDE_BUS_ROLE || '').trim();
   const reader = role ? `${agent}:${role}` : defaultReader(agent);
 

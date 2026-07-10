@@ -148,3 +148,35 @@ describe('autobind', () => {
     assert.strictEqual(result.reason, 'no-ticket');
   });
 });
+
+describe('configurable ticket regex', () => {
+  afterEach(() => { delete process.env.KB_TICKET_REGEX; });
+
+  it('custom regex matches custom ticket style', () => {
+    process.env.KB_TICKET_REGEX = 'jira-(\\d+)';
+    const hit = findTicketInPath('/tmp/work/jira-123-fix');
+    assert.strictEqual(hit.ticket, '123');
+    assert.strictEqual(hit.matched.toLowerCase(), 'jira-123');
+  });
+
+  it('regex without capture group uses full match as ticket', () => {
+    process.env.KB_TICKET_REGEX = 'ticket_[a-z]+';
+    const hit = findTicketInPath('/tmp/work/ticket_abc');
+    assert.strictEqual(hit.ticket, 'ticket_abc');
+  });
+
+  it('invalid regex falls back to default pf pattern', () => {
+    process.env.KB_TICKET_REGEX = '(';
+    const hit = findTicketInPath('/tmp/work/pf-777');
+    assert.strictEqual(hit.ticket, '777');
+  });
+
+  it('default channel derivation is unchanged', () => {
+    makeBusHome();
+    const { full } = makeWorkspace('worktrees/pf-1234-default-channel/src');
+
+    const result = autobind({ agent: 'claude', cwd: full });
+    assert.strictEqual(result.bound, true);
+    assert.strictEqual(result.channel, 'ws:pf-1234');
+  });
+});

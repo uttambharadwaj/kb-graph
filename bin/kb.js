@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bin/kb.js — CLI entry point
-// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, setup, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
+// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import 'dotenv/config';
@@ -18,6 +18,7 @@ const commands = {
   ingest:   () => import('../src/cli/ingest-cli.js').then(m => m.ingest(args[0])),
   search:   () => import('../src/cli/search-cli.js').then(m => m.search(args.join(' '))),
   status:   () => import('../src/cli/status.js').then(m => m.status()),
+  tags:     () => import('../src/cli/tags-cli.js').then(m => m.runTagsCli(args)),
   'wakeup-hook': () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
   'prompt-hint': () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
   'link-backfill': () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),
@@ -99,6 +100,7 @@ Commands:
   ingest <path>      Ingest a file or directory
   search <query>     Search documents
   status             Show stats and server status
+  tags               Show tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
   wakeup-hook        Print compact KB briefing (for SessionStart hooks)
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)
   bus-send           Send a local message bus message

@@ -23,7 +23,7 @@ export function getRecentNotes(vaultPath, days = 7) {
   });
 }
 
-export function generateSynthesisPrompt(notes) {
+export function generateSynthesisPrompt(notes, { tunnels = [] } = {}) {
   const byProject = {};
   const byType = {};
 
@@ -44,6 +44,14 @@ export function generateSynthesisPrompt(notes) {
     for (const item of items.slice(0, 5)) {
       sections.push(`- **${item.title}** (${item.note_type}): ${item.body.slice(0, 100)}...`);
     }
+  }
+
+  if (tunnels.length) {
+    sections.push(`\n## Cross-domain tunnels (strongest)`);
+    for (const t of tunnels) {
+      sections.push(`- ${t.from} <-> ${t.to} (co-occur ${t.cooccur}, lift ${t.lift})`);
+    }
+    sections.push(`\nFlag any surprising pairs above as cross-domain themes worth examining.`);
   }
 
   return sections.join('\n');

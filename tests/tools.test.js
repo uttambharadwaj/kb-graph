@@ -1,12 +1,14 @@
+import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { getToolDefinitions, getHttpToolDefinitions } from '../src/tools.js';
+import { getDb } from '../src/db.js';
 
 describe('tools', () => {
   it('exports an array of tool definitions', () => {
     const tools = getToolDefinitions();
     assert.ok(Array.isArray(tools));
-    assert.ok(tools.length >= 19);
+    assert.ok(tools.length >= 20);
   });
 
   it('each tool has name, description, schema, handler', () => {
@@ -24,7 +26,7 @@ describe('tools', () => {
     const names = tools.map(t => t.name);
     const expected = [
       'bus_send', 'bus_read',
-      'kb_search', 'kb_list', 'kb_read', 'kb_ingest',
+      'kb_search', 'kb_tunnels', 'kb_list', 'kb_read', 'kb_ingest',
       'kb_write', 'kb_vault_status', 'kb_capture_youtube',
       'kb_capture_web', 'kb_capture_session', 'kb_capture_fix',
       'kb_search_smart', 'kb_promote', 'kb_synthesize',
@@ -49,5 +51,19 @@ describe('tools', () => {
     assert.ok(names.includes('kb_search'));
     assert.ok(names.includes('kb_ingest'));
     assert.ok(names.includes('kb_write'));
+    // kb_tunnels ships over HTTP too — must not be admin-only
+    assert.ok(names.includes('kb_tunnels'));
+  });
+
+  it('kb_tunnels falls back to neighbors when from and to collapse to one tag', async () => {
+    const db = getDb();
+    const doc = db.prepare(`INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, 'note', ?)`);
+    doc.run('a', 'x', 'pipeline, agent');
+    doc.run('b', 'y', 'pipeline, agent');
+    const tool = getToolDefinitions().find(t => t.name === 'kb_tunnels');
+    const res = await tool.handler({ from: 'pipeline', to: 'Pipeline', limit: 10 });
+    const parsed = JSON.parse(res.content[0].text);
+    assert.ok(parsed.neighbors, 'should return single-tag neighbors mode');
+    assert.strictEqual(parsed.stats, undefined, 'should not be two-tag tunnel mode');
   });
 });

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, extname, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { parseVaultNote } from './parser.js';
+import { normalizeTagString } from '../tags.js';
 import {
   insertDocument, updateDocumentFull, getDb,
   getVaultFile, upsertVaultFile, deleteVaultFile, getAllVaultPaths,
@@ -204,7 +205,7 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
     updateDocumentFull(existing.document_id, {
       title: parsed.title,
       content: parsed.body,
-      tags: parsed.tags.join(', '),
+      tags: normalizeTagString(parsed.tags.join(',')),
       doc_type: parsed.type,
       source: `vault:${relPath}`,
       file_path: filePath,
@@ -217,7 +218,7 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
       content: parsed.body,
       source: `vault:${relPath}`,
       doc_type: parsed.type,
-      tags: parsed.tags.join(', '),
+      tags: normalizeTagString(parsed.tags.join(',')),
       file_path: filePath,
       file_size: statSync(filePath).size,
     });
@@ -230,7 +231,7 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
     document_id: docId,
     title: parsed.title,
     note_type: parsed.type,
-    tags: parsed.tags.join(', '),
+    tags: normalizeTagString(parsed.tags.join(',')),
     project: parsed.project,
     status: parsed.status,
     source: parsed.source,

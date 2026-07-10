@@ -27,6 +27,24 @@ export function getBusResourceLimit() {
   return readInt('KB_BUS_RESOURCE_LIMIT', 50);
 }
 
+const DEFAULT_TICKET_RE = /pf-(\d+)/i;
+let ticketRegexWarned = false;
+
+// Read at use time; invalid pattern warns once then falls back to default.
+export function getTicketRegex() {
+  const pattern = (process.env.KB_TICKET_REGEX || '').trim();
+  if (!pattern) return DEFAULT_TICKET_RE;
+  try {
+    return new RegExp(pattern, 'i');
+  } catch (err) {
+    if (!ticketRegexWarned) {
+      console.error(`kb: invalid KB_TICKET_REGEX ${JSON.stringify(pattern)} (${err.message}); using default ${DEFAULT_TICKET_RE}`);
+      ticketRegexWarned = true;
+    }
+    return DEFAULT_TICKET_RE;
+  }
+}
+
 export function ensureBusStorage() {
   mkdirSync(dirname(getBusDbPath()), { recursive: true });
 }

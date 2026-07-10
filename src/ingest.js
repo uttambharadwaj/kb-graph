@@ -3,6 +3,7 @@ import { extname, basename, join } from 'path';
 import { parseVaultNote } from './vault/parser.js';
 import { FILES_DIR } from './paths.js';
 import { insertDocument, listDocuments } from './db.js';
+import { normalizeTagString } from './tags.js';
 
 const TYPE_MAP = {
   '.md': 'markdown',
@@ -49,7 +50,7 @@ export function getMarkdownIngestMetadata(content, filename) {
     title: parsed.title,
     content: parsed.body,
     doc_type: parsed.type,
-    tags: parsed.tags.join(', '),
+    tags: normalizeTagString(parsed.tags.join(',')),
   };
 }
 
@@ -161,7 +162,7 @@ export function ingestText(title, content, options = {}) {
     content,
     source: source || 'manual',
     doc_type: doc_type || 'text',
-    tags: Array.isArray(tags) ? tags.join(', ') : (tags || ''),
+    tags: normalizeTagString(Array.isArray(tags) ? tags.join(',') : (tags || '')),
     file_size: Buffer.byteLength(content),
   });
 }

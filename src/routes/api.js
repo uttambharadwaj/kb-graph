@@ -16,6 +16,7 @@ import {
 } from '../db.js';
 import { ingestFile, ingestDirectory } from '../ingest.js';
 import { indexVault } from '../vault/indexer.js';
+import { normalizeTagString } from '../tags.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -80,7 +81,8 @@ router.post('/api/documents', upload.array('files'), async (req, res) => {
           updateDocument(doc.id, { title, tags: tags || doc.tags });
           doc.title = title;
           doc.source = origName;
-          if (tags) doc.tags = tags;
+          // Echo what updateDocument persisted, not the raw input
+          if (tags) doc.tags = normalizeTagString(tags);
           documents.push(doc);
         }
       } finally {

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { statSync } from 'fs';
 import { DB_PATH } from './paths.js';
+import { normalizeTagString } from './tags.js';
 
 let db = null;
 
@@ -158,6 +159,12 @@ function initSchema(db) {
       alias TEXT PRIMARY KEY,
       canonical TEXT NOT NULL
     );
+
+    -- Alias -> canonical tag (see tags.js)
+    CREATE TABLE IF NOT EXISTS tag_aliases (
+      alias TEXT PRIMARY KEY,
+      canonical TEXT NOT NULL
+    );
   `);
 
   db.exec(`
@@ -198,18 +205,19 @@ function initSchema(db) {
 export { initSchema, getDb };
 
 export function insertDocument({ title, content, source, doc_type, tags, file_path, file_size }) {
+  const normTags = normalizeTagString(tags);
   const stmt = getDb().prepare(`
     INSERT INTO documents (title, content, source, doc_type, tags, file_path, file_size)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  const result = stmt.run(title, content, source || null, doc_type, tags || '', file_path || null, file_size || 0);
+  const result = stmt.run(title, content, source || null, doc_type, normTags, file_path || null, file_size || 0);
   return {
     id: result.lastInsertRowid,
     title,
     content,
     source: source || null,
     doc_type,
-    tags: tags || '',
+    tags: normTags,
     file_path: file_path || null,
     file_size: file_size || 0,
   };
@@ -219,7 +227,7 @@ export function updateDocument(id, { title, tags }) {
   const stmt = getDb().prepare(`
     UPDATE documents SET title = ?, tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `);
-  return stmt.run(title, tags, id);
+  return stmt.run(title, normalizeTagString(tags), id);
 }
 
 export function deleteDocument(id) {

@@ -72,7 +72,7 @@ Session notes pile up; the truth about a workstream drifts across twenty of them
 
 ### 4. Weekly synthesis (Sunday 04:00)
 
-A synthesis job reads the week's knowledge and writes what a good tech lead would notice: recurring themes, **contradictions** (two notes claiming different things about the same system), and merge candidates (near-duplicate clusters worth folding together). The KB doesn't just accumulate — it argues with itself and flags where it disagrees.
+A synthesis job reads the week's knowledge and writes what a good tech lead would notice: recurring themes, **contradictions** (two notes claiming different things about the same system), and merge candidates (near-duplicate clusters worth folding together). The KB doesn't just accumulate — it argues with itself and flags where it disagrees. It also lists the week's strongest **cross-domain tunnels** (see [Tunnels](#tunnels)).
 
 ## A day with kb-graph
 
@@ -83,6 +83,10 @@ A synthesis job reads the week's knowledge and writes what a good tech lead woul
 - **Sunday 04:00** — The synthesis flags that Tuesday's note contradicts what March-you decided about retry behavior. You resolve it in one line.
 
 Every agent you run shares all of it. What Claude learns at 2am, Codex knows at 9am.
+
+## Tunnels
+
+Everything above files knowledge by domain. Tunnels walk *between* domains. Ask `kb_tunnels` about one tag and it ranks the neighboring domains that most often co-occur with it — scored by **lift** (co-occurrence weighted against how common each tag is on its own), so a catch-all tag never floats to the top just by being everywhere. Ask about two tags and it returns the bridge itself: the notes tagged with **both**, plus the fact-store entities **mentioned in both** domains' notes — the shared services, people, and systems that quietly connect two areas of work you thought were separate. Tags are canonicalized first — lowercased and deduped on every write, with `kb tags alias <alias> <canonical>` to fold synonyms like `auth` and `authentication` into one domain — so the graph isn't fragmented by spelling. The weekly synthesis lists the strongest tunnels each week; `kb tags` reports the raw tag landscape and suggests aliases worth adding.
 
 ## Design principles
 
@@ -169,7 +173,7 @@ kb status                            # stats and server status
 
 ## MCP tools
 
-All 23 core tools are available over stdio and HTTP:
+All 24 core tools are available over stdio and HTTP:
 
 | Tool | Description |
 |------|-------------|
@@ -178,6 +182,7 @@ All 23 core tools are available over stdio and HTTP:
 | `kb_context` | Token-efficient briefing — summaries only; use before `kb_read` |
 | `kb_read` | Read a document by ID (returns a `related:` neighborhood) |
 | `kb_list` | List documents by type or tag |
+| `kb_tunnels` | Cross-domain bridges: neighboring domains for one tag, or the shared notes + entities between two |
 | `kb_write` | Write a note to the vault |
 | `kb_ingest` | Ingest raw text |
 | `kb_check_duplicate` | Similarity check before writing — prevents near-duplicate notes |
@@ -214,6 +219,7 @@ kb search <query>      Search from the terminal
 kb classify            Auto-classify unprocessed vault notes
 kb summarize           Generate summaries for unsummarized notes
 kb entity-merge        Merge two entity aliases in the fact store
+kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
 ```
 
@@ -262,6 +268,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | `CLASSIFY_MODEL` | No | claude-haiku-4-5-20251001 | Model for write-time AI work |
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
+| `KB_TICKET_REGEX` | No | `pf-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name |
 
 ## Running as a service
 
@@ -281,11 +288,9 @@ The storage engine, dashboard, REST/MCP surface, and setup wizard come from [kno
 
 ## Roadmap
 
-- [ ] **Tunnels** — cross-domain graph traversal over tag and entity co-occurrence (the feature the name promises)
 - [ ] Entity-boosted retrieval ranking (fact-store entities as a fusion signal)
 - [ ] Bi-temporal facts: track "when it stopped being true" separately from "when we learned that"
 - [ ] Novelty-gated writes: embedding pre-filter before LLM classification
-- [ ] Configurable ticket-id pattern for message-bus autobind (currently `pf-\d+`)
 
 ## License
 
