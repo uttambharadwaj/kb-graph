@@ -53,13 +53,22 @@ function entityCandidates(db, excluded) {
   return out;
 }
 
-function countMentions(docs, entities) {
+// Single scan over all tagged docs: per entity, how many docs mention it (df),
+// and how many of those are tagged `a` (from) / `b` (to). Same mention test as before.
+function countEntityMentions(docs, entities, a, b) {
   const counts = new Map();
   for (const d of docs) {
     const text = `${d.title}\n${d.content || ''}`.toLowerCase();
+    const hasA = d.tagSet.has(a);
+    const hasB = d.tagSet.has(b);
     for (const e of entities) {
       if (!text.includes(e.nameLc)) continue;
-      if (e.re.test(text)) counts.set(e.id, (counts.get(e.id) || 0) + 1);
+      if (!e.re.test(text)) continue;
+      let c = counts.get(e.id);
+      if (!c) { c = { df: 0, from: 0, to: 0 }; counts.set(e.id, c); }
+      c.df++;
+      if (hasA) c.from++;
+      if (hasB) c.to++;
     }
   }
   return counts;
@@ -76,17 +85,19 @@ export function tunnel(db, from, to, { limit = 10 } = {}) {
     .sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || '')));
 
   const entities = entityCandidates(db, new Set([a, b]));
-  const mA = countMentions(inA, entities);
-  const mB = countMentions(inB, entities);
+  const N = docs.length;
+  const mentions = countEntityMentions(docs, entities, a, b);
   const bridgeEntities = [];
   for (const e of entities) {
-    const from_n = mA.get(e.id) || 0;
-    const to_n = mB.get(e.id) || 0;
-    if (from_n > 0 && to_n > 0) {
-      bridgeEntities.push({ name: e.name, mentions_from: from_n, mentions_to: to_n, strength: Math.min(from_n, to_n) });
-    }
+    const c = mentions.get(e.id);
+    if (!c || c.from <= 0 || c.to <= 0) continue;
+    // TF-IDF-shaped: log-damp the min mention count, downweight by corpus-wide doc frequency.
+    // df == N (mentioned everywhere) -> idf 0 -> strength 0, dropped.
+    const strength = round2(Math.log2(1 + Math.min(c.from, c.to)) * Math.log2(N / c.df));
+    if (strength <= 0) continue;
+    bridgeEntities.push({ name: e.name, mentions_from: c.from, mentions_to: c.to, doc_frequency: c.df, strength });
   }
-  bridgeEntities.sort((x, y) => y.strength - x.strength);
+  bridgeEntities.sort((x, y) => y.strength - x.strength || Math.min(y.mentions_from, y.mentions_to) - Math.min(x.mentions_from, x.mentions_to));
 
   return {
     from: a,
