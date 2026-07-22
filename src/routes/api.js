@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomBytes } from 'crypto';
 
@@ -68,7 +68,9 @@ router.post('/api/documents', upload.array('files'), async (req, res) => {
     const tags = req.body.tags || '';
 
     for (const file of req.files) {
-      const tempName = `kb-upload-${randomBytes(8).toString('hex')}-${file.originalname}`;
+      // basename() strips path components so a crafted originalname
+      // (e.g. "../../etc/cron.d/x") can't escape tmpdir.
+      const tempName = `kb-upload-${randomBytes(8).toString('hex')}-${basename(file.originalname)}`;
       const tempPath = join(tmpdir(), tempName);
 
       try {
