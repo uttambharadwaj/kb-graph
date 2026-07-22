@@ -129,8 +129,9 @@ export async function ingestDirectory(dirPath) {
 
   const files = collectFiles(dirPath);
 
-  // Get all existing sources for duplicate detection
-  const existing = listDocuments({ limit: 100000 });
+  // Get all existing sources for duplicate detection — superseded docs still
+  // own their source file, so include them to avoid re-ingesting duplicates.
+  const existing = listDocuments({ limit: 100000, includeSuperseded: true });
   const existingSources = new Set(existing.map(d => d.source));
 
   let ingested = 0;

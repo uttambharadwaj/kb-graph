@@ -11,8 +11,11 @@ export function wakeupHook() {
     const byType = db.prepare(
       'SELECT note_type, COUNT(*) as c FROM vault_files WHERE note_type IS NOT NULL GROUP BY note_type ORDER BY c DESC LIMIT 6'
     ).all();
+    // LEFT JOIN so vault files without a linked document still show; the
+    // filter drops only notes whose document is superseded (superseded_at is
+    // NULL for both live and unlinked rows).
     const recent = db.prepare(
-      "SELECT title, note_type, project FROM vault_files WHERE note_type NOT IN ('archive') ORDER BY indexed_at DESC LIMIT 8"
+      "SELECT vf.title, vf.note_type, vf.project FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE vf.note_type NOT IN ('archive') AND d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 8"
     ).all();
 
     const health = getHealth();
@@ -21,7 +24,7 @@ export function wakeupHook() {
       : `health: ⚠ ${health.warnings.join(' | ')}`;
 
     const states = db.prepare(
-      "SELECT vf.title, vf.document_id, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' ORDER BY d.updated_at DESC LIMIT 8"
+      "SELECT vf.title, vf.document_id, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"
     ).all();
 
     const lines = [

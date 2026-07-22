@@ -99,6 +99,20 @@ function initSchema(db) {
     db.prepare('ALTER TABLE vault_files ADD COLUMN key_topics TEXT').run();
   }
 
+  // Migration: supersession lifecycle columns on documents (idempotent).
+  // superseded_at NULL = live and drives the recall filter; the pointer +
+  // reason feed the kb_read banner. Superseded is retired, not deleted.
+  const docCols = db.prepare("PRAGMA table_info(documents)").all().map(c => c.name);
+  if (!docCols.includes('superseded_at')) {
+    db.prepare('ALTER TABLE documents ADD COLUMN superseded_at DATETIME').run();
+  }
+  if (!docCols.includes('superseded_by')) {
+    db.prepare('ALTER TABLE documents ADD COLUMN superseded_by INTEGER').run();
+  }
+  if (!docCols.includes('superseded_reason')) {
+    db.prepare('ALTER TABLE documents ADD COLUMN superseded_reason TEXT').run();
+  }
+
   db.exec(`
 
     -- Embeddings for semantic search (stored as Float32Array binary blobs)
@@ -253,10 +267,13 @@ const STOP_WORDS = new Set([
   'it', 'its', 'they', 'them', 'their', 'about', 'up',
 ]);
 
-export function searchDocuments(query, limit = 20, { tags } = {}) {
+export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false } = {}) {
   // Build optional tag filter clause
   const tagFilter = tags ? 'AND d.tags LIKE ?' : '';
   const tagParam = tags ? `%${tags}%` : null;
+  // Superseded notes drop out of current-state recall unless explicitly asked
+  // for. No bound param — the clause is a literal, so param arrays are unchanged.
+  const supersededFilter = includeSuperseded ? '' : 'AND d.superseded_at IS NULL';
 
   // Strip punctuation, split into terms, remove stop words
   const terms = query
@@ -280,6 +297,7 @@ export function searchDocuments(query, limit = 20, { tags } = {}) {
       JOIN documents d ON d.id = f.rowid
       WHERE documents_fts MATCH ?
       ${tagFilter}
+      ${supersededFilter}
       ORDER BY rank
       LIMIT ?
     `);
@@ -301,6 +319,7 @@ export function searchDocuments(query, limit = 20, { tags } = {}) {
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
     ${tagFilter}
+    ${supersededFilter}
     ORDER BY rank
     LIMIT ?
   `);
@@ -332,7 +351,7 @@ export function searchDocuments(query, limit = 20, { tags } = {}) {
   return results;
 }
 
-export function listDocuments({ type, tag, limit = 50, offset = 0 } = {}) {
+export function listDocuments({ type, tag, limit = 50, offset = 0, includeSuperseded = false } = {}) {
   let sql = 'SELECT id, title, doc_type, tags, file_size, source, created_at, updated_at FROM documents';
   const conditions = [];
   const params = [];
@@ -344,6 +363,9 @@ export function listDocuments({ type, tag, limit = 50, offset = 0 } = {}) {
   if (tag) {
     conditions.push("tags LIKE '%' || ? || '%'");
     params.push(tag);
+  }
+  if (!includeSuperseded) {
+    conditions.push('superseded_at IS NULL');
   }
 
   if (conditions.length > 0) {
@@ -358,6 +380,118 @@ export function listDocuments({ type, tag, limit = 50, offset = 0 } = {}) {
 
 export function getDocument(id) {
   return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
+}
+
+// Mark a note superseded (retired, not deleted) or clear it (unset). Returns
+// the updated row, or null if `id` is unknown. Guards self-supersession and
+// dangling replacement pointers so a bad call fails loud instead of corrupting
+// the chain.
+export function supersedeDocument(id, { replacementId = null, reason = null, unset = false } = {}) {
+  const db = getDb();
+  if (!db.prepare('SELECT 1 FROM documents WHERE id = ?').get(id)) return null;
+
+  if (unset) {
+    db.prepare(
+      'UPDATE documents SET superseded_at = NULL, superseded_by = NULL, superseded_reason = NULL WHERE id = ?'
+    ).run(id);
+    return getDocument(id);
+  }
+
+  if (replacementId != null) {
+    if (replacementId === id) {
+      throw new Error(`Cannot supersede document #${id} with itself`);
+    }
+    if (!db.prepare('SELECT 1 FROM documents WHERE id = ?').get(replacementId)) {
+      throw new Error(`Replacement document #${replacementId} not found`);
+    }
+  }
+
+  db.prepare(
+    'UPDATE documents SET superseded_at = CURRENT_TIMESTAMP, superseded_by = ?, superseded_reason = ? WHERE id = ?'
+  ).run(replacementId, reason, id);
+  return getDocument(id);
+}
+
+// Read-only supersession *suggestions* from the temporal fact graph. NEVER
+// writes superseded_at — a human/agent confirms each via kb_supersede. Facts
+// have no document_id, so the note<->fact link is inferred by name/literal
+// match; the bar is deliberately high (retired fact + stale note asserting the
+// old value + a newer note asserting the new value) to prefer misses over
+// false retires.
+export function supersedeCandidates({ since = null, limit = 20 } = {}) {
+  const db = getDb();
+  const like = (s) => `%${s.replace(/([%_\\])/g, '\\$1')}%`;
+
+  let sql = `
+    SELECT f.subject, f.predicate, f.valid_to,
+           s.name AS subject_name, o.name AS old_object
+    FROM facts f
+    JOIN entities s ON f.subject = s.id
+    JOIN entities o ON f.object = o.id
+    WHERE f.valid_to IS NOT NULL
+  `;
+  const params = [];
+  if (since) { sql += ' AND f.valid_to >= ?'; params.push(since); }
+  sql += ' ORDER BY f.valid_to DESC';
+  const retired = db.prepare(sql).all(...params);
+
+  const candidates = [];
+  const seen = new Set();
+
+  for (const rf of retired) {
+    if (candidates.length >= limit) break;
+    if (!rf.subject_name || !rf.old_object) continue;
+
+    // The value that replaced old_object for this (subject, predicate).
+    const current = db.prepare(`
+      SELECT o.name AS new_object FROM facts f
+      JOIN entities o ON f.object = o.id
+      WHERE f.subject = ? AND f.predicate = ? AND f.valid_to IS NULL
+      LIMIT 1
+    `).get(rf.subject, rf.predicate);
+    if (!current?.new_object) continue;
+
+    const oldVal = rf.old_object, newVal = current.new_object, subj = rf.subject_name;
+    if (oldVal.toLowerCase() === newVal.toLowerCase()) continue;
+    const subjLike = like(subj);
+
+    // Stale LIVE notes: subject in title/tags AND the old value in content.
+    const stale = db.prepare(`
+      SELECT id, title, created_at,
+             (CASE WHEN title LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS title_hit
+      FROM documents
+      WHERE superseded_at IS NULL
+        AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
+        AND content LIKE ? ESCAPE '\\'
+      ORDER BY created_at ASC
+    `).all(subjLike, subjLike, subjLike, like(oldVal));
+
+    for (const doc of stale) {
+      if (candidates.length >= limit) break;
+      if (seen.has(doc.id)) continue;
+
+      // Evidence the note is genuinely behind: a NEWER live note asserts the
+      // current value for the same subject.
+      const replacement = db.prepare(`
+        SELECT id, title FROM documents
+        WHERE superseded_at IS NULL AND id != ? AND created_at > ?
+          AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
+          AND content LIKE ? ESCAPE '\\'
+        ORDER BY created_at DESC LIMIT 1
+      `).get(doc.id, doc.created_at, subjLike, subjLike, like(newVal));
+      if (!replacement) continue;
+
+      seen.add(doc.id);
+      candidates.push({
+        note_id: doc.id,
+        title: doc.title,
+        reason: `Asserts ${subj} ${rf.predicate.replace(/_/g, ' ')} "${oldVal}", but that fact was retired ${rf.valid_to} in favor of "${newVal}" (newer note #${replacement.id} asserts it)`,
+        suggested_replacement_id: replacement.id,
+        score: doc.title_hit ? 0.8 : 0.5,
+      });
+    }
+  }
+  return candidates;
 }
 
 export function getStats() {
