@@ -54,7 +54,7 @@ export function relatedForDoc(docId, { limit = 5 } = {}) {
   `).all(docId, docId, limit);
 }
 
-export async function writeNote(vaultPath, { title, content, type = 'capture', tags, project, source }) {
+export async function writeNote(vaultPath, { title, content, type = 'capture', tags, project, source, excludeId }) {
   // One embedding pass drives both dedup and related-links. If the semantic
   // layer is down, say so — a silent skip reads as "no duplicates found".
   let similar = [];
@@ -64,6 +64,10 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   } catch (err) {
     warning = ` [dedup/links skipped: ${err.message} — run 'kb vault reindex' to build embeddings]`;
   }
+
+  // A replacement note (kb_write supersedes) is a near-dup of the note it
+  // retires by design — exclude that target so it doesn't block the write.
+  if (excludeId != null) similar = similar.filter(s => s.document_id !== excludeId);
 
   const dups = similar.filter(s => s.score >= DUP_THRESHOLD);
   if (dups.length) {

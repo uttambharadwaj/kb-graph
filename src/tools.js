@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth } from './db.js';
+import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, supersedeDocument, supersedeCandidates } from './db.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
@@ -63,6 +63,7 @@ const ADMIN_ONLY_TOOLS = new Set([
   'kb_synthesize',
   'kb_safety_check',
   'kb_capture_youtube',
+  'kb_supersede_candidates',
   'bus_send',
   'bus_read',
 ]);
@@ -72,15 +73,16 @@ export function getToolDefinitions() {
     ...getBusToolDefinitions(),
     {
       name: 'kb_search',
-      description: 'Search the knowledge base using full-text search. Returns ranked results with highlighted snippets.',
+      description: 'Search the knowledge base using full-text search. Returns ranked results with highlighted snippets. Superseded (retired) notes are excluded unless include_superseded is set.',
       schema: {
         query: z.string().describe('Full-text search query'),
         tags: z.string().optional().describe('Filter results by tag (e.g. "backend", "infra", "auth"). Matches entries whose tags contain this value.'),
         limit: z.number().optional().default(20).describe('Maximum number of results to return'),
+        include_superseded: z.boolean().optional().default(false).describe('Include notes marked superseded (retired). Off by default — use to trace how a current state was reached.'),
       },
-      handler: async ({ query, tags, limit }) => {
+      handler: async ({ query, tags, limit, include_superseded }) => {
         try {
-          const results = searchDocuments(query, limit, { tags });
+          const results = searchDocuments(query, limit, { tags, includeSuperseded: include_superseded });
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -117,15 +119,16 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_list',
-      description: 'List documents in the knowledge base, optionally filtered by type or tag.',
+      description: 'List documents in the knowledge base, optionally filtered by type or tag. Superseded (retired) notes are excluded unless include_superseded is set.',
       schema: {
         type: z.string().optional().describe('Filter by document type (e.g. text, markdown, code, pdf)'),
         tag: z.string().optional().describe('Filter by tag'),
         limit: z.number().optional().default(50).describe('Maximum number of results to return'),
+        include_superseded: z.boolean().optional().default(false).describe('Include notes marked superseded (retired). Off by default.'),
       },
-      handler: async ({ type, tag, limit }) => {
+      handler: async ({ type, tag, limit, include_superseded }) => {
         try {
-          const results = listDocuments({ type, tag, limit });
+          const results = listDocuments({ type, tag, limit, includeSuperseded: include_superseded });
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -147,7 +150,15 @@ export function getToolDefinitions() {
           }
           const related = relatedForDoc(id);
           if (related.length) doc.related = related;
-          return { content: [{ type: 'text', text: JSON.stringify(doc, null, 2) }] };
+          // Superseded notes stay readable (this is the "how we got here" path)
+          // but lead with a banner so the reader knows it is retired.
+          let text = JSON.stringify(doc, null, 2);
+          if (doc.superseded_at) {
+            const by = doc.superseded_by ? ` by #${doc.superseded_by}` : '';
+            const reason = doc.superseded_reason ? `, ${doc.superseded_reason}` : '';
+            text = `⚠ SUPERSEDED ${doc.superseded_at}${by}${reason}\n\n${text}`;
+          }
+          return { content: [{ type: 'text', text }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -176,7 +187,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_write',
-      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync.',
+      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces.',
       schema: {
         title: z.string().describe('Note title'),
         content: z.string().describe('Markdown content (body text, no frontmatter needed)'),
@@ -184,17 +195,78 @@ export function getToolDefinitions() {
           .optional().default('capture').describe('Note type — determines vault folder destination'),
         tags: z.string().optional().describe('Comma-separated tags'),
         project: z.string().optional().describe('Project name (e.g. my-app, backend, frontend)'),
+        supersedes: z.number().int().optional().describe('ID of an existing note this one replaces — that note is marked superseded and pointed at this one.'),
       },
-      handler: async ({ title, content, type, tags, project }) => {
+      handler: async ({ title, content, type, tags, project, supersedes }) => {
         try {
-          const result = await writeNote(getVaultPath(), { title, content, type, tags, project });
+          // Fail before writing if the supersede target does not exist — the
+          // note could not fulfil its stated purpose otherwise.
+          if (supersedes != null && !getDocument(supersedes)) {
+            return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
+          }
+          const result = await writeNote(getVaultPath(), { title, content, type, tags, project, excludeId: supersedes });
           if (result.skipped) {
             return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          }
+          let supersedeNote = '';
+          if (supersedes != null) {
+            if (result.docId) {
+              supersedeDocument(supersedes, { replacementId: result.docId, reason: `superseded by #${result.docId}` });
+              supersedeNote = `; superseded #${supersedes} (replaced by #${result.docId})`;
+            } else {
+              supersedeDocument(supersedes, { reason: 'superseded by replacement note' });
+              supersedeNote = `; superseded #${supersedes} (replacement id unavailable — reindex may have failed)`;
+            }
           }
           const relatedNote = result.related.length
             ? `; related: ${result.related.map(r => `#${r.id} ${r.title}`).join(' | ')}`
             : '';
-          return { content: [{ type: 'text', text: `Note saved to ${result.path}${result.status}${relatedNote}` }] };
+          return { content: [{ type: 'text', text: `Note saved to ${result.path}${result.status}${relatedNote}${supersedeNote}` }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+        }
+      },
+    },
+
+    {
+      name: 'kb_supersede',
+      description: 'Mark a note as superseded (meaningfully replaced) so it drops out of search, briefings, and current-state recall while staying reachable via kb_read and its replacement pointer. Superseded is NOT deleted. Optionally record the replacement note and a reason; pass unset to restore the note.',
+      schema: {
+        id: z.number().int().describe('ID of the note to supersede'),
+        replacement_id: z.number().int().optional().describe('ID of the note that replaces it (records a pointer for the kb_read banner)'),
+        reason: z.string().optional().describe('Why it was superseded — shown in the kb_read banner'),
+        unset: z.boolean().optional().default(false).describe('Clear supersession, restoring the note to current-state recall'),
+      },
+      handler: async ({ id, replacement_id, reason, unset }) => {
+        try {
+          const doc = supersedeDocument(id, { replacementId: replacement_id ?? null, reason: reason ?? null, unset });
+          if (!doc) {
+            return { content: [{ type: 'text', text: `Error: Document with ID ${id} not found.` }], isError: true };
+          }
+          const state = doc.superseded_at
+            ? `superseded ${doc.superseded_at}${doc.superseded_by ? ` by #${doc.superseded_by}` : ''}${doc.superseded_reason ? ` (${doc.superseded_reason})` : ''}`
+            : 'restored to current-state recall';
+          return { content: [{ type: 'text', text: `#${id} "${doc.title}" ${state}` }] };
+        } catch (err) {
+          return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+        }
+      },
+    },
+
+    {
+      name: 'kb_supersede_candidates',
+      description: 'Propose notes that may be stale, from retired facts in the temporal graph. SUGGESTIONS ONLY — this never marks anything superseded. Each candidate is a live note whose content asserts a value a later fact retired, alongside a newer note asserting the current value. Review, then confirm real ones with kb_supersede. Conservative by design (prefers misses over false retires).',
+      schema: {
+        since: z.string().optional().describe('Only consider facts retired on/after this ISO date (YYYY-MM-DD)'),
+        limit: z.number().int().optional().default(20).describe('Max candidates to return'),
+      },
+      handler: async ({ since, limit }) => {
+        try {
+          const candidates = supersedeCandidates({ since: since ?? null, limit });
+          const header = candidates.length
+            ? `${candidates.length} supersession candidate(s). Review, then confirm real ones with kb_supersede. Nothing has been changed.`
+            : 'No supersession candidates found. Nothing has been changed.';
+          return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(candidates, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -481,8 +553,10 @@ export function getToolDefinitions() {
             WHERE tags != '' GROUP BY tags ORDER BY count DESC LIMIT 15
           `).all();
 
+          // Parity with the wakeup-hook briefing: superseded notes drop out of
+          // "recent". LEFT JOIN keeps vault files with no linked document.
           const recent = db.prepare(
-            'SELECT title, note_type, tags, project FROM vault_files ORDER BY indexed_at DESC LIMIT 10'
+            'SELECT vf.title, vf.note_type, vf.tags, vf.project FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 10'
           ).all();
 
           const factCount = db.prepare('SELECT COUNT(*) as count FROM facts WHERE valid_to IS NULL').get()?.count || 0;

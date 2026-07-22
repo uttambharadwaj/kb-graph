@@ -3,7 +3,7 @@ import { getDb } from '../db.js';
 
 // Brute-force cosine similarity — works for <2000 notes.
 // If vault exceeds 2000 notes, consider sqlite-vss extension for ANN search.
-export async function semanticSearch(query, { limit = 10, project, type } = {}) {
+export async function semanticSearch(query, { limit = 10, project, type, includeSuperseded = false } = {}) {
   const queryEmbedding = await generateEmbedding(query);
 
   let sql = `
@@ -15,6 +15,7 @@ export async function semanticSearch(query, { limit = 10, project, type } = {}) 
   const conditions = [];
   const params = [];
 
+  if (!includeSuperseded) conditions.push('d.superseded_at IS NULL');
   if (project) {
     sql += ' JOIN vault_files vf ON vf.document_id = e.document_id';
     conditions.push('vf.project = ?');
@@ -48,13 +49,17 @@ export async function semanticSearch(query, { limit = 10, project, type } = {}) 
 
 // Score `content` against every embedded doc. One pass serves both dedup
 // (score >= 0.85) and related-links (0.55 <= score < 0.85).
-export async function similarDocs(content, { limit = 10 } = {}) {
+export async function similarDocs(content, { limit = 10, includeSuperseded = false } = {}) {
   const queryEmbedding = await generateEmbedding(content);
 
+  // Dedup/related-links compare against LIVE notes only — a retired note is
+  // not "existing current content", and a fresh note should not link to it.
+  const supersededFilter = includeSuperseded ? '' : 'WHERE d.superseded_at IS NULL';
   const rows = getDb().prepare(`
     SELECT e.document_id, e.vault_path, e.embedding, d.title, d.tags
     FROM embeddings e
     JOIN documents d ON d.id = e.document_id
+    ${supersededFilter}
   `).all();
 
   const scored = rows.map(row => ({
@@ -85,18 +90,18 @@ export async function checkDuplicate(content, { threshold = 0.85 } = {}) {
   };
 }
 
-export async function hybridSearch(query, { limit = 10, project, type } = {}) {
+export async function hybridSearch(query, { limit = 10, project, type, includeSuperseded = false } = {}) {
   const { searchDocuments } = await import('../db.js');
 
   let ftsResults, semanticResults;
   try {
     [ftsResults, semanticResults] = await Promise.all([
-      Promise.resolve(searchDocuments(query, limit * 2)),
-      semanticSearch(query, { limit: limit * 2, project, type }),
+      Promise.resolve(searchDocuments(query, limit * 2, { includeSuperseded })),
+      semanticSearch(query, { limit: limit * 2, project, type, includeSuperseded }),
     ]);
   } catch {
     // If semantic search fails (no embeddings, model error, etc.), fall back to FTS only
-    ftsResults = searchDocuments(query, limit * 2);
+    ftsResults = searchDocuments(query, limit * 2, { includeSuperseded });
     semanticResults = [];
   }
 
