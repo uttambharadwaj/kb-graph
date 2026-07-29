@@ -131,14 +131,16 @@ describe('autobind', () => {
 
   it('keeps CLI JSON output when not invoked from a hook', () => {
     makeBusHome();
-    const { full } = makeWorkspace('worktrees/pf-8000-cli-mode/src');
+    // Run from a ticket-free dir: this checkout is often itself a pf-NNNN
+    // worktree, which would bind and make the no-ticket assertion fail.
+    const { full } = makeWorkspace('plain-cli-mode/src');
 
     const stdout = execFileSync('node', [
-      'bin/bus-autobind.js',
+      join(process.cwd(), 'bin/bus-autobind.js'),
       '--agent',
       'claude',
     ], {
-      cwd: process.cwd(),
+      cwd: full,
       encoding: 'utf8',
       env: { ...process.env, KB_BUS_HOME: process.env.KB_BUS_HOME },
     });

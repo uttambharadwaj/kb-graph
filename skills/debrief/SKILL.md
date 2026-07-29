@@ -75,7 +75,7 @@ Size guide: gotcha lessons 3–8 lines; patterns 8–15; workflows 5–15 (comma
 
 **Context:** `kb_write` with `type: session`, title `{workstream}: {one-line change}`, a few lines covering what changed, where it stands, next action.
 
-**Facts:** call `kb_extract` once with the session's relevant text (decisions, state changes, ownership, incidents) plus `source` and `observation_date` — it extracts and consolidates triples, retiring contradicted facts automatically. Use `dry_run: true` to preview. Fill gaps with manual `kb_fact_add`; retire superseded facts with `kb_fact_invalidate`.
+**Facts:** call `kb_extract` once with the session's relevant text (decisions, state changes, ownership, incidents) plus `source` and `observation_date` — it extracts and consolidates triples, retiring a contradicted fact only where the predicate is single-valued (`status`, `deployed_to`, …) — many-valued ones like `owns` keep both objects. Use `dry_run: true` to preview. Read `skipped` for assertions it chose not to record, then fill gaps with manual `kb_fact_add`; retire superseded facts with `kb_fact_invalidate`.
 
 ## Step 6: Verify
 
