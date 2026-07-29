@@ -109,7 +109,27 @@ export async function extractFacts(text) {
 
 // Mirror facts.js's predicate normalization so contradiction matching lines up.
 const normPred = p => p.toLowerCase().replace(/\s+/g, '_');
-const sameEntity = (a, b) => a.toLowerCase().trim() === b.toLowerCase().trim();
+const normEntity = s => s.toLowerCase().trim().replace(/\s+/g, ' ');
+
+// The reference an entity string carries, if any: "#3865", a ticket id, a commit
+// SHA. The SHA arm needs a digit — English words are hexadecimal more often than
+// you would like ("deface").
+const REFERENCE = /#\s*(\d+)|\b([a-z]{2,6}-\d+)\b|\b(?=[0-9a-f]*\d)([0-9a-f]{7,40})\b/;
+const referenceOf = s => {
+  const m = normEntity(s).match(REFERENCE);
+  return m ? (m[1] ? `#${m[1]}` : m[2] || m[3]) : null;
+};
+
+// Two spellings of one reference — "ux-labs PR #3865" and "pr #3865" — are the
+// same fact, and treating them as different retires a row in favour of itself.
+// Requiring one to be a suffix of the other keeps "ux-labs PR #539" and
+// "internal-tools PR #539" apart: same number, different PRs.
+export function sameEntity(a, b) {
+  const [x, y] = [normEntity(a), normEntity(b)];
+  if (x === y) return true;
+  const ref = referenceOf(x);
+  return !!ref && ref === referenceOf(y) && (x.endsWith(y) || y.endsWith(x));
+}
 
 // Only single-valued predicates auto-retire a prior object. Many-valued ones
 // (owns, blocked_by, depends_on) say nothing about their siblings, and a wrong
@@ -149,12 +169,22 @@ export function consolidate(facts, { source, observationDate } = {}) {
     }
     const pred = normPred(predicate);
 
-    // Retire any currently-valid fact with the same subject+predicate but a different object.
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
-    const current = SINGLE_VALUED.has(pred)
-      ? queryFact(subject, { direction: 'outgoing', exact: true })
-        .filter(r => r.current && r.predicate === pred && !sameEntity(r.object, object))
-      : [];
+    const held = queryFact(subject, { direction: 'outgoing', exact: true })
+      .filter(r => r.current && r.predicate === pred);
+
+    // The same fact spelled differently. Keep the spelling already in the graph —
+    // writing the variant leaves two live rows that never converge, and every
+    // re-run of the extract churns them again. Byte-identical repeats fall
+    // through to addFact, which reports them as duplicates.
+    const variant = held.find(r => normEntity(r.object) !== normEntity(object) && sameEntity(r.object, object));
+    if (variant) {
+      skipped.push({ fact: f, reason: 'equivalent_spelling_of_existing', existing: variant.object });
+      continue;
+    }
+
+    // Retire any currently-valid fact with the same subject+predicate but a different object.
+    const current = SINGLE_VALUED.has(pred) ? held.filter(r => !sameEntity(r.object, object)) : [];
     for (const stale of current) {
       invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
       invalidated.push({
