@@ -17,6 +17,10 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = 
       // Text-only task: don't let the nested CLI connect MCP servers (which
       // would spawn a second kb-server per call and pay their startup cost).
       '--strict-mcp-config',
+      // Same reasoning for the user's session hooks: this is a subprocess doing
+      // one extraction, not a session. A hook that hangs or is cancelled stalls
+      // the call to its full timeout (observed 2026-07-29, a SessionEnd hook).
+      '--settings', '{"hooks":{}}',
     ], {
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
       timeout,

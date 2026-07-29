@@ -1,0 +1,12 @@
+{
+  "_comment": "Predicate cardinality. Only single-valued predicates auto-retire a prior object during kb_extract consolidation; everything else keeps both objects. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in.",
+  "single_valued": [
+    "status",
+    "state",
+    "assigned_to",
+    "merged_via",
+    "shipped_via",
+    "version",
+    "chose"
+  ]
+}
