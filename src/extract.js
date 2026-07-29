@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
-import { addFact, queryFact, invalidateFact } from './facts.js';
+import { addFact, queryFact, invalidateFact, sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
 
@@ -185,9 +185,10 @@ export function splitListObject(fact) {
 //   - single-valued predicate, different object, currently valid -> retire old, add new
 //   - otherwise -> add
 // Pure over the facts table (no LLM) — this is the deterministic, testable core.
-export function consolidate(facts, { source, observationDate } = {}) {
+export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
+  const observedAtTs = observedAt || sqlTimestamp();
 
   for (const f of facts.flatMap(splitListObject)) {
     const { subject, predicate, object } = f || {};
@@ -210,15 +211,47 @@ export function consolidate(facts, { source, observationDate } = {}) {
     // contradicts must still be retired, even when a variant of the value is also
     // held — kb_fact_add writes without consolidating, so both can coexist.
     const current = SINGLE_VALUED.has(pred) ? held.filter(r => !sameEntity(r.object, object)) : [];
-    for (const stale of current) {
-      invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
-      invalidated.push({
-        subject,
-        predicate: pred,
-        object: stale.object,
-        reason: 'single_valued_predicate_took_new_object',
-        superseded_by: object,
+
+    // An assertion observed before a fact we already hold is older news, not a
+    // contradiction. harvest.js stamps observationDate from the transcript's
+    // mtime, so it asserts yesterday against whatever a session wrote today.
+    // valid_from is a date, so it can only order across days; recorded_at is a
+    // wall-clock instant and catches the same-day case — a 10am transcript
+    // harvested tonight against a 4pm debrief that already corrected it.
+    const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
+      || (r.recorded_at && r.recorded_at > observedAtTs));
+    if (newer) {
+      skipped.push({
+        fact: f,
+        reason: 'stale_observation',
+        existing: newer.object,
+        existing_since: newer.valid_from,
+        existing_recorded_at: newer.recorded_at,
       });
+      continue;
+    }
+
+    for (const stale of current) {
+      // Report the retirement only if it happened. The guard above means
+      // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
+      // subprocesses share one DB, so another can retire it between this read
+      // and this write.
+      const res = invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
+      if (res.invalidated) {
+        invalidated.push({
+          subject,
+          predicate: pred,
+          object: stale.object,
+          reason: 'single_valued_predicate_took_new_object',
+          superseded_by: object,
+        });
+      } else {
+        skipped.push({
+          fact: f,
+          reason: `retire_failed: ${res.refused || 'no_current_row'}`,
+          existing: stale.object,
+        });
+      }
     }
 
     // The same fact spelled differently. Keep the spelling already in the graph —
@@ -274,7 +307,7 @@ function recallPreview(key) {
 }
 
 // Orchestrator behind the kb_extract tool.
-export async function kbExtract(text, { source, observationDate, dryRun = false } = {}) {
+export async function kbExtract(text, { source, observationDate, observedAt, dryRun = false } = {}) {
   const key = previewKey(text, source, observationDate);
   const previewed = dryRun ? null : recallPreview(key);
   const { facts, skipped } = previewed || await extractFacts(text);
@@ -292,6 +325,6 @@ export async function kbExtract(text, { source, observationDate, dryRun = false 
     return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
   }
 
-  const res = consolidate(facts, { source, observationDate });
+  const res = consolidate(facts, { source, observationDate, observedAt });
   return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
 }

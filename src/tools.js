@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, supersedeDocument, supersedeCandidates } from './db.js';
@@ -603,7 +602,7 @@ export function getToolDefinitions() {
       schema: {
         text: z.string().describe('The conversation or session transcript to extract facts from'),
         source: z.string().optional().describe('Provenance for the facts (e.g. "debrief:2026-06-24", "session:<id>")'),
-        observation_date: z.string().optional().describe('When this happened (YYYY-MM-DD) — stamps valid_from / retirement dates. Defaults to today.'),
+        observation_date: z.string().optional().describe('When this happened (YYYY-MM-DD) — stamps valid_from / retirement dates. Defaults to today. An observation older than a fact already held will not overwrite it; it comes back in "skipped" as stale_observation.'),
         dry_run: z.boolean().optional().default(false).describe('Return candidate facts WITHOUT writing them — review before committing.'),
       },
       handler: async ({ text, source, observation_date, dry_run }) => {
@@ -636,7 +635,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_fact_invalidate',
-      description: 'Mark a fact as no longer true (set end date). Use when decisions are reversed, architectures change, or states expire. E.g. invalidate("my-app", "uses", "legacy-auth") after removing it.',
+      description: 'Mark a fact as no longer true (set end date). Use when decisions are reversed, architectures change, or states expire. E.g. invalidate("my-app", "uses", "legacy-auth") after removing it. Refuses with "refused": "ended_before_valid_from" if the end date precedes the fact\'s valid_from — an interval cannot end before it begins.',
       schema: {
         subject: z.string().describe('Entity'),
         predicate: z.string().describe('Relationship'),

@@ -36,6 +36,11 @@ export function initFactSchema() {
   `);
 }
 
+// created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC
+// 'YYYY-MM-DD HH:MM:SS'. Anything compared against it has to be formatted the
+// same way, and the format lives here because this is where the column does.
+export const sqlTimestamp = (d = new Date()) => d.toISOString().replace('T', ' ').slice(0, 19);
+
 function entityId(name) {
   return name.toLowerCase().replace(/\s+/g, '_').replace(/'/g, '');
 }
@@ -128,6 +133,7 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
         valid_to: row.valid_to,
         current: row.valid_to === null,
         source: row.source,
+        recorded_at: row.created_at,
       });
     }
   }
@@ -154,6 +160,7 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
         valid_to: row.valid_to,
         current: row.valid_to === null,
         source: row.source,
+        recorded_at: row.created_at,
       });
     }
   }
@@ -167,6 +174,21 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const objId = resolveEntity(entityId(object));
   const pred = predicate.toLowerCase().replace(/\s+/g, '_');
   const endDate = ended || new Date().toISOString().split('T')[0];
+
+  // valid_to < valid_from is an interval of negative length. queryFact's as-of
+  // clause (valid_from <= asOf AND valid_to >= asOf) can never match it, so the
+  // row would be neither current nor historical — it would just vanish.
+  // Refuses rather than throws: the caller is consolidate, iterating a batch,
+  // where an exception would abandon every fact queued behind this one.
+  // MAX, not an arbitrary row: mergeEntity can collapse two entities into one
+  // triple with several live rows, and the UPDATE below hits all of them. The
+  // latest start is the one that decides whether any interval would invert.
+  const row = db.prepare(
+    'SELECT MAX(valid_from) AS valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
+  ).get(subId, pred, objId);
+  if (row?.valid_from && row.valid_from > endDate) {
+    return { invalidated: 0, ended: endDate, refused: 'ended_before_valid_from', valid_from: row.valid_from };
+  }
 
   const result = db.prepare(
     'UPDATE facts SET valid_to = ? WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'

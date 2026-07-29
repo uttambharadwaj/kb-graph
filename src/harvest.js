@@ -8,6 +8,7 @@ import { join, basename } from 'path';
 import { homedir } from 'os';
 import { getDb } from './db.js';
 import { kbExtract } from './extract.js';
+import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
 
@@ -116,11 +117,14 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun }) {
 
   const source = `harvest:${basename(path, '.jsonl')}`;
   const observationDate = new Date(mtime).toISOString().split('T')[0];
+  // The instant, not just the day: a transcript from this morning must not
+  // overwrite a fact a session recorded this afternoon.
+  const observedAt = sqlTimestamp(new Date(mtime));
 
   let facts = 0, chunkErrors = 0;
   for (const chunk of chunkText(text)) {
     try {
-      const res = await kbExtract(chunk, { source, observationDate, dryRun });
+      const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
       facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
     } catch {
       chunkErrors++; // one bad chunk shouldn't sink the transcript
