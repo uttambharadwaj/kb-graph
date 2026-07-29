@@ -40,7 +40,7 @@ process.env.CLAUDE_PATH = fakeClaude;
 
 const { consolidate, kbExtract, chunkForExtract } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
-const { initFactSchema, addFact, queryFact, invalidateFact } = await import('../src/facts.js');
+const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity } = await import('../src/facts.js');
 
 const currentObject = (subject, predicate) =>
   queryFact(subject, { direction: 'outgoing' })
@@ -98,6 +98,52 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(currentObject('pf-9001', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
     assert.strictEqual(res.skipped[0].existing_since, '2026-07-29');
+  });
+
+  it('does not let a same-day older transcript retire an afternoon correction', () => {
+    // Both sides truncate to the same YYYY-MM-DD, so only the recorded instant
+    // can order them: a 10am transcript harvested tonight against a 4pm debrief.
+    addFact('pf-9010', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9010', predicate: 'status', object: 'in_review' }],
+      { source: 'harvest', observationDate: '2026-07-29', observedAt: '2026-07-29 10:00:00' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0);
+    assert.deepStrictEqual(currentObject('pf-9010', 'status'), ['done']);
+    assert.strictEqual(res.skipped[0].reason, 'stale_observation');
+  });
+
+  it('still retires when the observation is later than the held row was recorded', () => {
+    addFact('pf-9011', 'status', 'in_review', { validFrom: '2026-07-29', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9011', predicate: 'status', object: 'done' }],
+      { source: 'debrief', observationDate: '2026-07-29', observedAt: '2999-01-01 00:00:00' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 1);
+    assert.deepStrictEqual(currentObject('pf-9011', 'status'), ['done']);
+  });
+
+  it('refuses when any live row of the triple would invert, not just the first', () => {
+    // mergeEntity collapses two entities into one triple, leaving several live
+    // rows; the UPDATE hits all of them, so the latest start decides.
+    addFact('pf-9012', 'status', 'label-alpha', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('pf-9012', 'status', 'label-beta', { validFrom: '2026-07-29', source: 'seed' });
+    mergeEntity('label-alpha', 'label-beta');
+
+    const res = invalidateFact('pf-9012', 'status', 'label-beta', { ended: '2026-07-15' });
+
+    assert.strictEqual(res.invalidated, 0);
+    assert.strictEqual(res.refused, 'ended_before_valid_from');
+    assert.strictEqual(
+      queryFact('pf-9012', { direction: 'outgoing', exact: true })
+        .filter(r => r.valid_to && r.valid_from > r.valid_to).length,
+      0,
+      'left an inverted interval on a row the .get() never looked at',
+    );
   });
 
   it('still retires when the held fact carries no valid_from to compare', () => {

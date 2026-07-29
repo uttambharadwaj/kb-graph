@@ -36,6 +36,11 @@ export function initFactSchema() {
   `);
 }
 
+// created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC
+// 'YYYY-MM-DD HH:MM:SS'. Anything compared against it has to be formatted the
+// same way, and the format lives here because this is where the column does.
+export const sqlTimestamp = (d = new Date()) => d.toISOString().replace('T', ' ').slice(0, 19);
+
 function entityId(name) {
   return name.toLowerCase().replace(/\s+/g, '_').replace(/'/g, '');
 }
@@ -128,6 +133,7 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
         valid_to: row.valid_to,
         current: row.valid_to === null,
         source: row.source,
+        recorded_at: row.created_at,
       });
     }
   }
@@ -154,6 +160,7 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
         valid_to: row.valid_to,
         current: row.valid_to === null,
         source: row.source,
+        recorded_at: row.created_at,
       });
     }
   }
@@ -173,8 +180,11 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   // row would be neither current nor historical — it would just vanish.
   // Refuses rather than throws: the caller is consolidate, iterating a batch,
   // where an exception would abandon every fact queued behind this one.
+  // MAX, not an arbitrary row: mergeEntity can collapse two entities into one
+  // triple with several live rows, and the UPDATE below hits all of them. The
+  // latest start is the one that decides whether any interval would invert.
   const row = db.prepare(
-    'SELECT valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
+    'SELECT MAX(valid_from) AS valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
   ).get(subId, pred, objId);
   if (row?.valid_from && row.valid_from > endDate) {
     return { invalidated: 0, ended: endDate, refused: 'ended_before_valid_from', valid_from: row.valid_from };

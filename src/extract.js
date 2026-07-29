@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
-import { addFact, queryFact, invalidateFact } from './facts.js';
+import { addFact, queryFact, invalidateFact, sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
 
@@ -185,9 +185,10 @@ export function splitListObject(fact) {
 //   - single-valued predicate, different object, currently valid -> retire old, add new
 //   - otherwise -> add
 // Pure over the facts table (no LLM) — this is the deterministic, testable core.
-export function consolidate(facts, { source, observationDate } = {}) {
+export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
+  const observedAtTs = observedAt || sqlTimestamp();
 
   for (const f of facts.flatMap(splitListObject)) {
     const { subject, predicate, object } = f || {};
@@ -214,13 +215,18 @@ export function consolidate(facts, { source, observationDate } = {}) {
     // An assertion observed before a fact we already hold is older news, not a
     // contradiction. harvest.js stamps observationDate from the transcript's
     // mtime, so it asserts yesterday against whatever a session wrote today.
-    const newer = current.find(r => r.valid_from && r.valid_from > validFrom);
+    // valid_from is a date, so it can only order across days; recorded_at is a
+    // wall-clock instant and catches the same-day case — a 10am transcript
+    // harvested tonight against a 4pm debrief that already corrected it.
+    const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
+      || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({
         fact: f,
         reason: 'stale_observation',
         existing: newer.object,
         existing_since: newer.valid_from,
+        existing_recorded_at: newer.recorded_at,
       });
       continue;
     }
@@ -301,7 +307,7 @@ function recallPreview(key) {
 }
 
 // Orchestrator behind the kb_extract tool.
-export async function kbExtract(text, { source, observationDate, dryRun = false } = {}) {
+export async function kbExtract(text, { source, observationDate, observedAt, dryRun = false } = {}) {
   const key = previewKey(text, source, observationDate);
   const previewed = dryRun ? null : recallPreview(key);
   const { facts, skipped } = previewed || await extractFacts(text);
@@ -319,6 +325,6 @@ export async function kbExtract(text, { source, observationDate, dryRun = false 
     return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
   }
 
-  const res = consolidate(facts, { source, observationDate });
+  const res = consolidate(facts, { source, observationDate, observedAt });
   return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
 }
