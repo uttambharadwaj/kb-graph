@@ -1,6 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -20,8 +20,10 @@ const fakeClaude = join(tmp, 'fake-claude.sh');
 const envelope = payload => JSON.stringify({ result: JSON.stringify(payload) });
 writeFileSync(fakeClaude, `#!/bin/sh
 prompt=$(cat)
+echo x >> "$KB_DIR/calls"   # so tests can assert how many times the model was asked
 case "$prompt" in
   *DEAD_CHUNK*) exit 3 ;;
+  *"preview me"*) echo '{"result": "{\"facts\": [{\"subject\": \"pr #777\", \"predicate\": \"merged_via\", \"object\": \"commit abc1234\"}], \"skipped\": []}"}' ;;
   *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
@@ -33,6 +35,7 @@ chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
 const { consolidate, kbExtract, chunkForExtract } = await import('../src/extract.js');
+const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
 const { initFactSchema, addFact, queryFact } = await import('../src/facts.js');
 
 const currentObject = (subject, predicate) =>
@@ -176,6 +179,62 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.added.length, 1);
     assert.strictEqual(res.skipped.length, 1);
     assert.strictEqual(res.skipped[0].reason, 'resolved in the same PR');
+  });
+
+  it('folds predicate synonyms onto one canonical edge', () => {
+    const res = consolidate([
+      { subject: 'pf-3013', predicate: 'child_ticket_of', object: 'pf-2991' },
+      { subject: 'readMetronomeContractId', predicate: 'declared_by', object: 'rates_stack' },
+    ], { source: 'test', observationDate: '2026-07-29' });
+
+    assert.strictEqual(res.added.length, 2);
+    // kb_fact_query matches on predicate, so synonyms must converge or every
+    // query under-returns across the silos.
+    assert.deepStrictEqual(currentObject('pf-3013', 'child_of'), ['pf-2991']);
+    assert.deepStrictEqual(currentObject('readMetronomeContractId', 'declared_in'), ['rates_stack']);
+  });
+
+  it('splits a comma-joined list of references into one row each', () => {
+    const res = consolidate(
+      [{ subject: 'wallet rates stack', predicate: 'includes', object: 'pr #3835, pr #3849, and pr #3865' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.added.length, 3, 'kept an unqueryable comma-joined object');
+    assert.deepStrictEqual(currentObject('wallet rates stack', 'includes').sort(), ['pr #3835', 'pr #3849', 'pr #3865']);
+  });
+
+  it('leaves a prose object with commas whole', () => {
+    const res = consolidate(
+      [{ subject: 'metronome', predicate: 'calculates', object: 'recharge_to, minus current balance' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.added.length, 1);
+  });
+
+  it('commits exactly what the dry run previewed, without asking the model twice', async () => {
+    const args = { source: 'test', observationDate: '2026-07-29' };
+    const before = callCount();
+
+    const preview = await kbExtract('preview me', { ...args, dryRun: true });
+    const committed = await kbExtract('preview me', args);
+
+    assert.strictEqual(preview.dry_run, true);
+    assert.strictEqual(committed.from_preview, true, 'commit re-ran the extractor');
+    assert.strictEqual(callCount() - before, 1, 'model was called twice for one preview+commit');
+    assert.deepStrictEqual(
+      committed.added.map(f => `${f.subject}|${f.predicate}|${f.object}`),
+      preview.candidates.map(f => `${f.subject}|${f.predicate}|${f.object}`),
+    );
+  });
+
+  it('extracts fresh when no preview matches the input', async () => {
+    const before = callCount();
+    const res = await kbExtract('never previewed', { source: 'test', observationDate: '2026-07-29' });
+
+    assert.strictEqual(res.from_preview, false);
+    assert.strictEqual(callCount() - before, 1);
   });
 
   it('splits a paragraph on sentence boundaries and caps the fan-out', () => {
