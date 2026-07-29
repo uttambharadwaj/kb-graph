@@ -46,14 +46,19 @@ export function buildExtractPrompt(text) {
   return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, 12000)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
-// I/O: ask the LLM for candidate facts. Returns empty lists on a malformed response.
+// I/O: ask the LLM for candidate facts.
 export async function extractFacts(text) {
   // 120s to match harvest.js — 60s default was killing calls during slow
   // API windows (observed 2026-07-07, exit 143).
   const result = await runClaudeJSON(buildExtractPrompt(text), { timeout: 120000 });
   return {
     facts: Array.isArray(result?.facts) ? result.facts : [],
-    skipped: Array.isArray(result?.skipped) ? result.skipped : [],
+    // A response with no usable skipped list has told us nothing about what it
+    // passed over. Coercing that to [] would restate the silent-omission bug
+    // this accounting exists to expose, so say the accounting is missing.
+    skipped: Array.isArray(result?.skipped)
+      ? result.skipped
+      : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }],
   };
 }
 

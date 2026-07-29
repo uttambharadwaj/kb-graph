@@ -14,14 +14,20 @@ writeFileSync(join(tmp, 'predicates.json'), JSON.stringify({
   many_valued: ['version'],
 }));
 
-// Fake claude so kbExtract's plumbing is testable without the model.
+// Fake claude so kbExtract's plumbing is testable without the model. It answers
+// off the prompt it is fed, so one stub covers both response shapes.
 const fakeClaude = join(tmp, 'fake-claude.sh');
-const stubReply = payload =>
-  `#!/bin/sh\ncat >/dev/null\ncat <<'JSON'\n${JSON.stringify({ result: JSON.stringify(payload) })}\nJSON\n`;
-writeFileSync(fakeClaude, stubReply({
-  facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
-  skipped: [{ assertion: 'CodeRabbit raised a Major finding', reason: 'resolved in the same PR' }],
-}));
+const envelope = payload => JSON.stringify({ result: JSON.stringify(payload) });
+writeFileSync(fakeClaude, `#!/bin/sh
+prompt=$(cat)
+case "$prompt" in
+  *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
+  *) echo '${envelope({
+    facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
+    skipped: [{ assertion: 'CodeRabbit raised a Major finding', reason: 'resolved in the same PR' }],
+  })}' ;;
+esac
+`);
 chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
@@ -113,6 +119,14 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.added.length, 1);
     assert.strictEqual(res.skipped.length, 1);
     assert.strictEqual(res.skipped[0].reason, 'resolved in the same PR');
+  });
+
+  it('reports missing accounting rather than an empty skipped list', async () => {
+    // A response with no skipped key knows nothing about what it passed over —
+    // reporting [] there would be the same silent omission in a new place.
+    const res = await kbExtract('LEGACY_NO_SKIPPED', { source: 'test', observationDate: '2026-06-24' });
+
+    assert.strictEqual(res.skipped[0].reason, 'extractor_returned_no_skipped_list');
   });
 
   it('is idempotent — re-running the same facts is a no-op', () => {
