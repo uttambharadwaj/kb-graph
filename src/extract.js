@@ -198,8 +198,12 @@ export function consolidate(facts, { source, observationDate } = {}) {
     const pred = normPred(predicate);
 
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
+    // normPred on the stored predicate too: rows written before an alias was
+    // registered still carry the old spelling, and comparing raw would leave a
+    // merged_as row unmatched by an incoming merged_via — no dedup, no
+    // retirement, two live rows on a single-valued predicate.
     const held = queryFact(subject, { direction: 'outgoing', exact: true })
-      .filter(r => r.current && r.predicate === pred);
+      .filter(r => r.current && normPred(r.predicate) === pred);
 
     // Retire any currently-valid fact with the same subject+predicate but a different object.
     // Runs before the spelling check below: a live object this value genuinely
@@ -280,8 +284,12 @@ export async function kbExtract(text, { source, observationDate, dryRun = false 
 
   if (dryRun) {
     rememberPreview(key, { facts, skipped });
-    // Candidates are shown post-split, since that is what consolidation will write.
-    return { dry_run: true, candidates: facts.flatMap(splitListObject), skipped: notExtracted, preview_key: key };
+    // Candidates are shown post-split and post-alias, since that is the triple
+    // consolidation will write — previewing the raw predicate would disagree
+    // with the commit for exactly the drift this preview exists to expose.
+    const candidates = facts.flatMap(splitListObject)
+      .map(f => (f?.predicate ? { ...f, predicate: normPred(f.predicate) } : f));
+    return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
   }
 
   const res = consolidate(facts, { source, observationDate });

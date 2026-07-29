@@ -24,6 +24,10 @@ echo x >> "$KB_DIR/calls"   # so tests can assert how many times the model was a
 case "$prompt" in
   *DEAD_CHUNK*) exit 3 ;;
   *"preview me"*) echo '{"result": "{\"facts\": [{\"subject\": \"pr #777\", \"predicate\": \"merged_via\", \"object\": \"commit abc1234\"}], \"skipped\": []}"}' ;;
+  *"alias me"*) echo '${envelope({
+    facts: [{ subject: 'pr #888', predicate: 'merged_as', object: 'commit def5678' }],
+    skipped: [],
+  })}' ;;
   *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
@@ -192,6 +196,32 @@ describe('kb_extract consolidation', () => {
     // query under-returns across the silos.
     assert.deepStrictEqual(currentObject('pf-3013', 'child_of'), ['pf-2991']);
     assert.deepStrictEqual(currentObject('readMetronomeContractId', 'declared_in'), ['rates_stack']);
+  });
+
+  it('matches a row stored under a pre-alias spelling', () => {
+    // Written before merged_as was aliased, so the graph holds the old spelling.
+    addFact('pf-8001', 'merged_as', 'commit aaa1111', { validFrom: '2026-07-01', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-8001', predicate: 'merged_via', object: 'commit bbb2222' }],
+      { source: 'test', observationDate: '2026-07-20' },
+    );
+
+    // Without normalising the stored predicate the old row is invisible here,
+    // and a single-valued predicate ends up with two live objects.
+    assert.strictEqual(res.invalidated.length, 1);
+    assert.deepStrictEqual(currentObject('pf-8001', 'merged_as'), []);
+    assert.deepStrictEqual(currentObject('pf-8001', 'merged_via'), ['commit bbb2222']);
+  });
+
+  it('previews the canonical predicate, not the alias the extractor emitted', async () => {
+    const res = await kbExtract('alias me', { source: 'test', observationDate: '2026-07-29', dryRun: true });
+
+    assert.strictEqual(res.candidates[0].predicate, 'merged_via');
+    // And the commit writes that same edge, which is the promise of a preview.
+    const committed = await kbExtract('alias me', { source: 'test', observationDate: '2026-07-29' });
+    assert.strictEqual(committed.from_preview, true);
+    assert.deepStrictEqual(currentObject('pr #888', 'merged_via'), ['commit def5678']);
   });
 
   it('splits a comma-joined list of references into one row each', () => {
