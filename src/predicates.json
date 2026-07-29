@@ -1,5 +1,5 @@
 {
-  "_comment": "Predicate cardinality. Only single-valued predicates auto-retire a prior object during kb_extract consolidation; everything else keeps both objects. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in.",
+  "_comment": "Predicate registry. 'single_valued' predicates auto-retire a prior object during kb_extract consolidation; everything else keeps both objects. 'aliases' fold synonyms onto one canonical predicate so kb_fact_query, which matches on the predicate, does not under-return across synonym silos. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in, and 'aliases' merge with these.",
   "single_valued": [
     "status",
     "state",
@@ -8,5 +8,15 @@
     "shipped_via",
     "version",
     "chose"
-  ]
+  ],
+  "aliases": {
+    "child_ticket_of": "child_of",
+    "subtask_of": "child_of",
+    "declared_by": "declared_in",
+    "defined_in": "declared_in",
+    "merged_as": "merged_via",
+    "shipped_in": "shipped_via",
+    "deployed_on": "deployed_to",
+    "authored_by": "written_by"
+  }
 }

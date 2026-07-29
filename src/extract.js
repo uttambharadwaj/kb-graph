@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { join } from 'path';
 import { addFact, queryFact, invalidateFact } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
@@ -29,6 +30,8 @@ Rules:
 - A transition ("was fixed", "no longer", "migrated from X to Y", "renamed to") asserts the state AFTER the change. Emit that state; never the pre-change state as if it were current.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
+- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixed_in, status, uses, calls_over_http. Invent one only when none of them says it.
+- One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
 - If nothing durable is present, return {"facts": [], "skipped": [...]}.
 
@@ -107,8 +110,13 @@ export async function extractFacts(text) {
   };
 }
 
-// Mirror facts.js's predicate normalization so contradiction matching lines up.
-const normPred = p => p.toLowerCase().replace(/\s+/g, '_');
+// Mirror facts.js's predicate normalization so contradiction matching lines up,
+// then fold synonyms onto one canonical predicate. kb_fact_query matches on the
+// predicate, so the same relationship arriving as child_of one day and
+// child_ticket_of the next builds synonym silos that every query under-returns
+// from — silently, since the answer still looks well formed.
+const rawPred = p => p.toLowerCase().replace(/\s+/g, '_');
+const normPred = p => PREDICATE_ALIASES[rawPred(p)] || rawPred(p);
 const normEntity = s => s.toLowerCase().trim().replace(/\s+/g, ' ');
 
 // The reference an entity string carries, if any: "#3865", a ticket id, a commit
@@ -145,12 +153,31 @@ const readJSON = path => {
     return null;
   }
 };
-const SINGLE_VALUED = new Set(
-  (readJSON(new URL('./predicates.json', import.meta.url))?.single_valued || []).map(normPred),
-);
+const builtin = readJSON(new URL('./predicates.json', import.meta.url));
 const override = readJSON(join(KB_DIR, 'predicates.json'));
+
+// Defined before the first normPred() call below — it reads this map.
+const PREDICATE_ALIASES = Object.fromEntries(
+  Object.entries({ ...builtin?.aliases, ...override?.aliases })
+    .map(([from, to]) => [rawPred(from), rawPred(to)]),
+);
+
+const SINGLE_VALUED = new Set((builtin?.single_valued || []).map(normPred));
 for (const p of override?.single_valued || []) SINGLE_VALUED.add(normPred(p));
 for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
+
+// One row per object. A comma-joined object ("pr #3835, pr #3849, pr #3851") is
+// unqueryable — kb_fact_query("pr #3849") never matches it — so split it into
+// siblings. Only when every part carries a reference of its own, which keeps
+// prose objects ("recharge_to, minus current balance") whole.
+export function splitListObject(fact) {
+  const parts = String(fact?.object ?? '')
+    .split(/\s*,\s*|\s+and\s+/)
+    .map(p => p.replace(/^and\s+/, '').trim()) // ", and pr #4" splits on the comma first
+    .filter(Boolean);
+  if (parts.length < 2 || !parts.every(referenceOf)) return [fact];
+  return parts.map(object => ({ ...fact, object }));
+}
 
 // Apply extracted facts to the facts table with consolidation:
 //   - identical triple already present  -> skipped (duplicate)
@@ -162,7 +189,7 @@ export function consolidate(facts, { source, observationDate } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
 
-  for (const f of facts) {
+  for (const f of facts.flatMap(splitListObject)) {
     const { subject, predicate, object } = f || {};
     if (!subject || !predicate || !object) {
       skipped.push({ fact: f, reason: 'incomplete_triple' });
@@ -171,8 +198,12 @@ export function consolidate(facts, { source, observationDate } = {}) {
     const pred = normPred(predicate);
 
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
+    // normPred on the stored predicate too: rows written before an alias was
+    // registered still carry the old spelling, and comparing raw would leave a
+    // merged_as row unmatched by an incoming merged_via — no dedup, no
+    // retirement, two live rows on a single-valued predicate.
     const held = queryFact(subject, { direction: 'outgoing', exact: true })
-      .filter(r => r.current && r.predicate === pred);
+      .filter(r => r.current && normPred(r.predicate) === pred);
 
     // Retire any currently-valid fact with the same subject+predicate but a different object.
     // Runs before the spelling check below: a live object this value genuinely
@@ -200,7 +231,9 @@ export function consolidate(facts, { source, observationDate } = {}) {
       continue;
     }
 
-    const res = addFact(subject, predicate, object, { validFrom, source });
+    // pred, not predicate: the row must carry the canonical edge, or the alias
+    // only ever applies to the compare and the graph keeps both spellings.
+    const res = addFact(subject, pred, object, { validFrom, source });
     if (res.already_exists) skipped.push({ fact: f, reason: 'duplicate' });
     else added.push(res);
   }
@@ -208,13 +241,57 @@ export function consolidate(facts, { source, observationDate } = {}) {
   return { added, invalidated, skipped };
 }
 
+// A dry run is only a preview if the commit writes what was previewed. Generation
+// is not reproducible — the same input yields different predicates and different
+// decompositions call to call — so the commit replays the previewed candidates
+// instead of asking again. It also skips a second 60-100s model call.
+// In-process, so a preview and its commit must come from one server process:
+// they do when both are tool calls in one session, which is the flow /debrief uses.
+const PREVIEW_TTL_MS = 60 * 60 * 1000;
+const PREVIEW_LIMIT = 8;
+const previews = new Map();
+
+const previewKey = (text, source, observationDate) =>
+  createHash('sha256').update(`${text} ${source ?? ''} ${observationDate ?? ''}`).digest('hex').slice(0, 16);
+
+function rememberPreview(key, value) {
+  previews.set(key, { ...value, at: Date.now() });
+  for (const [k, v] of previews) {
+    if (previews.size <= PREVIEW_LIMIT && Date.now() - v.at < PREVIEW_TTL_MS) break;
+    previews.delete(k); // Map iterates in insertion order, so this drops the oldest first
+  }
+}
+
+function recallPreview(key) {
+  const hit = previews.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at >= PREVIEW_TTL_MS) {
+    previews.delete(key);
+    return null;
+  }
+  previews.delete(key); // one commit per preview; a re-run extracts fresh
+  return hit;
+}
+
 // Orchestrator behind the kb_extract tool.
 export async function kbExtract(text, { source, observationDate, dryRun = false } = {}) {
-  const { facts, skipped } = await extractFacts(text);
+  const key = previewKey(text, source, observationDate);
+  const previewed = dryRun ? null : recallPreview(key);
+  const { facts, skipped } = previewed || await extractFacts(text);
   // The extractor's own skips ride along with consolidation's, so an empty
   // `skipped` beside an input full of triples is a claim the caller can trust.
   const notExtracted = skipped.map(s => ({ ...s, reason: s?.reason || 'not_extracted' }));
-  if (dryRun) return { dry_run: true, candidates: facts, skipped: notExtracted };
+
+  if (dryRun) {
+    rememberPreview(key, { facts, skipped });
+    // Candidates are shown post-split and post-alias, since that is the triple
+    // consolidation will write — previewing the raw predicate would disagree
+    // with the commit for exactly the drift this preview exists to expose.
+    const candidates = facts.flatMap(splitListObject)
+      .map(f => (f?.predicate ? { ...f, predicate: normPred(f.predicate) } : f));
+    return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
+  }
+
   const res = consolidate(facts, { source, observationDate });
-  return { ...res, skipped: [...res.skipped, ...notExtracted] };
+  return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
 }
