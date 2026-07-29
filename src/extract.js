@@ -46,19 +46,64 @@ export function buildExtractPrompt(text) {
   return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, 12000)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
-// I/O: ask the LLM for candidate facts.
+// Latency tracks facts emitted, not input size, so extracting everything a
+// fact-dense paragraph states runs one call past its whole budget. Split and run
+// concurrently: the pass costs its slowest piece, and a piece that does get stuck
+// degrades to one skipped row instead of failing the call.
+// Measured on a 10-assertion debrief paragraph (2026-07-29): 120.4s in one call,
+// 36-107s in four, 166.6s run sequentially. Per-call latency varies 10-75s for
+// same-size chunks — that part is the API, not this code.
+const TARGET_CHUNK_CHARS = 250;
+const MAX_CONCURRENT_CALLS = 8; // each is a `claude` subprocess; long input widens chunks, not fan-out
+
+export function chunkForExtract(text) {
+  const sentences = text.split(/(?<=[.!?])\s+/);
+
+  const build = size => {
+    const chunks = [];
+    let cur = '';
+    for (const sentence of sentences) {
+      if (cur && (cur + ' ' + sentence).length > size) {
+        chunks.push(cur);
+        cur = sentence;
+      } else {
+        cur = cur ? `${cur} ${sentence}` : sentence;
+      }
+    }
+    if (cur.trim()) chunks.push(cur);
+    return chunks;
+  };
+
+  let size = Math.max(TARGET_CHUNK_CHARS, Math.ceil(text.length / MAX_CONCURRENT_CALLS));
+  let chunks = build(size);
+  while (chunks.length > MAX_CONCURRENT_CALLS) chunks = build(size *= 2);
+  return chunks.length ? chunks : [text];
+}
+
+// I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
-  // 120s to match harvest.js — 60s default was killing calls during slow
-  // API windows (observed 2026-07-07, exit 143).
-  const result = await runClaudeJSON(buildExtractPrompt(text), { timeout: 120000 });
+  const chunks = chunkForExtract(text.slice(0, 12000));
+  const results = await Promise.all(chunks.map(async (chunk, i) => {
+    try {
+      // 120s per chunk to match harvest.js — 60s was killing calls during slow
+      // API windows (observed 2026-07-07, exit 143).
+      return await runClaudeJSON(buildExtractPrompt(chunk), { timeout: 120000 });
+    } catch (err) {
+      // A dead chunk is input nobody looked at. Silently returning the other
+      // chunks' facts would report partial coverage as complete.
+      console.error(`kb_extract: chunk ${i + 1}/${chunks.length} failed: ${err.message}`);
+      return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `chunk_failed: ${err.message}` }] };
+    }
+  }));
+
   return {
-    facts: Array.isArray(result?.facts) ? result.facts : [],
+    facts: results.flatMap(r => (Array.isArray(r?.facts) ? r.facts : [])),
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
     // this accounting exists to expose, so say the accounting is missing.
-    skipped: Array.isArray(result?.skipped)
-      ? result.skipped
-      : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }],
+    skipped: results.flatMap(r => (Array.isArray(r?.skipped)
+      ? r.skipped
+      : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
   };
 }
 

@@ -21,6 +21,7 @@ const envelope = payload => JSON.stringify({ result: JSON.stringify(payload) });
 writeFileSync(fakeClaude, `#!/bin/sh
 prompt=$(cat)
 case "$prompt" in
+  *DEAD_CHUNK*) exit 3 ;;
   *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
@@ -31,7 +32,7 @@ esac
 chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
-const { consolidate, kbExtract } = await import('../src/extract.js');
+const { consolidate, kbExtract, chunkForExtract } = await import('../src/extract.js');
 const { initFactSchema, addFact, queryFact } = await import('../src/facts.js');
 
 const currentObject = (subject, predicate) =>
@@ -119,6 +120,24 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.added.length, 1);
     assert.strictEqual(res.skipped.length, 1);
     assert.strictEqual(res.skipped[0].reason, 'resolved in the same PR');
+  });
+
+  it('splits a paragraph on sentence boundaries and caps the fan-out', () => {
+    const long = 'a'.repeat(40) + '. ';
+    const chunks = chunkForExtract(long.repeat(30)); // 1260 chars
+
+    assert.ok(chunks.length > 1, 'did not split');
+    assert.ok(chunks.every(c => c.trimEnd().endsWith('.')), 'split mid-sentence');
+    // 8 calls is 8 claude subprocesses; longer input widens chunks instead.
+    assert.ok(chunkForExtract('word. '.repeat(4000)).length <= 8);
+    assert.deepStrictEqual(chunkForExtract('one fact.'), ['one fact.']);
+  });
+
+  it('reports a dead chunk instead of returning the survivors as complete', async () => {
+    const res = await kbExtract('DEAD_CHUNK', { source: 'test', observationDate: '2026-06-24' });
+
+    assert.strictEqual(res.added.length, 0);
+    assert.match(res.skipped[0].reason, /chunk_failed/);
   });
 
   it('reports missing accounting rather than an empty skipped list', async () => {
