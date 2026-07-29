@@ -76,6 +76,62 @@ describe('kb_extract consolidation', () => {
     assert.match(res.invalidated[0].reason, /single_valued/);
   });
 
+  it('does not retire a fact in favour of a re-spelling of itself', () => {
+    addFact('pf-2988', 'shipped_via', 'ux-labs PR #3865', { validFrom: '2026-07-20', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-2988', predicate: 'shipped_via', object: 'pr #3865' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0, 'retired a row in favour of itself');
+    assert.strictEqual(res.added.length, 0, 'wrote a second spelling of a live fact');
+    assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
+    // The spelling already in the graph wins, so re-runs converge instead of churning.
+    assert.deepStrictEqual(currentObject('pf-2988', 'shipped_via'), ['ux-labs PR #3865']);
+  });
+
+  it('still retires a genuine contradiction when a variant of the new value is also held', () => {
+    // kb_fact_add writes without consolidating, so a single-valued predicate can
+    // already hold both a spelling of the incoming value and a real contradiction.
+    addFact('pf-9004', 'shipped_via', 'ux-labs PR #100', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('pf-9004', 'shipped_via', 'ux-labs PR #200', { validFrom: '2026-07-02', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9004', predicate: 'shipped_via', object: 'pr #100' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 1, 'left a contradicted object current');
+    assert.strictEqual(res.invalidated[0].object, 'ux-labs PR #200');
+    assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
+    assert.deepStrictEqual(currentObject('pf-9004', 'shipped_via'), ['ux-labs PR #100']);
+  });
+
+  it('keeps same-numbered PRs in different repos apart', () => {
+    addFact('pf-9001', 'reviewed_by', 'internal-tools-backend PR #539', { validFrom: '2026-07-20', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9001', predicate: 'reviewed_by', object: 'ux-labs PR #539' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.added.length, 1, 'merged two different PRs that share a number');
+    assert.strictEqual(currentObject('pf-9001', 'reviewed_by').length, 2);
+  });
+
+  it('treats a bare commit SHA and its qualified form as one entity', () => {
+    addFact('pf-9002', 'merged_via', 'commit fde94d6', { validFrom: '2026-07-20', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9002', predicate: 'merged_via', object: 'fde94d6' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0);
+    assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
+  });
+
   it('keeps both objects of a many-valued predicate (owning a new epic ≠ dropping the old)', () => {
     addFact('uttam', 'owns', 'PF-2746', { validFrom: '2026-01-01', source: 'seed' });
 
