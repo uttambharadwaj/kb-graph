@@ -174,17 +174,10 @@ export function consolidate(facts, { source, observationDate } = {}) {
     const held = queryFact(subject, { direction: 'outgoing', exact: true })
       .filter(r => r.current && r.predicate === pred);
 
-    // The same fact spelled differently. Keep the spelling already in the graph —
-    // writing the variant leaves two live rows that never converge, and every
-    // re-run of the extract churns them again. Byte-identical repeats fall
-    // through to addFact, which reports them as duplicates.
-    const variant = held.find(r => normEntity(r.object) !== normEntity(object) && sameEntity(r.object, object));
-    if (variant) {
-      skipped.push({ fact: f, reason: 'equivalent_spelling_of_existing', existing: variant.object });
-      continue;
-    }
-
     // Retire any currently-valid fact with the same subject+predicate but a different object.
+    // Runs before the spelling check below: a live object this value genuinely
+    // contradicts must still be retired, even when a variant of the value is also
+    // held — kb_fact_add writes without consolidating, so both can coexist.
     const current = SINGLE_VALUED.has(pred) ? held.filter(r => !sameEntity(r.object, object)) : [];
     for (const stale of current) {
       invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
@@ -195,6 +188,16 @@ export function consolidate(facts, { source, observationDate } = {}) {
         reason: 'single_valued_predicate_took_new_object',
         superseded_by: object,
       });
+    }
+
+    // The same fact spelled differently. Keep the spelling already in the graph —
+    // writing the variant leaves two live rows that never converge, and every
+    // re-run of the extract churns them again. Byte-identical repeats fall
+    // through to addFact, which reports them as duplicates.
+    const variant = held.find(r => normEntity(r.object) !== normEntity(object) && sameEntity(r.object, object));
+    if (variant) {
+      skipped.push({ fact: f, reason: 'equivalent_spelling_of_existing', existing: variant.object });
+      continue;
     }
 
     const res = addFact(subject, predicate, object, { validFrom, source });

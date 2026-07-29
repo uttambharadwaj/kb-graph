@@ -91,6 +91,23 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(currentObject('pf-2988', 'shipped_via'), ['ux-labs PR #3865']);
   });
 
+  it('still retires a genuine contradiction when a variant of the new value is also held', () => {
+    // kb_fact_add writes without consolidating, so a single-valued predicate can
+    // already hold both a spelling of the incoming value and a real contradiction.
+    addFact('pf-9004', 'shipped_via', 'ux-labs PR #100', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('pf-9004', 'shipped_via', 'ux-labs PR #200', { validFrom: '2026-07-02', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9004', predicate: 'shipped_via', object: 'pr #100' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 1, 'left a contradicted object current');
+    assert.strictEqual(res.invalidated[0].object, 'ux-labs PR #200');
+    assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
+    assert.deepStrictEqual(currentObject('pf-9004', 'shipped_via'), ['ux-labs PR #100']);
+  });
+
   it('keeps same-numbered PRs in different repos apart', () => {
     addFact('pf-9001', 'reviewed_by', 'internal-tools-backend PR #539', { validFrom: '2026-07-20', source: 'seed' });
 
