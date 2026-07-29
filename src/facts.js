@@ -168,6 +168,18 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const pred = predicate.toLowerCase().replace(/\s+/g, '_');
   const endDate = ended || new Date().toISOString().split('T')[0];
 
+  // valid_to < valid_from is an interval of negative length. queryFact's as-of
+  // clause (valid_from <= asOf AND valid_to >= asOf) can never match it, so the
+  // row would be neither current nor historical — it would just vanish.
+  // Refuses rather than throws: the caller is consolidate, iterating a batch,
+  // where an exception would abandon every fact queued behind this one.
+  const row = db.prepare(
+    'SELECT valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
+  ).get(subId, pred, objId);
+  if (row?.valid_from && row.valid_from > endDate) {
+    return { invalidated: 0, ended: endDate, refused: 'ended_before_valid_from', valid_from: row.valid_from };
+  }
+
   const result = db.prepare(
     'UPDATE facts SET valid_to = ? WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
   ).run(endDate, subId, pred, objId);

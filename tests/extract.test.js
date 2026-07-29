@@ -40,7 +40,7 @@ process.env.CLAUDE_PATH = fakeClaude;
 
 const { consolidate, kbExtract, chunkForExtract } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
-const { initFactSchema, addFact, queryFact } = await import('../src/facts.js');
+const { initFactSchema, addFact, queryFact, invalidateFact } = await import('../src/facts.js');
 
 const currentObject = (subject, predicate) =>
   queryFact(subject, { direction: 'outgoing' })
@@ -81,6 +81,48 @@ describe('kb_extract consolidation', () => {
     // unrecognisable without reconstructing the extractor's reasoning.
     assert.strictEqual(res.invalidated[0].superseded_by, 'ga');
     assert.match(res.invalidated[0].reason, /single_valued/);
+  });
+
+  it('does not let an older observation retire a fact recorded after it', () => {
+    // harvest stamps observationDate from the transcript mtime, so it asserts
+    // yesterday's state against whatever an interactive session wrote today.
+    addFact('pf-9001', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9001', predicate: 'status', object: 'in_review' }],
+      { source: 'harvest', observationDate: '2026-07-28' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0);
+    assert.strictEqual(res.added.length, 0);
+    assert.deepStrictEqual(currentObject('pf-9001', 'status'), ['done']);
+    assert.strictEqual(res.skipped[0].reason, 'stale_observation');
+    assert.strictEqual(res.skipped[0].existing_since, '2026-07-29');
+  });
+
+  it('still retires when the held fact carries no valid_from to compare', () => {
+    addFact('pf-9002', 'status', 'open', { source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9002', predicate: 'status', object: 'done' }],
+      { source: 'test', observationDate: '2026-07-28' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 1);
+    assert.deepStrictEqual(currentObject('pf-9002', 'status'), ['done']);
+  });
+
+  it('refuses to end a fact before it began, and says so', () => {
+    addFact('pf-9003', 'status', 'shipped', { validFrom: '2026-07-29', source: 'seed' });
+
+    const res = invalidateFact('pf-9003', 'status', 'shipped', { ended: '2026-07-01' });
+
+    assert.strictEqual(res.invalidated, 0);
+    assert.strictEqual(res.refused, 'ended_before_valid_from');
+    // Still current — an inverted interval would have hidden it from every
+    // as-of query instead, at every date.
+    assert.deepStrictEqual(currentObject('pf-9003', 'status'), ['shipped']);
+    assert.strictEqual(queryFact('pf-9003', { direction: 'outgoing', exact: true, asOf: '2026-07-30' }).length, 1);
   });
 
   it('does not retire a fact in favour of a re-spelling of itself', () => {
