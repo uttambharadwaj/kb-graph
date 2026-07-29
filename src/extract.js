@@ -210,15 +210,42 @@ export function consolidate(facts, { source, observationDate } = {}) {
     // contradicts must still be retired, even when a variant of the value is also
     // held — kb_fact_add writes without consolidating, so both can coexist.
     const current = SINGLE_VALUED.has(pred) ? held.filter(r => !sameEntity(r.object, object)) : [];
-    for (const stale of current) {
-      invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
-      invalidated.push({
-        subject,
-        predicate: pred,
-        object: stale.object,
-        reason: 'single_valued_predicate_took_new_object',
-        superseded_by: object,
+
+    // An assertion observed before a fact we already hold is older news, not a
+    // contradiction. harvest.js stamps observationDate from the transcript's
+    // mtime, so it asserts yesterday against whatever a session wrote today.
+    const newer = current.find(r => r.valid_from && r.valid_from > validFrom);
+    if (newer) {
+      skipped.push({
+        fact: f,
+        reason: 'stale_observation',
+        existing: newer.object,
+        existing_since: newer.valid_from,
       });
+      continue;
+    }
+
+    for (const stale of current) {
+      // Report the retirement only if it happened. The guard above means
+      // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
+      // subprocesses share one DB, so another can retire it between this read
+      // and this write.
+      const res = invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
+      if (res.invalidated) {
+        invalidated.push({
+          subject,
+          predicate: pred,
+          object: stale.object,
+          reason: 'single_valued_predicate_took_new_object',
+          superseded_by: object,
+        });
+      } else {
+        skipped.push({
+          fact: f,
+          reason: `retire_failed: ${res.refused || 'no_current_row'}`,
+          existing: stale.object,
+        });
+      }
     }
 
     // The same fact spelled differently. Keep the spelling already in the graph —
