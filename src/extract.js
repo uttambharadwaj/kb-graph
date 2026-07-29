@@ -154,6 +154,7 @@ for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 
 // Apply extracted facts to the facts table with consolidation:
 //   - identical triple already present  -> skipped (duplicate)
+//   - same object spelled differently   -> skipped (the graph's spelling wins)
 //   - single-valued predicate, different object, currently valid -> retire old, add new
 //   - otherwise -> add
 // Pure over the facts table (no LLM) — this is the deterministic, testable core.
