@@ -75,6 +75,51 @@ describe('inverse predicate folding', () => {
     assert.deepStrictEqual(JSON.parse(out.trim()), triple('pf-1', 'assigned_to', 'alice'));
   });
 
+  // An alias resolves to a single-valued predicate, so checking the raw spelling
+  // reads it as many-valued and lets the fold through — defeating the refusal
+  // above and storing the un-aliased predicate on top of it.
+  it('refuses an inverse whose target only reaches single-valued through an alias', async () => {
+    const { writeFileSync, mkdtempSync: mkd } = await import('fs');
+    const dir = mkd(join(tmpdir(), 'kb-inverse-aliased-'));
+    writeFileSync(join(dir, 'predicates.json'), JSON.stringify({
+      aliases: { assigned: 'assigned_to' },
+      inverses: { owned_by: 'assigned' },
+    }));
+
+    const { execFileSync } = await import('child_process');
+    const script = `
+      const { canonicalTriple } = await import(${JSON.stringify(new URL('../src/extract.js', import.meta.url).href)});
+      console.log(JSON.stringify(canonicalTriple({ subject: 'pf-1', predicate: 'owned_by', object: 'alice' })));
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, KB_DIR: dir },
+      encoding: 'utf8',
+    });
+    assert.deepStrictEqual(JSON.parse(out.trim()), triple('pf-1', 'owned_by', 'alice'));
+  });
+
+  // A key the alias map rewrites can never be looked up, because canonicalTriple
+  // resolves the predicate before consulting the inverse map.
+  it('folds an inverse whose source is itself an alias', async () => {
+    const { writeFileSync, mkdtempSync: mkd } = await import('fs');
+    const dir = mkd(join(tmpdir(), 'kb-inverse-aliassrc-'));
+    writeFileSync(join(dir, 'predicates.json'), JSON.stringify({
+      aliases: { obstructs: 'blocks' },
+      inverses: { obstructs: 'blocked_by' },
+    }));
+
+    const { execFileSync } = await import('child_process');
+    const script = `
+      const { canonicalTriple } = await import(${JSON.stringify(new URL('../src/extract.js', import.meta.url).href)});
+      console.log(JSON.stringify(canonicalTriple({ subject: 'a', predicate: 'obstructs', object: 'b' })));
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, KB_DIR: dir },
+      encoding: 'utf8',
+    });
+    assert.deepStrictEqual(JSON.parse(out.trim()), triple('b', 'blocked_by', 'a'));
+  });
+
   // Reassignment is what the refusal above protects: it only supersedes because
   // the ticket is the subject.
   it('supersedes an assignment when the ticket keeps the subject position', () => {

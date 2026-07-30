@@ -179,7 +179,11 @@ for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 // Unlike an alias, an inverse also swaps subject and object.
 export const PREDICATE_INVERSES = Object.fromEntries(
   Object.entries({ ...builtin?.inverses, ...override?.inverses })
-    .map(([from, to]) => [rawPred(from), rawPred(to)])
+    // normPred, not rawPred: canonicalTriple looks up an alias-resolved
+    // predicate, so a raw key an alias rewrites could never match. It also keeps
+    // an aliased target from slipping past the single-valued check below —
+    // `assigned` reads as many-valued until the alias resolves it to assigned_to.
+    .map(([from, to]) => [normPred(from), normPred(to)])
     // Folding a single-valued predicate would move the retirement it drives onto
     // a different subject, which is the failure this whole map exists to stop.
     // An install that configures one gets told, not silently un-retired.
