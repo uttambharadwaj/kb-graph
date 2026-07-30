@@ -28,6 +28,7 @@ Rules:
 - PR numbers, commit SHAs, workflow run ids, ticket ids and repo names are entities, not prose — (pr #539, merged_via, commit fde94d6).
 - Capture the CORRECTED state when the conversation revises itself. If someone says "not SQS, it's HTTP", emit the HTTP fact only — never the retracted one.
 - A COMPLETED transition ("was fixed", "no longer", "migrated from X to Y", "renamed to") asserts the state AFTER the change. Emit that state; never the pre-change state as if it were current.
+- Past tense ends a state even when nothing names the replacement: "used to", "was declared in", "previously", "before the fix", "the cause was". If the text says what replaced it, emit only the replacement. If it does not, emit nothing for that state and put it in skipped. Text reaches you in fragments, so the sentence describing the fix is often not in front of you — every fact you emit is dated today and claims to be true now. A past EVENT is still emittable — (nightly_job, caused, backlog) — it is the past STATE that is not.
 - Work still in flight ("moving", "migrating", "is proposing", "an open PR that will") has NOT happened. Emit the proposal — (wallet_identity, migration_proposed_in, pr_stack) — never the completed form (migrated_to). Open, unmerged, in review and planned all mean not yet.
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: points_at, configured_to, depends_on — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
@@ -47,8 +48,8 @@ Input: "PR #539 in billing-api was squash-merged to main as fde94d6, approved by
 Output: {"facts":[{"subject":"pr #539","predicate":"merged_via","object":"commit fde94d6","category":"status"},{"subject":"pr #539","predicate":"approved_by","object":"dana","category":"ownership"},{"subject":"pr #539","predicate":"deployed_to","object":"production","category":"status"},{"subject":"billing-api","predicate":"merge_to_main_deploys_to","object":"production","category":"architecture"},{"subject":"parseamount","predicate":"handles","object":"negative decimals","category":"status"}],"skipped":[]}
 
 Example
-Input: "Production billing points at the sandbox provider, which is temporary and tracked by TICKET-42 for revert. Alice owns an 8-PR stack moving user identity onto the accounts row; all eight are still open."
-Output: {"facts":[{"subject":"production_billing","predicate":"deliberately_points_at","object":"sandbox_provider","category":"architecture"},{"subject":"ticket-42","predicate":"tracks_revert_of","object":"production_billing_sandbox_pointing","category":"status"},{"subject":"alice","predicate":"owns","object":"user_identity_pr_stack","category":"ownership"},{"subject":"user_identity","predicate":"migration_proposed_in","object":"user_identity_pr_stack","category":"decision"}],"skipped":[]}`;
+Input: "Production billing points at the sandbox provider, which is temporary and tracked by TICKET-42 for revert. Alice owns an 8-PR stack moving user identity onto the accounts row; all eight are still open. The nightly job used to read its own output as input, which caused the backlog."
+Output: {"facts":[{"subject":"production_billing","predicate":"deliberately_points_at","object":"sandbox_provider","category":"architecture"},{"subject":"ticket-42","predicate":"tracks_revert_of","object":"production_billing_sandbox_pointing","category":"status"},{"subject":"alice","predicate":"owns","object":"user_identity_pr_stack","category":"ownership"},{"subject":"user_identity","predicate":"migration_proposed_in","object":"user_identity_pr_stack","category":"decision"},{"subject":"nightly_job","predicate":"caused","object":"backlog","category":"incident"}],"skipped":[{"assertion":"the nightly job reads its own output as input","reason":"past tense — the state ended and no replacement is stated"}]}`;
 
 // One window, named once — harvest.js sizes its chunks from this too, so a
 // change here cannot silently start truncating there. extractFacts cuts to it
@@ -56,10 +57,24 @@ Output: {"facts":[{"subject":"production_billing","predicate":"deliberately_poin
 // function and must never be the first place text goes missing.
 export const MAX_EXTRACT_CHARS = 12000;
 
-export function buildExtractPrompt(text) {
+/**
+ * The prompt for one chunk, with its neighbours attached as read-only context.
+ *
+ * Tense is the only thing distinguishing "was X and still is" from "was X and
+ * no longer is", and English simple past says both. The sentence that
+ * disambiguates — the one naming what replaced the old state — is usually the
+ * *next* sentence, which the ~250-char split routinely puts in a different
+ * chunk. Extracted alone the fragment is genuinely ambiguous, and the extractor
+ * resolves it by dating the dead state today. Showing the neighbours costs
+ * about a tenth of a call and is what makes the modality rules above decidable.
+ */
+export function buildExtractPrompt(text, { before = '', after = '' } = {}) {
+  const context = (before || after)
+    ? `\n\n# Surrounding text (context only — do NOT extract facts from this)\n${before}\n[…the section to extract from goes here…]\n${after}\n# End of surrounding text`
+    : '';
   // Task restated after the transcript so dialogue in the text can't lure the
   // model into replying to the conversation instead of extracting from it.
-  return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
+  return `${EXTRACT_PROMPT}${context}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Extract only from the Transcript section; the surrounding text is there to tell you whether a state is still current, not to be mined. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
 // The fan-out bounds the RESPONSE, and that is what makes it load-bearing.
@@ -120,7 +135,10 @@ export async function extractFacts(text) {
     try {
       // 120s: 60s was killing calls during slow API windows (observed
       // 2026-07-07, exit 143).
-      return await runClaudeJSON(buildExtractPrompt(chunk), { timeout: 120000 });
+      return await runClaudeJSON(
+        buildExtractPrompt(chunk, { before: chunks[i - 1] ?? '', after: chunks[i + 1] ?? '' }),
+        { timeout: 120000 },
+      );
     } catch (err) {
       // A dead chunk is input nobody looked at. Silently returning the other
       // chunks' facts would report partial coverage as complete.

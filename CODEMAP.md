@@ -3,8 +3,8 @@
 > Generated: 2026-07-30
 
 ## Quick Stats
-- **Files:** 126
-- **Total lines:** 16,635
+- **Files:** 127
+- **Total lines:** 16,759
 
 ## Architecture Overview
 ```
@@ -65,7 +65,7 @@ bin/
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 610 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 468 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 486 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 248 | initFactSchema, sqlTimestamp, mergeEntity, addFact, queryFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 366 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
@@ -206,7 +206,8 @@ bin/
 | claude-cli.test.js | 39 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
-| extract-eval.test.js | 94 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
+| extract-context.test.js | 67 | - | - |
+| extract-eval.test.js | 133 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract.test.js | 568 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 226 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
