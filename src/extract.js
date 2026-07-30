@@ -110,8 +110,8 @@ export async function extractFacts(text) {
   const chunks = chunkForExtract(text.slice(0, 12000));
   const results = await Promise.all(chunks.map(async (chunk, i) => {
     try {
-      // 120s per chunk to match harvest.js — 60s was killing calls during slow
-      // API windows (observed 2026-07-07, exit 143).
+      // 120s: 60s was killing calls during slow API windows (observed
+      // 2026-07-07, exit 143).
       return await runClaudeJSON(buildExtractPrompt(chunk), { timeout: 120000 });
     } catch (err) {
       // A dead chunk is input nobody looked at. Silently returning the other
@@ -242,8 +242,8 @@ export function canonicalTriple(f) {
 // exactly right for a ticket — in_review then done is a real transition — and a
 // junk drawer for a repo, where "v1.1-complete" and "deploy branch in sync" are
 // both true and neither supersedes the other. So single-valued applies only to
-// subjects naming one state-bearing thing: an id ending in digits (pf-2019,
-// pr_#3583, vault-service#59), never a bare name (mako, browser_profiles).
+// subjects naming one state-bearing thing: an id ending in digits (tkt-4821,
+// pr_#3583, svc-api#59), never a bare name (mako, browser_profiles).
 // Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
 // text; this asks whether the whole subject is one.
 const compilePattern = pattern => {
@@ -272,6 +272,22 @@ export function splitListObject(fact) {
   return parts.map(object => ({ ...fact, object }));
 }
 
+// recorded_at is compared as a raw string, so an ISO instant ("...T12:00:00Z")
+// sorts above every same-day SQL timestamp — 'T' > ' ' — and the staleness
+// guard below fails open on the exact input it exists to reject. Anything not
+// already in SQL shape goes through Date, which also fixes the offset on a
+// local-time instant. Left as-is when it already matches, because Date parses
+// "YYYY-MM-DD HH:MM:SS" as local time and would shift a correct UTC value.
+const SQL_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+export function normalizeObservedAt(value) {
+  if (!value) return null;
+  if (SQL_TIMESTAMP.test(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error(`observed_at is not a date: ${value}`);
+  return sqlTimestamp(parsed);
+}
+
 // Apply extracted facts to the facts table with consolidation:
 //   - identical triple already present  -> skipped (duplicate)
 //   - same object spelled differently   -> skipped (the graph's spelling wins)
@@ -281,7 +297,7 @@ export function splitListObject(fact) {
 export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
-  const observedAtTs = observedAt || sqlTimestamp();
+  const observedAtTs = normalizeObservedAt(observedAt) || sqlTimestamp();
 
   for (const raw of facts.flatMap(splitListObject)) {
     if (!raw?.subject || !raw?.predicate || !raw?.object) {
@@ -308,11 +324,12 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     const current = retires ? held.filter(r => !sameEntity(r.object, object)) : [];
 
     // An assertion observed before a fact we already hold is older news, not a
-    // contradiction. harvest.js stamps observationDate from the transcript's
-    // mtime, so it asserts yesterday against whatever a session wrote today.
-    // valid_from is a date, so it can only order across days; recorded_at is a
-    // wall-clock instant and catches the same-day case — a 10am transcript
-    // harvested tonight against a 4pm debrief that already corrected it.
+    // contradiction: a caller passing observation_date is replaying text from
+    // the past against whatever the graph has learned since. valid_from is a
+    // date, so it can only order across days — observed_at carries the instant
+    // and catches the same-day case, 10am text replayed against a 4pm
+    // correction. A caller that passes neither is speaking for now and skips
+    // both tests, which is right.
     const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {

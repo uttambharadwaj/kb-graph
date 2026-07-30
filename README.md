@@ -2,7 +2,7 @@
 
 **A memory that tends itself, for AI agents that forget.**
 
-kb-graph gives every AI agent you run — Claude Code, Codex, Gemini, anything speaking MCP — one shared brain that compounds. The difference from other memory systems is the loop: your agents' session transcripts are **harvested automatically every night** into facts, lessons, and decisions; per-workstream **state notes** are folded so "where is X?" always has one current answer; a **weekly synthesis** surfaces themes and contradictions; and hooks **push the relevant slice back into every new session** before you type a word. You don't have to remember to save anything, and your agents don't have to remember to search.
+kb-graph gives every AI agent you run — Claude Code, Codex, Gemini, anything speaking MCP — one shared brain that compounds. The difference from other memory systems is the loop: your agents' session transcripts are **harvested automatically every night** into lessons and decisions (and facts, if you turn that on); per-workstream **state notes** are folded so "where is X?" always has one current answer; a **weekly synthesis** surfaces themes and contradictions; and hooks **push the relevant slice back into every new session** before you type a word. You don't have to remember to save anything, and your agents don't have to remember to search.
 
 > kb-graph began as a fork of [knowledge-base-server](https://github.com/willynikes2/knowledge-base-server)
 > by Shawn Daniel — the engine behind [Memstalker](https://memstalker.com) — and has
@@ -60,7 +60,7 @@ Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + sem
 
 ### 2. Capture that doesn't rely on discipline
 
-- **Nightly harvest (03:30).** A scheduled job reads your agents' session transcripts and extracts the durable parts — facts, lessons, decisions, fixes — as structured notes, deduplicated against what the KB already knows (`kb_check_duplicate` runs before every write). You debugged something gnarly at 2am and told no one? The harvest caught it.
+- **Nightly harvest (03:30).** A scheduled job reads your agents' session transcripts and extracts the durable parts — lessons, decisions, fixes — as structured notes, deduplicated against what the KB already knows (`kb_check_duplicate` runs before every write). You debugged something gnarly at 2am and told no one? The harvest caught it. It does not extract *facts* unless you ask it to (`KB_HARVEST_FACTS=1`, or `kb harvest --facts`): unattended triple extraction runs a model call per chunk of every transcript, which is where nearly all the token cost of this system lives, and against an open predicate vocabulary most of what it writes is entities mentioned once that no later fact ever matches. Left off, facts come from `/debrief` and `kb_extract` — chosen rather than swept.
 
 - **Deliberate capture — `/debrief`.** At the end of a substantial session, run the bundled `/debrief` skill (installed to `~/.claude/skills/` by setup): it scans the conversation for lessons, decisions, workflows, and state changes, checks each against what the KB already knows, and writes the survivors with you approving the list. Deliberate capture is higher quality — better titles, richer context, immediately available; the nightly harvest is the safety net for everything you didn't capture deliberately. The companion `kb-workflow` skill teaches agents the retrieval-then-capture pattern for use mid-session, and `kb_capture_session` / `kb_capture_fix` / `kb_write` are the direct tools underneath both.
 
@@ -118,7 +118,7 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
  +-----------------+   +-------------------+   +-----------------+
 
  Scheduled jobs (installed by kb setup):
-   harvest    nightly 03:30  — transcript extraction + state-note folding
+   harvest    nightly 03:30  — transcript lessons + state-note folding (facts opt-in)
    reindex    every 5 min    — vault → index + embeddings
    synthesis  Sunday 04:00   — themes, contradictions, merge candidates
 ```
@@ -211,7 +211,7 @@ kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
 kb mcp                 MCP stdio server (what your agents connect to)
 kb register            Register MCP with Claude Code / Codex / Gemini
-kb harvest             Run the transcript harvest now (normally nightly)
+kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included)
 kb ingest <path>       Ingest a file or directory
@@ -266,6 +266,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | `OBSIDIAN_VAULT_PATH` | No | — | Vault path (any markdown directory) |
 | `CLAUDE_PATH` | No | `claude` on PATH | Claude CLI binary, used by harvest/classification |
 | `CLASSIFY_MODEL` | No | claude-haiku-4-5-20251001 | Model for write-time AI work |
+| `KB_HARVEST_FACTS` | No | off | `1`/`true`/`yes` makes the nightly harvest extract facts as well as lessons. Off because it is the expensive half and writes an open vocabulary unattended. Scheduled jobs inherit no environment, so `kb setup` copies this into the job definition — set it *before* setup, or re-run setup after changing it |
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
 | `KB_TICKET_REGEX` | No | `pf-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name |

@@ -29,7 +29,7 @@ One habit makes this system compound: **end substantial sessions with `/debrief`
 
 - **Session start:** briefing of active workstreams + KB health.
 - **Every prompt:** hint lines pointing at relevant KB entries.
-- **Nightly 03:30:** harvest — extracts facts/lessons from your agent transcripts.
+- **Nightly 03:30:** harvest — extracts lessons from your agent transcripts. Facts are left to `/debrief` and `kb_extract` unless you set `KB_HARVEST_FACTS=1`.
 - **Every 5 min:** vault reindex (embeddings + search index).
 - **Sunday 04:00:** weekly synthesis — themes, contradictions, merge candidates.
 

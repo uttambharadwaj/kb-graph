@@ -195,7 +195,7 @@ function initSchema(db) {
       transcript_path TEXT PRIMARY KEY,
       mtime INTEGER NOT NULL,
       harvested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      facts_added INTEGER DEFAULT 0,
+      facts_added INTEGER,             -- NULL: extraction did not run. 0: it ran and found none.
       notes_added INTEGER DEFAULT 0
     );
   `);

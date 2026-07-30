@@ -153,13 +153,13 @@ describe('kb_extract consolidation', () => {
   });
 
   it('does not let an older observation retire a fact recorded after it', () => {
-    // harvest stamps observationDate from the transcript mtime, so it asserts
-    // yesterday's state against whatever an interactive session wrote today.
+    // Replaying yesterday's text asserts yesterday's state against whatever
+    // a session has written since.
     addFact('pf-9001', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
 
     const res = consolidate(
       [{ subject: 'pf-9001', predicate: 'status', object: 'in_review' }],
-      { source: 'harvest', observationDate: '2026-07-28' },
+      { source: 'replay', observationDate: '2026-07-28' },
     );
 
     assert.strictEqual(res.invalidated.length, 0);
@@ -171,17 +171,40 @@ describe('kb_extract consolidation', () => {
 
   it('does not let a same-day older transcript retire an afternoon correction', () => {
     // Both sides truncate to the same YYYY-MM-DD, so only the recorded instant
-    // can order them: a 10am transcript harvested tonight against a 4pm debrief.
+    // can order them: 10am text replayed against a 4pm debrief.
     addFact('pf-9010', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
 
     const res = consolidate(
       [{ subject: 'pf-9010', predicate: 'status', object: 'in_review' }],
-      { source: 'harvest', observationDate: '2026-07-29', observedAt: '2026-07-29 10:00:00' },
+      { source: 'replay', observationDate: '2026-07-29', observedAt: '2026-07-29 10:00:00' },
     );
 
     assert.strictEqual(res.invalidated.length, 0);
     assert.deepStrictEqual(currentObject('pf-9010', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
+  });
+
+  // recorded_at is compared as a string, so 'T' sorting above ' ' makes an ISO
+  // instant look newer than every same-day row — the guard fails open on the
+  // spelling a caller is most likely to reach for.
+  it('orders an ISO-8601 observed_at against recorded_at, not above it', () => {
+    addFact('pf-9020', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+
+    const res = consolidate(
+      [{ subject: 'pf-9020', predicate: 'status', object: 'in_review' }],
+      { source: 'replay', observationDate: '2026-07-29', observedAt: '2026-07-29T10:00:00.000Z' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0, 'an older observation must not retire the newer fact');
+    assert.deepStrictEqual(currentObject('pf-9020', 'status'), ['done']);
+    assert.strictEqual(res.skipped[0].reason, 'stale_observation');
+  });
+
+  it('rejects an observed_at that is not a date rather than mis-ordering it', () => {
+    assert.throws(
+      () => consolidate([{ subject: 'pf-9030', predicate: 'status', object: 'done' }], { observedAt: 'yesterday' }),
+      /observed_at is not a date/,
+    );
   });
 
   it('still retires when the observation is later than the held row was recorded', () => {

@@ -1,13 +1,13 @@
 ---
 name: debrief
-description: "Use at the end of a session (or midway through a long one) to deliberately capture what was learned — lessons, decisions, workflows, state changes, and facts — into the knowledge base. The nightly harvest is the safety net; /debrief is the higher-quality deliberate pass."
+description: "Use at the end of a session (or midway through a long one) to deliberately capture what was learned — lessons, decisions, workflows, state changes, and facts — into the knowledge base. The nightly harvest is a safety net for lessons; unless the host opted into KB_HARVEST_FACTS, /debrief is the only thing that records facts."
 ---
 
 # Debrief
 
 Extract experiential knowledge from the current conversation and save it to the knowledge base via the `kb_*` MCP tools.
 
-**Note:** the nightly harvest job auto-extracts facts and lessons from session transcripts, so nothing is lost if this skill never runs. Running /debrief is for *deliberate* capture: richer context, better titles, and immediate availability instead of waiting for the nightly sweep. Your in-context judgment beats the transcript-level pass — don't skip candidates just because "harvest will get it."
+**Note:** the nightly harvest job auto-extracts *lessons* from session transcripts, so a session that never runs this skill still leaves something behind. It extracts **facts** only if the host set `KB_HARVEST_FACTS=1`, which is off by default — assume it is off, and that a fact you skip here is simply not recorded. Running /debrief is also the higher-quality pass for lessons: richer context, better titles, immediate availability. Your in-context judgment beats the transcript-level pass — don't skip candidates just because "harvest will get it."
 
 **Division of labor:** user preferences and standing corrections belong in your agent's own memory system. Project state, technical knowledge, decisions, gotchas, and facts belong in the KB. During debrief, write only to the KB.
 
@@ -75,7 +75,7 @@ Size guide: gotcha lessons 3–8 lines; patterns 8–15; workflows 5–15 (comma
 
 **Context:** `kb_write` with `type: session`, title `{workstream}: {one-line change}`, a few lines covering what changed, where it stands, next action.
 
-**Facts:** call `kb_extract` once with the session's relevant text (decisions, state changes, ownership, incidents) plus `source` and `observation_date` — it extracts and consolidates triples. It retires a contradicted fact only when **both** hold: the predicate is single-valued (`status`, `state`, `assigned_to`, `version` — see `src/predicates.json`), and the subject names one state-bearing thing, meaning a ticket or issue id like `pf-2019` or `vault-service#59`. A repo, project or person accumulates instead: `knowledge-base-server status X` never retires an earlier `status Y`. Cumulative predicates (`owns`, `chose`, `shipped_via`, `deployed_to`) always keep both. Anything the extractor leaves standing that really is dead needs a manual `kb_fact_invalidate`. Use `dry_run: true` to preview. Read `skipped` for assertions it chose not to record, then fill gaps with manual `kb_fact_add`.
+**Facts:** call `kb_extract` once with the session's relevant text (decisions, state changes, ownership, incidents) plus `source` and `observation_date` — it extracts and consolidates triples. It retires a contradicted fact only when **both** hold: the predicate is single-valued (`status`, `state`, `assigned_to`, `version` — see `src/predicates.json`), and the subject names one state-bearing thing, meaning a ticket or issue id like `tkt-4821` or `svc-api#59`. A repo, project or person accumulates instead: `knowledge-base-server status X` never retires an earlier `status Y`. Cumulative predicates (`owns`, `chose`, `shipped_via`, `deployed_to`) always keep both. Anything the extractor leaves standing that really is dead needs a manual `kb_fact_invalidate`. Use `dry_run: true` to preview. Read `skipped` for assertions it chose not to record, then fill gaps with manual `kb_fact_add`.
 
 ## Step 6: Verify
 
