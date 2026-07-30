@@ -13,6 +13,21 @@ const { queryFact } = await import('../src/facts.js');
 const triple = (subject, predicate, object) => ({ subject, predicate, object });
 
 describe('inverse predicate folding', () => {
+  // The shipped config, not the code: folding is only safe because no inverse
+  // touches a single-valued predicate, and nothing stops a later edit to
+  // predicates.json from adding one. Retirement is subject-scoped, so this flat
+  // check is stricter than the rule it protects — which is the right direction.
+  it('ships no inverse that touches a single-valued predicate', async () => {
+    const { readFileSync } = await import('fs');
+    const cfg = JSON.parse(readFileSync(new URL('../src/predicates.json', import.meta.url), 'utf8'));
+    const single = new Set(cfg.single_valued);
+    const overlap = Object.entries(cfg.inverses ?? {})
+      .flat()
+      .filter(p => single.has(p));
+    assert.deepStrictEqual(overlap, [], `these would move a retirement onto a different subject: ${overlap}`);
+  });
+
+
   it('swaps subject and object onto the canonical direction', () => {
     assert.deepStrictEqual(
       canonicalTriple(triple('eva', 'owned_by', 'core_technologies')),
