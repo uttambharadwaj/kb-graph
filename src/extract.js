@@ -56,12 +56,18 @@ export function buildExtractPrompt(text) {
   return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, 12000)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
-// Latency tracks facts emitted, not input size, so extracting everything a
-// fact-dense paragraph states runs one call past its whole budget. Split and run
-// concurrently: the pass costs its slowest piece, and a piece that does get stuck
-// degrades to one skipped row instead of failing the call.
-// Measured on a 10-assertion debrief paragraph (2026-07-29): 120.4s in one call,
-// 36-107s in four, 166.6s run sequentially. Per-call latency varies 10-75s for
+// The fan-out bounds the RESPONSE, and that is what makes it load-bearing.
+// Asking for a whole 12,000-char window in one call returns nothing at all 2 of
+// 3 times — 0 facts in ~11s, far too fast to be the timeout — because the reply
+// carries every fact found. A narrow chunk keeps each reply small enough to come
+// back, and a chunk that does fail costs an eighth of the window instead of all
+// of it. Measured 2026-07-30 on 240 stated facts, same result on haiku-4.5 and
+// sonnet-5, so it is a payload limit and not a model capability.
+// Widening this to save the per-call prompt overhead is the obvious-looking
+// optimisation and it does not work: each chunk re-sends the ~5.5k prompt, but
+// buying that back costs whole sessions.
+// Latency, measured on a 10-assertion paragraph (2026-07-29): 120.4s in one
+// call, 36-107s in four, 166.6s sequential. Per-call latency varies 10-75s for
 // same-size chunks — that part is the API, not this code.
 const TARGET_CHUNK_CHARS = 250;
 const MAX_CONCURRENT_CALLS = 8; // each is a `claude` subprocess; long input widens chunks, not fan-out
