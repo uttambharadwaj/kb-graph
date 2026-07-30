@@ -166,6 +166,27 @@ const SINGLE_VALUED = new Set((builtin?.single_valued || []).map(normPred));
 for (const p of override?.single_valued || []) SINGLE_VALUED.add(normPred(p));
 for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 
+// Cardinality belongs to (subject, predicate), not to the predicate. `status` is
+// exactly right for a ticket — in_review then done is a real transition — and a
+// junk drawer for a repo, where "v1.1-complete" and "deploy branch in sync" are
+// both true and neither supersedes the other. So single-valued applies only to
+// subjects naming one state-bearing thing: an id ending in digits (pf-2019,
+// pr_#3583, vault-service#59), never a bare name (mako, browser_profiles).
+// Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
+// text; this asks whether the whole subject is one.
+const compilePattern = pattern => {
+  if (!pattern) return null;
+  try {
+    return new RegExp(pattern, 'i');
+  } catch (err) {
+    console.error(`kb_extract: ignoring invalid single_valued_subjects ${JSON.stringify(pattern)}: ${err.message}`);
+    return null;
+  }
+};
+const SINGLE_ENTITY = compilePattern(override?.single_valued_subjects)
+  ?? compilePattern(builtin?.single_valued_subjects)
+  ?? /^$/; // no pattern at all: retire nothing, which is the keep-both-rows direction
+
 // One row per object. A comma-joined object ("pr #3835, pr #3849, pr #3851") is
 // unqueryable — kb_fact_query("pr #3849") never matches it — so split it into
 // siblings. Only when every part carries a reference of its own, which keeps
@@ -210,7 +231,8 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // Runs before the spelling check below: a live object this value genuinely
     // contradicts must still be retired, even when a variant of the value is also
     // held — kb_fact_add writes without consolidating, so both can coexist.
-    const current = SINGLE_VALUED.has(pred) ? held.filter(r => !sameEntity(r.object, object)) : [];
+    const retires = SINGLE_VALUED.has(pred) && SINGLE_ENTITY.test(String(subject).trim());
+    const current = retires ? held.filter(r => !sameEntity(r.object, object)) : [];
 
     // An assertion observed before a fact we already hold is older news, not a
     // contradiction. harvest.js stamps observationDate from the transcript's
@@ -258,9 +280,17 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // writing the variant leaves two live rows that never converge, and every
     // re-run of the extract churns them again. Byte-identical repeats fall
     // through to addFact, which reports them as duplicates.
-    const variant = held.find(r => normEntity(r.object) !== normEntity(object) && sameEntity(r.object, object));
-    if (variant) {
-      skipped.push({ fact: f, reason: 'equivalent_spelling_of_existing', existing: variant.object });
+    // held is predicate-normalised; addFact is not — it looks up the canonical
+    // edge only, so a row written under a pre-alias spelling is invisible to it
+    // and the same fact lands twice, once per spelling. Catch both here.
+    const existing = held.find(r => sameEntity(r.object, object));
+    if (existing) {
+      const sameSpelling = normEntity(existing.object) === normEntity(object);
+      skipped.push({
+        fact: f,
+        reason: sameSpelling ? 'duplicate' : 'equivalent_spelling_of_existing',
+        existing: existing.object,
+      });
       continue;
     }
 
