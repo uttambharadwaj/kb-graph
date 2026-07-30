@@ -3,8 +3,8 @@
 > Generated: 2026-07-30
 
 ## Quick Stats
-- **Files:** 124
-- **Total lines:** 16,396
+- **Files:** 125
+- **Total lines:** 16,521
 
 ## Architecture Overview
 ```
@@ -79,7 +79,7 @@ bin/
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
 | tools.js | 760 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | Dedup depends on embeddings. If it can't run, say so in the response instead |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
-| write-note.js | 134 | DUP_THRESHOLD, RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks... | Shared note-writing path: dedup, frontmatter, related-links, index. |
+| write-note.js | 128 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
 ## src/bus/
 
@@ -141,7 +141,7 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | embed.js | 57 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 132 | semanticSearch, similarDocs, checkDuplicate, hybridSearch | Brute-force cosine similarity — works for <2000 notes. |
+| search.js | 156 | DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs, checkDuplicate... | The score at or above which a note is a duplicate rather than a relative. |
 
 ## src/middleware/
 
@@ -193,7 +193,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| indexer.js | 262 | scanVault, indexVault, indexVaultFile | - |
+| indexer.js | 271 | scanVault, indexVault, indexVaultFile, embeddableBody | - |
 | parser.js | 85 | parseVaultNote | Map folder prefixes to note types |
 
 ## tests/
@@ -205,6 +205,7 @@ bin/
 | bus.test.js | 1102 | - | - |
 | claude-cli.test.js | 39 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
+| dedup-agreement.test.js | 98 | - | - |
 | extract-eval.test.js | 94 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract.test.js | 568 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |

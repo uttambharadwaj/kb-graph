@@ -162,6 +162,18 @@ async function _indexVault(vaultPath, { embeddings = false } = {}) {
   return { indexed, skipped, deleted, embedded, errors, total: files.length };
 }
 
+/**
+ * The text a note is embedded as, wherever it is embedded from.
+ *
+ * The Related section comes off first: it is auto-appended and cites other
+ * notes' titles, so leaving it in makes linked notes look like each other and
+ * similarity self-reinforces. Both embedding sites route through here — the
+ * backfill used to embed the stored body, Related section included, so whether
+ * a note's vector was comparable to its neighbours' depended on which path
+ * happened to produce it.
+ */
+export const embeddableBody = (body) => body.replace(/\n+## Related\n[\s\S]*$/, '').slice(0, 2000);
+
 async function embedIfMissing(relPath, embeddings, errors) {
   const vf = getVaultFile(relPath);
   if (!vf?.document_id) return 0;
@@ -170,7 +182,7 @@ async function embedIfMissing(relPath, embeddings, errors) {
   const doc = getDb().prepare('SELECT content FROM documents WHERE id = ?').get(vf.document_id);
   if (!doc?.content) return 0;
   try {
-    const embedding = await embeddings.generateEmbedding(doc.content.slice(0, 2000));
+    const embedding = await embeddings.generateEmbedding(embeddableBody(doc.content));
     const buffer = embeddings.embeddingToBuffer(embedding);
     getDb().prepare(`
       INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
@@ -242,10 +254,7 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
 
   if (embeddings) {
     try {
-      // Strip the auto-appended Related section before embedding — otherwise
-      // linked notes cite each other's titles and similarity self-reinforces.
-      const embedBody = parsed.body.replace(/\n+## Related\n[\s\S]*$/, '');
-      const embedding = await embeddings.generateEmbedding(embedBody.slice(0, 2000));
+      const embedding = await embeddings.generateEmbedding(embeddableBody(parsed.body));
       const buffer = embeddings.embeddingToBuffer(embedding);
       getDb().prepare(`
         INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
