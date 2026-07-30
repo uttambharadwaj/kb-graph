@@ -148,6 +148,75 @@ describe('harvest candidate selection', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // The lessons pass keeps the head and the tail of a long session and drops
+  // what is between — which on a long session is the work itself. A note count
+  // cannot show that, so the run has to.
+  // A session of `chars` characters of assistant text, in its own discovery root.
+  const sessionOf = (name, chars) => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    writeFileSync(join(root, name), [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(chars) }] } }),
+    ].join('\n'));
+    return root;
+  };
+
+  it('reports the middle of a long session as unread', async () => {
+    // 'ASSISTANT: ' is prepended, so the extracted text is 11 chars longer.
+    const chars = 100000;
+    const root = sessionOf('long.jsonl', chars);
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.sessions, 1);
+    assert.strictEqual(summary.partial, 1, 'a session whose middle was never sent is not fully read');
+    // 6,000 head + 20,000 tail is all the lessons pass sees.
+    assert.strictEqual(summary.unreadByLessons, chars + 11 - 26000);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // The two passes read different spans, and the fact pass keeps a strict
+  // superset. Reporting one number for both claimed the lessons gap as unread
+  // even when the fact pass had read every character of it.
+  it('reports the two passes separately, because they read different spans', async () => {
+    const chars = 100000;
+    const root = sessionOf('both-passes.jsonl', chars);
+
+    // dryRun: the fact pass still chunks and still calls, it just does not write
+    // — otherwise these rows would leak into the fact-extraction tests below.
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true, dryRun: true });
+
+    assert.strictEqual(summary.unreadByLessons, chars + 11 - 26000, 'the lessons pass still missed the middle');
+    assert.strictEqual(summary.unreadByFacts, 0, 'but the fact pass read all of it — 9 chunks, under the cap');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('reports the fact pass gap once a session outruns the chunk cap', async () => {
+    // 20 chunks of 12,000 is the ceiling. 300,011 chars is 26 chunks, so the 6
+    // in the middle are dropped — 72,000 characters, not 60,011, because the
+    // last chunk is a short remainder.
+    const root = sessionOf('enormous.jsonl', 300000);
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true, dryRun: true });
+
+    assert.strictEqual(summary.unreadByFacts, 6 * 12000, 'a session past the chunk cap loses its middle to the fact pass too');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not call a session partial when all of it was read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    writeFileSync(join(root, 'short-enough.jsonl'), [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a fine session. '.repeat(400) }] } }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.sessions, 1);
+    assert.strictEqual(summary.partial, 0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   // The heartbeat has to record that the job ran, not what it found. Derived
   // from harvested rows, a quiet weekend looked identical to a dead launchd
   // job — and skipping print-mode transcripts makes quiet runs the normal case.

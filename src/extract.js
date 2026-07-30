@@ -18,7 +18,7 @@ Return ONLY valid JSON (no markdown fencing):
 What to extract:
 - architecture: component/service relationships and protocols — (my-app, calls_over_http, auth-service)
 - ownership: who owns a repo/service/area — (alice, owns, auth-service)
-- status: lifecycle changes — (browser_profiles, status, ga)
+- status: lifecycle changes — (sso_login, status, ga)
 - decision: a chosen approach + what it replaced — (backend, chose, drizzle)
 - gotcha / incident: a failure mode and its cause — (1password_bare_domains, drops, credentials)
 
@@ -43,17 +43,23 @@ Input: "My-App was 401ing against auth-service — turned out 1Password bare dom
 Output: {"facts":[{"subject":"1password bare domains","predicate":"drops","object":"credentials","category":"gotcha"},{"subject":"alice","predicate":"owns","object":"auth-service","category":"ownership"},{"subject":"my-app","predicate":"calls_over_http","object":"auth-service","category":"architecture"}],"skipped":[]}
 
 Example
-Input: "PR #539 in internal-tools-backend was squash-merged to main as fde94d6, approved by paveldudka. The merge deployed the frontend to production. decimalToScaledInteger in ux-labs was fixed for negative decimals."
-Output: {"facts":[{"subject":"pr #539","predicate":"merged_via","object":"commit fde94d6","category":"status"},{"subject":"pr #539","predicate":"approved_by","object":"paveldudka","category":"ownership"},{"subject":"pr #539","predicate":"deployed_to","object":"production","category":"status"},{"subject":"internal-tools-backend","predicate":"merge_to_main_deploys_to","object":"production","category":"architecture"},{"subject":"decimaltoscaledinteger","predicate":"handles","object":"negative decimals","category":"status"}],"skipped":[]}
+Input: "PR #539 in billing-api was squash-merged to main as fde94d6, approved by dana. The merge deployed the frontend to production. parseAmount in web-app was fixed for negative decimals."
+Output: {"facts":[{"subject":"pr #539","predicate":"merged_via","object":"commit fde94d6","category":"status"},{"subject":"pr #539","predicate":"approved_by","object":"dana","category":"ownership"},{"subject":"pr #539","predicate":"deployed_to","object":"production","category":"status"},{"subject":"billing-api","predicate":"merge_to_main_deploys_to","object":"production","category":"architecture"},{"subject":"parseamount","predicate":"handles","object":"negative decimals","category":"status"}],"skipped":[]}
 
 Example
 Input: "Production billing points at the sandbox provider, which is temporary and tracked by TICKET-42 for revert. Alice owns an 8-PR stack moving user identity onto the accounts row; all eight are still open."
 Output: {"facts":[{"subject":"production_billing","predicate":"deliberately_points_at","object":"sandbox_provider","category":"architecture"},{"subject":"ticket-42","predicate":"tracks_revert_of","object":"production_billing_sandbox_pointing","category":"status"},{"subject":"alice","predicate":"owns","object":"user_identity_pr_stack","category":"ownership"},{"subject":"user_identity","predicate":"migration_proposed_in","object":"user_identity_pr_stack","category":"decision"}],"skipped":[]}`;
 
+// One window, named once — harvest.js sizes its chunks from this too, so a
+// change here cannot silently start truncating there. extractFacts cuts to it
+// and reports the remainder; the slice below is belt-and-braces on an exported
+// function and must never be the first place text goes missing.
+export const MAX_EXTRACT_CHARS = 12000;
+
 export function buildExtractPrompt(text) {
   // Task restated after the transcript so dialogue in the text can't lure the
   // model into replying to the conversation instead of extracting from it.
-  return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, 12000)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
+  return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
 // The fan-out bounds the RESPONSE, and that is what makes it load-bearing.
@@ -107,7 +113,9 @@ export function chunkForExtract(text) {
 
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
-  const chunks = chunkForExtract(text.slice(0, 12000));
+  const examined = text.slice(0, MAX_EXTRACT_CHARS);
+  const dropped = text.length - examined.length;
+  const chunks = chunkForExtract(examined);
   const results = await Promise.all(chunks.map(async (chunk, i) => {
     try {
       // 120s: 60s was killing calls during slow API windows (observed
@@ -126,9 +134,18 @@ export async function extractFacts(text) {
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
     // this accounting exists to expose, so say the accounting is missing.
-    skipped: results.flatMap(r => (Array.isArray(r?.skipped)
-      ? r.skipped
-      : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
+    skipped: [
+      // Truncation is not a model decision, so nothing downstream would ever
+      // report it. Text nobody read is the same omission as a fact nobody
+      // emitted, and belongs in the same channel.
+      ...(dropped ? [{
+        assertion: text.slice(MAX_EXTRACT_CHARS, MAX_EXTRACT_CHARS + 120),
+        reason: `input_truncated: ${dropped.toLocaleString('en-US')} of ${text.length.toLocaleString('en-US')} characters not examined`,
+      }] : []),
+      ...results.flatMap(r => (Array.isArray(r?.skipped)
+        ? r.skipped
+        : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
+    ],
   };
 }
 
@@ -150,10 +167,10 @@ const referenceOf = s => {
   return m ? (m[1] ? `#${m[1]}` : m[2] || m[3]) : null;
 };
 
-// Two spellings of one reference — "ux-labs PR #3865" and "pr #3865" — are the
+// Two spellings of one reference — "web-app PR #3865" and "pr #3865" — are the
 // same fact, and treating them as different retires a row in favour of itself.
-// Requiring one to be a suffix of the other keeps "ux-labs PR #539" and
-// "internal-tools PR #539" apart: same number, different PRs.
+// Requiring one to be a suffix of the other keeps "web-app PR #539" and
+// "billing-api PR #539" apart: same number, different PRs.
 export function sameEntity(a, b) {
   const [x, y] = [normEntity(a), normEntity(b)];
   if (x === y) return true;
@@ -243,7 +260,7 @@ export function canonicalTriple(f) {
 // junk drawer for a repo, where "v1.1-complete" and "deploy branch in sync" are
 // both true and neither supersedes the other. So single-valued applies only to
 // subjects naming one state-bearing thing: an id ending in digits (tkt-4821,
-// pr_#3583, svc-api#59), never a bare name (mako, browser_profiles).
+// pr_#412, svc-api#59), never a bare name (web-app, sso_login).
 // Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
 // text; this asks whether the whole subject is one.
 const compilePattern = pattern => {

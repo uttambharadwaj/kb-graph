@@ -7,15 +7,20 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { getDb, setMeta } from './db.js';
-import { kbExtract } from './extract.js';
+import { kbExtract, MAX_EXTRACT_CHARS } from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
 
-const CHUNK_CHARS = 12000;          // matches kb_extract's input window
+// Derived, not copied: a chunk wider than kb_extract's window would be
+// truncated there, and this caller reads only added/candidates so the
+// truncation report would go nowhere.
+const CHUNK_CHARS = MAX_EXTRACT_CHARS;
 const HEAD_CHUNKS = 4;              // long sessions: keep the setup...
 const MAX_CHUNKS = 20;              // ...and the last 16 chunks (conclusions live at the end)
 const MIN_TEXT_CHARS = 4000;        // below this a session taught us nothing durable
+const LESSONS_HEAD_CHARS = 6000;    // the opening frames the goal...
+const LESSONS_TAIL_CHARS = 20000;   // ...and the conclusions land at the end
 export const MAX_SESSIONS_PER_RUN = 30;
 
 // Fact extraction is off unless asked for. It runs kb_extract over every chunk
@@ -163,14 +168,19 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
 
   const source = `harvest:${basename(path, '.jsonl')}`;
 
-  let facts = 0, chunkErrors = 0;
+  let facts = 0, chunkErrors = 0, factsUnread = 0;
   if (wantFacts) {
     const observationDate = new Date(mtime).toISOString().split('T')[0];
     // The instant, not just the day: a transcript from this morning must not
     // overwrite a fact a session recorded this afternoon.
     const observedAt = sqlTimestamp(new Date(mtime));
 
-    for (const chunk of chunkText(text)) {
+    const chunks = chunkText(text);
+    // chunkText keeps the head and the tail of a very long session. What falls
+    // between is never sent, and a fact count cannot show that.
+    factsUnread = text.length - chunks.reduce((n, c) => n + c.length, 0);
+
+    for (const chunk of chunks) {
       try {
         const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
         facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
@@ -181,8 +191,14 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
   }
 
   // One lessons pass per session: the opening frames the goal, the tail holds
-  // the conclusions — that's where debrief-worthy material lives.
-  const lessonsInput = text.length > 26000 ? text.slice(0, 6000) + '\n[...]\n' + text.slice(-20000) : text;
+  // the conclusions — that's where debrief-worthy material lives. The middle is
+  // dropped, and a long session is exactly the one whose middle holds the work,
+  // so the run has to say how much rather than let a note count imply the whole
+  // transcript was read.
+  const middleDropped = Math.max(0, text.length - LESSONS_HEAD_CHARS - LESSONS_TAIL_CHARS);
+  const lessonsInput = middleDropped
+    ? `${text.slice(0, LESSONS_HEAD_CHARS)}\n[...]\n${text.slice(-LESSONS_TAIL_CHARS)}`
+    : text;
   // Restate the task AFTER the transcript — long USER:/ASSISTANT: dialogue
   // otherwise lures the model into continuing the conversation instead of extracting.
   const lessonsPrompt = `${LESSONS_PROMPT}\n\n# Transcript\n${lessonsInput}\n\n# End of transcript\nYou are the auto-debrief, not a participant in the conversation above. Return ONLY the {"notes": [...]} JSON object now.`;
@@ -212,7 +228,11 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
     if (!res.skipped) written++;
   }
 
-  return { facts, notes: written, chunkErrors };
+  // Per pass, because they read different spans and one number cannot mean
+  // both: the fact pass keeps a strict superset of what the lessons pass keeps,
+  // so a session can be fully covered for facts and still have had no lesson
+  // drawn from its middle.
+  return { facts, notes: written, chunkErrors, unreadByLessons: middleDropped, unreadByFacts: factsUnread };
 }
 
 // --- orchestrator -----------------------------------------------------------
@@ -257,7 +277,8 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   const pending = candidates.length;
   const work = selectWork(candidates);
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, notReached: pending - work.length, printModeCalls };
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0,
+    unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls };
   for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
@@ -278,10 +299,18 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
         ).run(path, mtime, wantFacts ? r.facts : null, r.notes);
       }
+      const gaps = [
+        r.unreadByLessons && `${r.unreadByLessons.toLocaleString('en-US')} chars unread by the lessons pass`,
+        r.unreadByFacts && `${r.unreadByFacts.toLocaleString('en-US')} chars unread by the fact pass`,
+      ].filter(Boolean);
+      if (gaps.length) summary.partial++;
+      summary.unreadByLessons += r.unreadByLessons;
+      summary.unreadByFacts += r.unreadByFacts;
+
       // Say "facts" only when they were asked for, so a run with the extraction
       // off cannot read as one that looked and found nothing.
       const factPart = wantFacts ? `${r.facts} facts, ` : '';
-      console.log(`${basename(path)}: ${factPart}${r.notes} notes${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
+      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);
@@ -293,6 +322,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors`);
   // Everything the run passed over, so the totals account for the whole queue.
   if (summary.tooShort) console.log(`${summary.tooShort} sessions too short to harvest`);
+  if (summary.partial) console.log(`${summary.partial} sessions were only partly read — see the per-session lines above`);
   if (summary.notReached) console.log(`Backlog: ${summary.notReached} of ${summary.pending} pending sessions not reached this run`);
   if (summary.printModeCalls) console.log(`Skipped ${summary.printModeCalls} print-mode (SDK) transcripts — set KB_HARVEST_SDK_SESSIONS=1 to harvest them`);
 
