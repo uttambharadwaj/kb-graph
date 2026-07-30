@@ -12,7 +12,7 @@ const { addFact, queryFact, invalidateFact } = await import('../src/facts.js');
 // the page is <= 200 holds even with the clamp removed.
 const HOT_FACTS = 250;
 const RETIRED_FACTS = 3;
-const { getToolDefinitions } = await import('../src/tools.js');
+const { getToolDefinitions, FACT_RESULT_MAX_CHARS } = await import('../src/tools.js');
 
 const factQuery = getToolDefinitions().find(t => t.name === 'kb_fact_query');
 const call = async (args) => JSON.parse((await factQuery.handler(args)).content[0].text);
@@ -71,7 +71,7 @@ describe('kb_fact_query result cap', () => {
   it('does not honour an unbounded limit', async () => {
     const res = await call({ entity: 'hot-repo', direction: 'outgoing', limit: 100000 });
     assert.ok(res.total > res.facts.length, 'returned everything despite the caps');
-    assert.ok(JSON.stringify(res, null, 2).length <= 30000, 'response exceeded the budget');
+    assert.ok(JSON.stringify(res, null, 2).length <= FACT_RESULT_MAX_CHARS, 'response exceeded the budget');
   });
 
   // The whole point of ordering: a truncated page must carry what is true now.
@@ -89,7 +89,7 @@ describe('kb_fact_query result cap', () => {
   it('shrinks the page to fit a response-size budget', async () => {
     const res = await call({ entity: 'wide-repo', direction: 'outgoing', limit: 200 });
     const size = JSON.stringify(res, null, 2).length;
-    assert.ok(size <= 30000, `response was ${size} chars, over the budget`);
+    assert.ok(size <= FACT_RESULT_MAX_CHARS, `response was ${size} chars, over the ${FACT_RESULT_MAX_CHARS} budget`);
     assert.ok(res.facts.length < res.total, 'must report that it dropped rows');
     assert.match(res.truncated, /showing \d+ of/);
   });
