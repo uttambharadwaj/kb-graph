@@ -135,6 +135,33 @@ describe('inverse predicate folding', () => {
     assert.deepStrictEqual(JSON.parse(out.trim()), triple('b', 'blocked_by', 'a'));
   });
 
+  // Overrides merge by source key, so choosing the opposite direction of a
+  // built-in leaves both entries and the fold toggles instead of converging.
+  it('refuses an inverse pair that would never converge', async () => {
+    const { writeFileSync, mkdtempSync: mkd } = await import('fs');
+    const dir = mkd(join(tmpdir(), 'kb-inverse-cycle-'));
+    writeFileSync(join(dir, 'predicates.json'), JSON.stringify({ inverses: { blocked_by: 'blocks' } }));
+
+    const { execFileSync } = await import('child_process');
+    const script = `
+      const { canonicalTriple } = await import(${JSON.stringify(new URL('../src/extract.js', import.meta.url).href)});
+      console.log(JSON.stringify([
+        canonicalTriple({ subject: 'a', predicate: 'blocks', object: 'b' }),
+        canonicalTriple({ subject: 'b', predicate: 'blocked_by', object: 'a' }),
+      ]));
+    `;
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      env: { ...process.env, KB_DIR: dir },
+      encoding: 'utf8',
+    });
+    // Neither folds: both entries are dropped, which is the pre-fold behaviour.
+    // A toggle would swap each of these into the other.
+    assert.deepStrictEqual(JSON.parse(out.trim()), [
+      triple('a', 'blocks', 'b'),
+      triple('b', 'blocked_by', 'a'),
+    ]);
+  });
+
   // Reassignment is what the refusal above protects: it only supersedes because
   // the ticket is the subject.
   it('supersedes an assignment when the ticket keeps the subject position', () => {

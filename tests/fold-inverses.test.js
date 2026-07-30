@@ -128,6 +128,20 @@ describe('fold-inverses migration', () => {
     assert.deepStrictEqual(out, [['b2', 'blocked_by', 'a2']]);
   });
 
+  // The canonical row is stored under an alias of the canonical predicate, so
+  // an exact predicate comparison walks past it and writes a second live row —
+  // and neither is a fold source afterwards, so no re-run can merge them.
+  it('merges into a twin stored under an alias of the canonical predicate', async () => {
+    const out = await inOverrideInstall(
+      { aliases: { hampered_by: 'blocked_by' }, inverses: { blocks: 'blocked_by' } },
+      `addFact('b3', 'hampered_by', 'a3', { validFrom: '2026-07-05' });
+       addFact('a3', 'blocks', 'b3', { validFrom: '2026-07-01' });
+       foldInverses({ apply: true });
+       report('a3');`,
+    );
+    assert.strictEqual(out.length, 1, `expected one row, got ${JSON.stringify(out)}`);
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.

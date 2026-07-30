@@ -177,7 +177,22 @@ for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 // (a, blocks, b) today and (b, blocked_by, a) tomorrow — both live, retiring
 // independently, so a change phrased one way leaves the other stale and true.
 // Unlike an alias, an inverse also swaps subject and object.
-export const PREDICATE_INVERSES = Object.fromEntries(
+// Overrides merge by source key, so an install choosing the opposite direction
+// of a built-in leaves both — blocks -> blocked_by and blocked_by -> blocks —
+// and canonicalTriple then toggles a spelling instead of converging it, while
+// the migration flips those rows on every run. A target that is also a source
+// is the shape of both that cycle and a chain, so drop the pair and fold
+// neither: no folding is the old behaviour, a toggle is corruption.
+const withoutCycles = (entries) => {
+  const sources = new Set(entries.map(([from]) => from));
+  return entries.filter(([from, to]) => {
+    if (!sources.has(to)) return true;
+    console.error(`kb_extract: ignoring inverse ${from} -> ${to}: ${to} is itself folded, which would never converge`);
+    return false;
+  });
+};
+
+export const PREDICATE_INVERSES = Object.fromEntries(withoutCycles(
   Object.entries({ ...builtin?.inverses, ...override?.inverses })
     // normPred, not rawPred: canonicalTriple looks up an alias-resolved
     // predicate, so a raw key an alias rewrites could never match. It also keeps
@@ -192,7 +207,7 @@ export const PREDICATE_INVERSES = Object.fromEntries(
       if (bad.length) console.error(`kb_extract: ignoring inverse ${from} -> ${to}: ${bad.join(', ')} is single-valued`);
       return !bad.length;
     }),
-);
+));
 
 // The direction a stored predicate folds to, or undefined if it is already
 // canonical. Takes the raw spelling: a row written before an alias was
