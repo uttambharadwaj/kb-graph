@@ -209,8 +209,9 @@ describe('kb_extract consolidation', () => {
 
     const truncation = res.skipped.find(s => s.reason?.startsWith('input_truncated'));
     assert.ok(truncation, `no truncation entry in ${JSON.stringify(res.skipped)}`);
-    assert.match(truncation.reason, new RegExp(`${tail.length} of`), 'must say how much was dropped');
-    assert.match(truncation.assertion, /THE_TAIL_FACT/, 'and show the start of what was dropped');
+    assert.match(truncation.reason, new RegExp(`${tail.length.toLocaleString('en-US')} of`), 'must say how much was dropped');
+    // Exact, not a match: slicing one char early would still contain the marker.
+    assert.strictEqual(truncation.assertion, tail, 'and show what was dropped, from its first character');
   });
 
   it('says nothing about truncation when nothing was truncated', async () => {

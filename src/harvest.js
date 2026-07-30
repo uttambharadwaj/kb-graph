@@ -7,12 +7,15 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { getDb, setMeta } from './db.js';
-import { kbExtract } from './extract.js';
+import { kbExtract, MAX_EXTRACT_CHARS } from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
 
-const CHUNK_CHARS = 12000;          // matches kb_extract's input window
+// Derived, not copied: a chunk wider than kb_extract's window would be
+// truncated there, and this caller reads only added/candidates so the
+// truncation report would go nowhere.
+const CHUNK_CHARS = MAX_EXTRACT_CHARS;
 const HEAD_CHUNKS = 4;              // long sessions: keep the setup...
 const MAX_CHUNKS = 20;              // ...and the last 16 chunks (conclusions live at the end)
 const MIN_TEXT_CHARS = 4000;        // below this a session taught us nothing durable
@@ -225,8 +228,11 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
     if (!res.skipped) written++;
   }
 
-  // The largest span of this transcript no pass looked at.
-  return { facts, notes: written, chunkErrors, unread: Math.max(middleDropped, factsUnread) };
+  // Per pass, because they read different spans and one number cannot mean
+  // both: the fact pass keeps a strict superset of what the lessons pass keeps,
+  // so a session can be fully covered for facts and still have had no lesson
+  // drawn from its middle.
+  return { facts, notes: written, chunkErrors, unreadByLessons: middleDropped, unreadByFacts: factsUnread };
 }
 
 // --- orchestrator -----------------------------------------------------------
@@ -271,7 +277,8 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   const pending = candidates.length;
   const work = selectWork(candidates);
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0, notReached: pending - work.length, printModeCalls };
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0,
+    unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls };
   for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
@@ -292,12 +299,18 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
         ).run(path, mtime, wantFacts ? r.facts : null, r.notes);
       }
+      const gaps = [
+        r.unreadByLessons && `${r.unreadByLessons.toLocaleString('en-US')} chars unread by the lessons pass`,
+        r.unreadByFacts && `${r.unreadByFacts.toLocaleString('en-US')} chars unread by the fact pass`,
+      ].filter(Boolean);
+      if (gaps.length) summary.partial++;
+      summary.unreadByLessons += r.unreadByLessons;
+      summary.unreadByFacts += r.unreadByFacts;
+
       // Say "facts" only when they were asked for, so a run with the extraction
       // off cannot read as one that looked and found nothing.
-      if (r.unread) summary.partial++;
       const factPart = wantFacts ? `${r.facts} facts, ` : '';
-      const unreadPart = r.unread ? `, ${r.unread.toLocaleString('en-US')} chars unread` : '';
-      console.log(`${basename(path)}: ${factPart}${r.notes} notes${unreadPart}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
+      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);
