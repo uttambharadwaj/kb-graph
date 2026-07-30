@@ -1,10 +1,10 @@
 # Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: `node bin/generate-codemap.js`
-> Generated: 2026-07-05
+> Generated: 2026-07-30
 
 ## Quick Stats
-- **Files:** 95
-- **Total lines:** 11,781
+- **Files:** 120
+- **Total lines:** 15,398
 
 ## Architecture Overview
 ```
@@ -52,9 +52,9 @@ bin/
 | cron-capture.sh | 30 | - | !/bin/bash |
 | generate-codemap.js | 155 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 133 | - | bin/kb.js — CLI entry point |
+| kb.js | 139 | - | bin/kb.js — CLI entry point |
 | post-sync.sh | 31 | - | !/bin/bash |
-| weekly-synthesis.js | 41 | - | Weekly synthesis job — run via launchd or manually. |
+| weekly-synthesis.js | 45 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
 
 ## src/
@@ -63,19 +63,22 @@ bin/
 |------|-------|---------|---------|
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
-| claude-cli.js | 54 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 464 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 88 | EXTRACT_PROMPT, buildExtractPrompt, extractFacts, consolidate, kbExtract | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 226 | initFactSchema, mergeEntity, addFact, queryFact, invalidateFact... | Resolve an entity id through the alias table (single hop — merges rewrite |
-| harvest.js | 243 | LESSONS_PROMPT, findTranscripts, extractTranscriptText, chunkText, runHarvest... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
-| ingest.js | 168 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
+| claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| db.js | 606 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
+| extract.js | 435 | EXTRACT_PROMPT, buildExtractPrompt, chunkForExtract, extractFacts, sameEntity... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| facts.js | 248 | initFactSchema, sqlTimestamp, mergeEntity, addFact, queryFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| harvest.js | 267 | factsRequested, LESSONS_PROMPT, findTranscripts, extractTranscriptText, chunkText... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
+| ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
-| mcp.js | 30 | start | Allow direct execution |
+| mcp.js | 43 | start | Allow direct execution |
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
+| restart-on-change.js | 82 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
-| tools.js | 593 | getToolDefinitions, getHttpToolDefinitions | Dedup depends on embeddings. If it can't run, say so in the response instead |
-| write-note.js | 129 | DUP_THRESHOLD, RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks... | Shared note-writing path: dedup, frontmatter, related-links, index. |
+| tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
+| tools.js | 760 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | Dedup depends on embeddings. If it can't run, say so in the response instead |
+| tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
+| write-note.js | 134 | DUP_THRESHOLD, RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
 ## src/bus/
 
@@ -84,7 +87,7 @@ bin/
 | agentd.js | 417 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
 | cli.js | 677 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusGatewayCli, runBusAgentCli... | - |
-| config.js | 33 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | - |
+| config.js | 51 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | Read at use time; invalid pattern warns once then falls back to default. |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
 | db.js | 216 | getBusDb, closeBusDb | - |
 | gateway.js | 273 | registerBusSession, getBusSession, listBusSessions, runBusGatewayOnce, runBusGatewayLoop... | - |
@@ -108,12 +111,13 @@ bin/
 |------|-------|---------|---------|
 | classifier.js | 64 | classifyNote, classifyBatch | - |
 | processor.js | 100 | processNewClippings | - |
-| summarizer.js | 118 | summarizeNote, summarizeUnsummarized | - |
+| summarizer.js | 84 | summarizeNote, summarizeUnsummarized | - |
 
 ## src/cli/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
+| fold-inverses.js | 112 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows written before inverse folding. |
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
@@ -121,18 +125,22 @@ bin/
 | register.js | 17 | register | - |
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
 | search-cli.js | 26 | search | - |
-| setup.js | 536 | setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| setup-hooks.js | 48 | mergeClaudeHooks, installClaudeHooks | src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code setting |
+| setup-jobs.js | 131 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
+| setup.js | 628 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| stale-servers.js | 106 | sourceMtime, staleServers, runStaleServersCli | `ps -eo lstart` pads the day-of-month to a fixed width, which Date.parse |
 | status.js | 38 | status | - |
 | stop.js | 25 | stop | - |
+| tags-cli.js | 75 | tagsReport, runTagsCli | - |
 | vault-cli.js | 20 | vaultReindex | - |
-| wakeup-hook.js | 44 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
+| wakeup-hook.js | 47 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
 
 ## src/embeddings/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | embed.js | 57 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 127 | semanticSearch, similarDocs, checkDuplicate, hybridSearch | Brute-force cosine similarity — works for <2000 notes. |
+| search.js | 132 | semanticSearch, similarDocs, checkDuplicate, hybridSearch | Brute-force cosine similarity — works for <2000 notes. |
 
 ## src/middleware/
 
@@ -157,7 +165,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| api.js | 175 | default | All API routes require auth |
+| api.js | 179 | default | All API routes require auth |
 | auth-routes.js | 23 | default | - |
 | openapi.js | 11 | default | - |
 | v1.js | 273 | default | src/routes/v1.js |
@@ -178,13 +186,13 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| weekly-review.js | 105 | getRecentNotes, generateSynthesisPrompt, getNearDupPairs, generateAnalysisRequest, writeSynthesisNote | Near-duplicate pairs recorded by link-backfill / dedup — synthesis reviews |
+| weekly-review.js | 113 | getRecentNotes, generateSynthesisPrompt, getNearDupPairs, generateAnalysisRequest, writeSynthesisNote | Near-duplicate pairs recorded by link-backfill / dedup — synthesis reviews |
 
 ## src/vault/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| indexer.js | 261 | scanVault, indexVault, indexVaultFile | - |
+| indexer.js | 262 | scanVault, indexVault, indexVaultFile | - |
 | parser.js | 85 | parseVaultNote | Map folder prefixes to note types |
 
 ## tests/
@@ -192,15 +200,32 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | api-key.test.js | 57 | - | tests/api-key.test.js |
-| autobind.test.js | 151 | - | - |
+| autobind.test.js | 185 | - | - |
 | bus.test.js | 1102 | - | - |
+| claude-cli.test.js | 39 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
-| extract.test.js | 96 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| harvest.test.js | 60 | - | - |
+| extract-eval.test.js | 94 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
+| extract.test.js | 526 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
+| fold-inverses.test.js | 226 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| harvest.test.js | 111 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | ingest.test.js | 32 | - | Body |
+| inverse-fold.test.js | 176 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 60 | - | - |
+| restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | runtime-node.test.js | 64 | - | - |
-| tools.test.js | 54 | - | - |
+| setup-env-preserve.test.js | 9 | - | - |
+| setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
+| setup-jobs.test.js | 74 | - | tests/setup-jobs.test.js |
+| source-hygiene.test.js | 26 | - | - |
+| stale-servers.test.js | 105 | - | - |
+| supersession.test.js | 145 | - | - |
+| synthesis-prompt.test.js | 28 | - | - |
+| tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
+| tags.test.js | 49 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
+| tools.test.js | 70 | - | - |
+| tunnels.test.js | 132 | - | - |
+| upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |
 | v1.test.js | 189 | - | tests/v1.test.js |
 | vault-indexer.test.js | 87 | - | Test Research |
 | vault-parser.test.js | 55 | - | Test Note |

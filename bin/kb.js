@@ -120,7 +120,7 @@ Commands:
   bus-hook-current   Resolve the current workspace binding and emit hook digests
   bus-notifier       Maintain a background pending-digest notifier for the current workspace binding
   vault reindex      Reindex Obsidian vault (embeddings on; --no-embeddings to skip)
-  harvest            Auto-debrief session transcripts (--dry-run, --since-hours=N, --path=<transcript>)
+  harvest            Auto-debrief session transcripts (--dry-run, --since-hours=N, --path=<transcript>, --facts/--no-facts)
   consolidate-state  Fold session notes into per-workstream state notes (--project=X, --dry-run)
   link-backfill      Connect existing docs via embedding neighbors (doc_links + Related sections)
   entity-merge       Merge a fact-graph entity into a canonical one (<from> <to>)

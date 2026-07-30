@@ -1,8 +1,8 @@
 // Nightly auto-debrief: sweep agent session transcripts (Claude Code, and
-// Codex where parseable) and extract durable knowledge without anyone typing
-// /debrief. Facts go through kb_extract's consolidation (dedup +
-// retire-on-contradiction); lessons go through writeNote (embedding dedup +
-// related-links), tagged auto-debrief with the session as provenance.
+// Codex where parseable) and write durable knowledge without anyone typing
+// /debrief. Lessons go through writeNote (embedding dedup + related-links),
+// tagged auto-debrief with the session as provenance; facts, when enabled,
+// go through kb_extract's consolidation (dedup + retire-on-contradiction).
 import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
@@ -17,6 +17,15 @@ const HEAD_CHUNKS = 4;              // long sessions: keep the setup...
 const MAX_CHUNKS = 20;              // ...and the last 16 chunks (conclusions live at the end)
 const MIN_TEXT_CHARS = 4000;        // below this a session taught us nothing durable
 const MAX_SESSIONS_PER_RUN = 30;
+
+// Fact extraction is off unless asked for. It runs kb_extract over every chunk
+// of every transcript, which is where nearly all of this job's token cost went,
+// and unattended it writes against an open predicate vocabulary — 77% of the
+// resulting graph was entities mentioned once that no later fact ever matched.
+// The lessons pass is one call per session and stays on. Facts are better
+// chosen than swept: that is what /debrief's kb_extract call is for.
+export const factsRequested = ({ facts } = {}) =>
+  facts ?? ['1', 'true', 'yes'].includes((process.env.KB_HARVEST_FACTS || '').toLowerCase());
 
 export const LESSONS_PROMPT = `You are the auto-debrief for an engineering knowledge base. Read a work-session transcript and extract at most 3 durable knowledge notes.
 
@@ -111,23 +120,26 @@ export function chunkText(text) {
 
 // --- per-session harvest ----------------------------------------------------
 
-async function harvestTranscript(path, mtime, { vaultPath, dryRun }) {
+async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts }) {
   const text = extractTranscriptText(readFileSync(path, 'utf-8'));
   if (text.length < MIN_TEXT_CHARS) return { skipped: 'too_short', facts: 0, notes: 0 };
 
   const source = `harvest:${basename(path, '.jsonl')}`;
-  const observationDate = new Date(mtime).toISOString().split('T')[0];
-  // The instant, not just the day: a transcript from this morning must not
-  // overwrite a fact a session recorded this afternoon.
-  const observedAt = sqlTimestamp(new Date(mtime));
 
   let facts = 0, chunkErrors = 0;
-  for (const chunk of chunkText(text)) {
-    try {
-      const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
-      facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
-    } catch {
-      chunkErrors++; // one bad chunk shouldn't sink the transcript
+  if (wantFacts) {
+    const observationDate = new Date(mtime).toISOString().split('T')[0];
+    // The instant, not just the day: a transcript from this morning must not
+    // overwrite a fact a session recorded this afternoon.
+    const observedAt = sqlTimestamp(new Date(mtime));
+
+    for (const chunk of chunkText(text)) {
+      try {
+        const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
+        facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
+      } catch {
+        chunkErrors++; // one bad chunk shouldn't sink the transcript
+      }
     }
   }
 
@@ -168,9 +180,10 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun }) {
 
 // --- orchestrator -----------------------------------------------------------
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null } = {}) {
+export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
+  const wantFacts = factsRequested({ facts });
 
   let candidates = onlyPath
     ? [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }]
@@ -188,7 +201,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   const summary = { sessions: 0, facts: 0, notes: 0, errors: 0 };
   for (const { path, mtime } of candidates) {
     try {
-      const r = await harvestTranscript(path, mtime, { vaultPath, dryRun });
+      const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
       if (r.skipped) {
         // Watermark short sessions too — no point re-reading them nightly.
         if (!dryRun) db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime) VALUES (?, ?)').run(path, mtime);
@@ -202,7 +215,10 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
         ).run(path, mtime, r.facts, r.notes);
       }
-      console.log(`${basename(path)}: ${r.facts} facts, ${r.notes} notes${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
+      // Say "facts" only when they were asked for, so a run with the extraction
+      // off cannot read as one that looked and found nothing.
+      const factPart = wantFacts ? `${r.facts} facts, ` : '';
+      console.log(`${basename(path)}: ${factPart}${r.notes} notes${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);
@@ -210,7 +226,8 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
     }
   }
 
-  console.log(`Harvest done: ${summary.sessions} sessions, ${summary.facts} facts, ${summary.notes} notes, ${summary.errors} errors`);
+  const doneFacts = wantFacts ? `${summary.facts} facts, ` : 'fact extraction off, ';
+  console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors`);
 
   // Fold any fresh session notes into their workstream state notes so state
   // stays current nightly without a separate job. No-ops when nothing is fresh.
@@ -238,9 +255,12 @@ export async function runHarvestCli(args) {
   const dryRun = args.includes('--dry-run');
   const sinceFlag = args.find(a => a.startsWith('--since-hours='));
   const pathFlag = args.find(a => a.startsWith('--path='));
+  // Both spellings, so a single run can override the env var either way.
+  const facts = args.includes('--facts') ? true : args.includes('--no-facts') ? false : undefined;
   await runHarvest({
     sinceHours: sinceFlag ? parseInt(sinceFlag.split('=')[1], 10) : 26,
     dryRun,
+    facts,
     onlyPath: pathFlag ? pathFlag.split('=')[1] : null,
   });
 }

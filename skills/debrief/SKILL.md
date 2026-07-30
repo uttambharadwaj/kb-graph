@@ -1,13 +1,13 @@
 ---
 name: debrief
-description: "Use at the end of a session (or midway through a long one) to deliberately capture what was learned — lessons, decisions, workflows, state changes, and facts — into the knowledge base. The nightly harvest is the safety net; /debrief is the higher-quality deliberate pass."
+description: "Use at the end of a session (or midway through a long one) to deliberately capture what was learned — lessons, decisions, workflows, state changes, and facts — into the knowledge base. The nightly harvest is a safety net for lessons; unless the host opted into KB_HARVEST_FACTS, /debrief is the only thing that records facts."
 ---
 
 # Debrief
 
 Extract experiential knowledge from the current conversation and save it to the knowledge base via the `kb_*` MCP tools.
 
-**Note:** the nightly harvest job auto-extracts facts and lessons from session transcripts, so nothing is lost if this skill never runs. Running /debrief is for *deliberate* capture: richer context, better titles, and immediate availability instead of waiting for the nightly sweep. Your in-context judgment beats the transcript-level pass — don't skip candidates just because "harvest will get it."
+**Note:** the nightly harvest job auto-extracts *lessons* from session transcripts, so a session that never runs this skill still leaves something behind. It extracts **facts** only if the host set `KB_HARVEST_FACTS=1`, which is off by default — assume it is off, and that a fact you skip here is simply not recorded. Running /debrief is also the higher-quality pass for lessons: richer context, better titles, immediate availability. Your in-context judgment beats the transcript-level pass — don't skip candidates just because "harvest will get it."
 
 **Division of labor:** user preferences and standing corrections belong in your agent's own memory system. Project state, technical knowledge, decisions, gotchas, and facts belong in the KB. During debrief, write only to the KB.
 

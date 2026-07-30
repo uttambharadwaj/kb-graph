@@ -628,11 +628,12 @@ export function getToolDefinitions() {
         text: z.string().describe('The conversation or session transcript to extract facts from'),
         source: z.string().optional().describe('Provenance for the facts (e.g. "debrief:2026-06-24", "session:<id>")'),
         observation_date: z.string().optional().describe('When this happened (YYYY-MM-DD) — stamps valid_from / retirement dates. Defaults to today. An observation older than a fact already held will not overwrite it; it comes back in "skipped" as stale_observation.'),
+        observed_at: z.string().optional().describe('The instant this happened ("YYYY-MM-DD HH:MM:SS"), for replaying text from earlier the same day — observation_date alone cannot order two observations within one day. Defaults to now.'),
         dry_run: z.boolean().optional().default(false).describe('Return candidate facts WITHOUT writing them — review before committing.'),
       },
-      handler: async ({ text, source, observation_date, dry_run }) => {
+      handler: async ({ text, source, observation_date, observed_at, dry_run }) => {
         try {
-          const result = await kbExtract(text, { source, observationDate: observation_date, dryRun: dry_run });
+          const result = await kbExtract(text, { source, observationDate: observation_date, observedAt: observed_at, dryRun: dry_run });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

@@ -110,8 +110,8 @@ export async function extractFacts(text) {
   const chunks = chunkForExtract(text.slice(0, 12000));
   const results = await Promise.all(chunks.map(async (chunk, i) => {
     try {
-      // 120s per chunk to match harvest.js — 60s was killing calls during slow
-      // API windows (observed 2026-07-07, exit 143).
+      // 120s: 60s was killing calls during slow API windows (observed
+      // 2026-07-07, exit 143).
       return await runClaudeJSON(buildExtractPrompt(chunk), { timeout: 120000 });
     } catch (err) {
       // A dead chunk is input nobody looked at. Silently returning the other
@@ -308,11 +308,12 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     const current = retires ? held.filter(r => !sameEntity(r.object, object)) : [];
 
     // An assertion observed before a fact we already hold is older news, not a
-    // contradiction. harvest.js stamps observationDate from the transcript's
-    // mtime, so it asserts yesterday against whatever a session wrote today.
-    // valid_from is a date, so it can only order across days; recorded_at is a
-    // wall-clock instant and catches the same-day case — a 10am transcript
-    // harvested tonight against a 4pm debrief that already corrected it.
+    // contradiction: a caller passing observation_date is replaying text from
+    // the past against whatever the graph has learned since. valid_from is a
+    // date, so it can only order across days — observed_at carries the instant
+    // and catches the same-day case, 10am text replayed against a 4pm
+    // correction. A caller that passes neither is speaking for now and skips
+    // both tests, which is right.
     const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
