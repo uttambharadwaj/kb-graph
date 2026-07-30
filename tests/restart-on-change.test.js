@@ -20,6 +20,20 @@ afterEach(() => {
 
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a
+// race, not a wait — it failed twice on a loaded machine and passed on an
+// immediate re-run of the same tree. Poll instead, so a busy machine takes
+// longer rather than reporting a failure that carries no information.
+const DEADLINE_MS = 5000;
+async function until(condition, what) {
+  const deadline = Date.now() + DEADLINE_MS;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await settle(IDLE_POLL_MS);
+  }
+  assert.fail(`timed out after ${DEADLINE_MS}ms waiting for ${what}`);
+}
+
 async function harness({ isBusy = () => false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kb-restart-'));
   dirs.push(dir);
@@ -49,8 +63,7 @@ describe('restart on source change', () => {
   it('exits when a source file changes', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'seed.js'), 'export const seed = 2;\n');
-    await settle(QUIET_MS);
-    assert.strictEqual(exited(), 1);
+    await until(() => exited() === 1, 'the watcher to exit on a source change');
   });
 
   it('ignores files that are not source', async () => {
@@ -66,8 +79,7 @@ describe('restart on source change', () => {
   it('exits when predicates.json changes', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'predicates.json'), '{"single_valued":["status"]}\n');
-    await settle(QUIET_MS);
-    assert.strictEqual(exited(), 1);
+    await until(() => exited() === 1, 'the watcher to exit on a predicates.json change');
   });
 
   // `node --check` reads JSON as JS and rejects all of it, so the json branch
@@ -91,21 +103,18 @@ describe('restart on source change', () => {
     writeFileSync(join(dir, 'seed.js'), 'export function half(  {\n');
     await settle(QUIET_MS);
     writeFileSync(join(dir, 'seed.js'), 'export const seed = 3;\n');
-    await settle(QUIET_MS);
-    assert.strictEqual(exited(), 1);
+    await until(() => exited() === 1, 'the watcher to exit once the tree parses again');
   });
 
   it('restarts after a source file is deleted', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'gone.js'), 'export const gone = 1;\n');
-    await settle(QUIET_MS);
+    await until(() => exited() >= 1, 'the create to register before deleting');
     const beforeDelete = exited();
 
     unlinkSync(join(dir, 'gone.js'));
-    await settle(QUIET_MS);
-    assert.strictEqual(
-      exited(),
-      beforeDelete + 1,
+    await until(
+      () => exited() === beforeDelete + 1,
       'a deleted file must not wedge the watcher waiting to parse it',
     );
   });
@@ -118,7 +127,6 @@ describe('restart on source change', () => {
     assert.strictEqual(exited(), 0, 'must not cut a running tool call short');
 
     busy = false;
-    await settle(IDLE_POLL_MS * 10);
-    assert.strictEqual(exited(), 1);
+    await until(() => exited() === 1, 'the exit to land once the tool call finishes');
   });
 });
