@@ -87,6 +87,8 @@ export function runStaleServersCli() {
   // Servers from before src/restart-on-change.js shipped have no watcher, so
   // they will never notice on their own. Reconnecting is what retires them.
   reportUnknown();
-  console.log('\nRun /mcp in each of those sessions. Claude Code respawns a dead stdio');
-  console.log('server on the next tool call, so ending them is safe for the session.');
+  // Reconnecting is the one instruction that holds for every client. Claude Code
+  // also respawns a dead stdio server on the next tool call, so ending one there
+  // is safe; that is not verified for other clients, so do not tell people it is.
+  console.log('\nReconnect each of those sessions (/mcp in Claude Code) to pick up the current code.');
 }
