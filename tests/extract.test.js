@@ -109,6 +109,21 @@ describe('kb_extract consolidation', () => {
     );
   });
 
+  it('does not mistake a name that merely ends in a digit for a ticket id', () => {
+    // web3, oauth2, sqlite3, es2022, S3, zod_v4, lease_v2 — 239 subjects in the
+    // live graph end in a digit without being an id. A ticket id has a separator
+    // or # in front of its number; a technology name does not.
+    addFact('oauth2', 'status', 'evaluating', { validFrom: '2026-07-01', source: 'seed' });
+
+    const res = consolidate(
+      [{ subject: 'oauth2', predicate: 'status', object: 'adopted' }],
+      { source: 'test', observationDate: '2026-07-29' },
+    );
+
+    assert.strictEqual(res.invalidated.length, 0);
+    assert.deepStrictEqual(currentObject('oauth2', 'status').sort(), ['adopted', 'evaluating']);
+  });
+
   it('still retires for an issue-in-repo subject, not just a bare ticket id', () => {
     addFact('vault-service#59', 'status', 'open', { validFrom: '2026-07-01', source: 'seed' });
 
