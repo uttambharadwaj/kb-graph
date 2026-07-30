@@ -180,26 +180,38 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
 
 // --- orchestrator -----------------------------------------------------------
 
+// The watermark is per pass, not per transcript: a session harvested for
+// lessons alone has no facts yet, so a later run with extraction enabled must
+// see it again. Keying only on mtime would make turning the flag on a no-op
+// for everything already swept.
+export function stillPending(db, candidates, wantFacts) {
+  const seen = db.prepare('SELECT mtime, facts_added FROM harvest_log WHERE transcript_path = ?');
+  return candidates.filter(c => {
+    const row = seen.get(c.path);
+    if (!row || row.mtime < c.mtime) return true;
+    return wantFacts && row.facts_added === null;
+  });
+}
+
 export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
 
-  let candidates = onlyPath
+  // An explicit --path is an instruction, not a sweep: run it whatever the
+  // watermark says.
+  const candidates = onlyPath
     ? [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }]
-    : findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000 });
+    : stillPending(db, findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000 }), wantFacts);
 
-  // Watermark: skip transcripts we already harvested at this mtime.
-  const seen = db.prepare('SELECT mtime FROM harvest_log WHERE transcript_path = ?');
-  candidates = candidates.filter(c => (seen.get(c.path)?.mtime || 0) < c.mtime);
-
-  if (candidates.length > MAX_SESSIONS_PER_RUN) {
-    console.log(`Capping run to ${MAX_SESSIONS_PER_RUN} of ${candidates.length} sessions (rest picked up next run)`);
-    candidates = candidates.slice(-MAX_SESSIONS_PER_RUN);
+  const pending = candidates.length;
+  const work = pending > MAX_SESSIONS_PER_RUN ? candidates.slice(-MAX_SESSIONS_PER_RUN) : candidates;
+  if (pending > work.length) {
+    console.log(`Capping run to ${work.length} of ${pending} sessions (rest picked up next run)`);
   }
 
   const summary = { sessions: 0, facts: 0, notes: 0, errors: 0 };
-  for (const { path, mtime } of candidates) {
+  for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
       if (r.skipped) {
@@ -211,9 +223,12 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       summary.facts += r.facts;
       summary.notes += r.notes;
       if (!dryRun) {
+        // NULL facts_added means extraction did not run, which is what lets a
+        // later --facts pass pick this transcript up again. 0 means it ran and
+        // found none, and is final.
         db.prepare(
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
-        ).run(path, mtime, r.facts, r.notes);
+        ).run(path, mtime, wantFacts ? r.facts : null, r.notes);
       }
       // Say "facts" only when they were asked for, so a run with the extraction
       // off cannot read as one that looked and found nothing.

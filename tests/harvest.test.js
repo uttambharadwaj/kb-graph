@@ -24,7 +24,7 @@ writeFileSync(stub, [
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending } = await import('../src/harvest.js');
 const { getDb } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -119,6 +119,22 @@ describe('harvest fact extraction', () => {
     await runHarvestCli(['--no-facts', '--facts', `--path=${write('cli-on.jsonl')}`]);
 
     assert.ok(factCount() > before, '--facts last must win over an earlier --no-facts');
+  });
+
+  // Turning the flag on must not be a no-op for everything already swept for
+  // lessons — the mtime has not changed, but the facts pass has not run.
+  it('re-offers a transcript that was harvested before extraction was enabled', () => {
+    const db = getDb();
+    const rows = [{ path: '/t/lessons-only.jsonl', mtime: 10 }, { path: '/t/both.jsonl', mtime: 10 }];
+    const log = db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added) VALUES (?, ?, ?)');
+    log.run('/t/lessons-only.jsonl', 10, null);
+    log.run('/t/both.jsonl', 10, 0);   // ran, found none — final
+
+    assert.deepStrictEqual(stillPending(db, rows, false).map(r => r.path), [],
+      'a lessons-only run must not re-read either of them');
+    assert.deepStrictEqual(stillPending(db, rows, true).map(r => r.path), ['/t/lessons-only.jsonl']);
+    assert.deepStrictEqual(stillPending(db, [{ path: '/t/both.jsonl', mtime: 11 }], false).map(r => r.path),
+      ['/t/both.jsonl'], 'a newer mtime is still work regardless of the flag');
   });
 
   it('reads KB_HARVEST_FACTS when the caller says nothing', () => {
