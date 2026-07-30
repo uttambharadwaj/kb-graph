@@ -3,8 +3,8 @@
 > Generated: 2026-07-30
 
 ## Quick Stats
-- **Files:** 120
-- **Total lines:** 15,820
+- **Files:** 124
+- **Total lines:** 16,384
 
 ## Architecture Overview
 ```
@@ -70,9 +70,10 @@ bin/
 | harvest.js | 366 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
-| mcp.js | 43 | start | Allow direct execution |
+| mcp-supervisor.js | 283 | superviseMcpServer | Taken from the client's own default rather than restated: past its timeout a |
+| mcp.js | 51 | start | Allow direct execution |
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
-| restart-on-change.js | 82 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
+| restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
@@ -128,7 +129,7 @@ bin/
 | setup-hooks.js | 48 | mergeClaudeHooks, installClaudeHooks | src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code setting |
 | setup-jobs.js | 138 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
 | setup.js | 634 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
-| stale-servers.js | 106 | sourceMtime, staleServers, runStaleServersCli | `ps -eo lstart` pads the day-of-month to a fixed width, which Date.parse |
+| stale-servers.js | 131 | sourceMtime, staleServers, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 38 | status | - |
 | stop.js | 25 | stop | - |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
@@ -211,6 +212,7 @@ bin/
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | ingest.test.js | 32 | - | Body |
 | inverse-fold.test.js | 176 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| mcp-supervisor.test.js | 173 | MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
 | register.test.js | 60 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | runtime-node.test.js | 64 | - | - |
@@ -218,7 +220,7 @@ bin/
 | setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
 | setup-jobs.test.js | 87 | - | tests/setup-jobs.test.js |
 | source-hygiene.test.js | 26 | - | - |
-| stale-servers.test.js | 105 | - | - |
+| stale-servers.test.js | 134 | - | - |
 | supersession.test.js | 145 | - | - |
 | synthesis-prompt.test.js | 28 | - | - |
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
@@ -234,6 +236,8 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
+| marker-server.mjs | 35 | - | A stand-in for src/mcp.js used by tests/mcp-supervisor.test.js: a real |
+| supervisor-fixture.mjs | 12 | - | Entry point for the end-to-end supervisor tests. The real SDK client spawns |
 | tmp-kb.js | 12 | - | Point the KB at a throwaway dir BEFORE any module opens the real DB. |
 
 ## Key Data Flows

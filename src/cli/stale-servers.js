@@ -7,6 +7,15 @@ import { SOURCE_FILE } from '../restart-on-change.js';
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DAY_MS = 86400000;
 
+// Two shapes are running at once: a supervisor (`kb.js mcp`) with the real
+// server as a `src/mcp.js` child, and — until every session has reconnected
+// once — plain `kb.js mcp` servers from before the supervisor shipped. Both are
+// matched, because dropping the second kind is the invisible staleness this
+// command exists to end.
+const MCP_PROCESS = /(?:kb\.js\s+mcp(?:\s|$)|\/src\/mcp\.js(?:\s|$))/;
+const MCP_ARGS = /(\S+)\/(bin\/kb\.js\s+mcp|src\/mcp\.js)(?:\s|$)/;
+const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/;
+
 // `ps -eo lstart` pads the day-of-month to a fixed width, which Date.parse
 // rejects; collapsing runs of spaces is enough to make it a date it accepts.
 const parseStart = (lstart) => Date.parse(lstart.replace(/\s+/g, ' ').trim());
@@ -33,40 +42,58 @@ export function sourceMtime(dir = SRC_DIR) {
 }
 
 /**
- * Parse `ps -eo pid,lstart,args` output into the MCP servers serving stale code.
- * Each server is judged against the checkout it was launched from, not against
- * this one — run from a worktree, a single global cutoff would call every
- * server stale. Split out from the CLI so it is testable without real servers.
+ * Parse `ps -eo pid,ppid,lstart,args` output into the MCP servers serving stale
+ * code. Each server is judged against the checkout it was launched from, not
+ * against this one — run from a worktree, a single global cutoff would call
+ * every server stale. Split out from the CLI so it is testable without real
+ * servers.
  */
 export function staleServers(psOutput, mtimeOf = sourceMtime) {
   const stale = [];
   const unknown = [];
+  const rows = [];
   for (const line of psOutput.split('\n')) {
-    if (!/kb\.js\s+mcp(?:\s|$)/.test(line)) continue;
-    // pid, then lstart's fixed 5 fields (Www Mmm dd hh:mm:ss yyyy), then argv.
-    const m = line.match(/^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/);
-    const bin = m && m[3].match(/(\S+)\/bin\/kb\.js\s+mcp(?:\s|$)/);
-    const started = m ? parseStart(m[2]) : NaN;
+    if (!MCP_PROCESS.test(line)) continue;
+    // pid, ppid, then lstart's fixed 5 fields (Www Mmm dd hh:mm:ss yyyy), then argv.
+    const m = line.match(PS_LINE);
+    const args = m && m[4].match(MCP_ARGS);
+    const started = m ? parseStart(m[3]) : NaN;
     // A server we cannot judge is reported, never dropped: silently returning
     // "none stale" for a checkout that moved is the same invisible staleness
     // this command exists to end.
-    if (!bin || !Number.isFinite(started)) {
+    if (!args || !Number.isFinite(started)) {
       unknown.push({ pid: m ? Number(m[1]) : null, line: line.trim(), why: 'unparseable' });
       continue;
     }
+    rows.push({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      started,
+      root: args[1],
+      isChild: args[2].startsWith('src/'),
+      line,
+    });
+  }
+
+  const supervisors = new Set(rows.filter((r) => r.isChild).map((r) => r.ppid));
+  for (const row of rows) {
+    // A supervisor is judged through its child, which is the process actually
+    // holding the module graph. The supervisor's own staleness — a change to
+    // the supervisor or the watcher — goes unreported and still needs /mcp.
+    if (!row.isChild && supervisors.has(row.pid)) continue;
     let cutoff;
     try {
-      cutoff = mtimeOf(join(bin[1], 'src'));
+      cutoff = mtimeOf(join(row.root, 'src'));
     } catch (err) {
-      unknown.push({ pid: Number(m[1]), line: line.trim(), why: `${bin[1]}: ${err.message}` });
+      unknown.push({ pid: row.pid, line: row.line.trim(), why: `${row.root}: ${err.message}` });
       continue;
     }
-    if (started >= cutoff) continue;
+    if (row.started >= cutoff) continue;
     stale.push({
-      pid: Number(m[1]),
-      started,
-      root: bin[1],
-      ageDays: Math.floor((cutoff - started) / DAY_MS),
+      pid: row.pid,
+      started: row.started,
+      root: row.root,
+      ageDays: Math.floor((cutoff - row.started) / DAY_MS),
     });
   }
   stale.sort((a, b) => a.started - b.started);
@@ -74,7 +101,7 @@ export function staleServers(psOutput, mtimeOf = sourceMtime) {
 }
 
 export function runStaleServersCli() {
-  const ps = execFileSync('ps', ['-eo', 'pid,lstart,args'], { encoding: 'utf8' });
+  const ps = execFileSync('ps', ['-eo', 'pid,ppid,lstart,args'], { encoding: 'utf8' });
   const { stale, unknown } = staleServers(ps);
 
   const reportUnknown = () => {
@@ -95,11 +122,9 @@ export function runStaleServersCli() {
     const from = roots.length > 1 ? `  ${s.root}` : '';
     console.log(`  pid ${String(s.pid).padStart(6)}  started ${new Date(s.started).toLocaleString()}  ${s.ageDays}d stale${from}`);
   }
-  // Servers from before src/restart-on-change.js shipped have no watcher, so
-  // they will never notice on their own. Reconnecting is what retires them.
+  // Servers from before the supervisor shipped reload nothing on their own, so
+  // reconnecting is what retires them. A supervised server reaching this list
+  // means its own reload is not working, which reconnecting also fixes.
   reportUnknown();
-  // Reconnecting is the one instruction that holds for every client. Claude Code
-  // also respawns a dead stdio server on the next tool call, so ending one there
-  // is safe; that is not verified for other clients, so do not tell people it is.
   console.log('\nReconnect each of those sessions (/mcp in Claude Code) to pick up the current code.');
 }

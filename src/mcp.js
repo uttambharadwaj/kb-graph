@@ -26,7 +26,15 @@ export async function start() {
   }
   registerBusResources(server);
 
-  restartOnSourceChange({ isBusy: () => inFlight > 0 });
+  // Under a supervisor the parent owns reloading; watching here too would race
+  // it into exiting out from under a connection the parent is keeping open.
+  if (!process.env.KB_SUPERVISED) {
+    restartOnSourceChange({ isBusy: () => inFlight > 0, onChange: () => process.exit(0) });
+  }
+
+  // Nothing in the SDK reacts to stdin closing, so a child whose supervisor was
+  // killed outright would idle forever holding the database open.
+  process.stdin.on('end', () => process.exit(0));
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

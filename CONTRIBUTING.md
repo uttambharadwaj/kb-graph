@@ -129,6 +129,18 @@ KB_PASSWORD=dev kb start
 The server runs on port 3838. Web dashboard at http://localhost:3838.
 MCP server runs via: `kb mcp`
 
+`kb mcp` is a supervisor: it holds the client's stdio connection and runs the
+real server (`src/mcp.js`) as a child, replacing that child whenever a `.js` or
+`.json` file under `src/` changes and no tool call is in flight. Edit, save, and
+the next call is served by the new code — no reconnect, because the connection
+the client holds was never the one that went away. Two things still need a
+reconnect: a change to `src/mcp-supervisor.js` or `src/restart-on-change.js`
+themselves, and a change to the server's declared capabilities, which are pinned
+by the first child's `initialize` response.
+
+`kb stale-servers` lists running servers that predate their own checkout's last
+source change — the ones that will never notice on their own.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
