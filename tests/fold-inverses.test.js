@@ -177,6 +177,23 @@ describe('fold-inverses migration', () => {
     assert.strictEqual(live.length, 2, `the fold must not add a third row: ${JSON.stringify(live)}`);
   });
 
+  // An as-of query reads a null valid_from as valid before any date, so it is
+  // the earliest start there is. Treating it as a missing one and keeping the
+  // dated survivor hides the relationship for every date before that.
+  it('carries an unbounded start onto the survivor', () => {
+    legacy('svc_s', 'blocked_by', 'pf_910', '2026-06-01');
+    addFact('pf_910', 'blocks', 'svc_s', { source: 'pre-fold' }); // no valid_from
+    foldInverses({ apply: true });
+
+    const live = liveFor('svc_s');
+    assert.strictEqual(live.length, 1, `expected one row, got ${JSON.stringify(live)}`);
+    assert.strictEqual(live[0].valid_from, null, 'the unbounded start must survive the merge');
+
+    // The point of preserving it: the fact still answers a query dated earlier.
+    const before = queryFact('svc_s', { direction: 'both', asOf: '2026-01-01' });
+    assert.strictEqual(before.length, 1, 'must still be valid before the dated twin started');
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.

@@ -17,6 +17,10 @@ const canonicalise = row =>
 // split a fact the writer treats as one.
 const bucketKey = t => `${t.subject}\0${t.predicate}`;
 
+// null sorts before every date here, matching queryFact's as-of test
+// (valid_from IS NULL OR valid_from <= ?) and SQLite's NULLS FIRST ordering.
+const startsEarlier = (a, b) => (a == null ? b != null : b != null && a < b);
+
 export function foldInverses({ apply = false } = {}) {
   const db = getDb();
 
@@ -79,10 +83,11 @@ export function foldInverses({ apply = false } = {}) {
     if (write) {
       for (const { row, predicate } of folds) swap.run(row.object, predicate, row.subject, row.id);
       for (const { row, twin } of merges) {
-        // Keep the earlier valid_from, so a merge never makes a fact look younger.
-        if (row.valid_from && (!twin.valid_from || row.valid_from < twin.valid_from)) {
-          backdate.run(row.valid_from, twin.id);
-        }
+        // Keep the earlier valid_from, so a merge never makes a fact look
+        // younger. A null one is not missing — as-of queries read it as valid
+        // before any date, so it is the earliest start there is, and dropping
+        // it would hide the relationship before the survivor's date.
+        if (startsEarlier(row.valid_from, twin.valid_from)) backdate.run(row.valid_from ?? null, twin.id);
         drop.run(row.id);
       }
     }
