@@ -285,7 +285,7 @@ const PREVIEW_LIMIT = 8;
 const previews = new Map();
 
 const previewKey = (text, source, observationDate) =>
-  createHash('sha256').update(`${text} ${source ?? ''} ${observationDate ?? ''}`).digest('hex').slice(0, 16);
+  createHash('sha256').update(`${text}\0${source ?? ''}\0${observationDate ?? ''}`).digest('hex').slice(0, 16);
 
 function rememberPreview(key, value) {
   previews.set(key, { ...value, at: Date.now() });
