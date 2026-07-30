@@ -194,6 +194,11 @@ export const PREDICATE_INVERSES = Object.fromEntries(
     }),
 );
 
+// The direction a stored predicate folds to, or undefined if it is already
+// canonical. Takes the raw spelling: a row written before an alias was
+// registered still carries the old one, and it folds just the same.
+export const inverseTargetOf = predicate => PREDICATE_INVERSES[normPred(predicate)];
+
 // The triple as it will be stored: canonical predicate, canonical direction.
 export function canonicalTriple(f) {
   const pred = normPred(f.predicate);

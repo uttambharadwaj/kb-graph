@@ -16,6 +16,30 @@ const { consolidate } = await import('../src/extract.js');
 const legacy = (s, p, o, validFrom) => addFact(s, p, o, { validFrom, source: 'pre-fold' });
 const liveFor = name => queryFact(name, { direction: 'both' }).filter(r => r.current);
 
+// predicates.json is read once at import, so a per-install override needs its
+// own process. `body` runs with addFact, foldInverses and report() in scope;
+// report(entity) prints that entity's live triples, which the caller gets back.
+async function inOverrideInstall(config, body) {
+  const { writeFileSync, mkdtempSync: mkd } = await import('fs');
+  const { execFileSync } = await import('child_process');
+  const dir = mkd(join(tmpdir(), 'kb-fold-override-'));
+  writeFileSync(join(dir, 'predicates.json'), JSON.stringify(config));
+
+  const url = p => JSON.stringify(new URL(p, import.meta.url).href);
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const { addFact, queryFact } = await import(${url('../src/facts.js')});
+    const { foldInverses } = await import(${url('../src/cli/fold-inverses.js')});
+    const report = name => console.log('RESULT ' + JSON.stringify(
+      queryFact(name, { direction: 'both' }).filter(r => r.current)
+        .map(r => [r.subject, r.predicate, r.object]).sort()));
+    ${body}
+  `], { env: { ...process.env, KB_DIR: dir }, encoding: 'utf8' });
+
+  const line = out.split('\n').find(l => l.startsWith('RESULT '));
+  assert.ok(line, `subprocess printed no RESULT line:\n${out}`);
+  return JSON.parse(line.slice('RESULT '.length));
+}
+
 describe('fold-inverses migration', () => {
   it('rewrites a minority-direction row onto the canonical one', () => {
     legacy('pf_200', 'blocks', 'pf_201', '2026-07-01');
@@ -76,6 +100,32 @@ describe('fold-inverses migration', () => {
     legacy('pf_700', 'owned_by', 'team_x', '2026-07-01');
     foldInverses({ apply: true });
     assert.deepStrictEqual(foldInverses({ apply: true }), { folded: 0, merged: 0 });
+  });
+
+  // A row written before an alias was registered carries the raw spelling, so
+  // selecting by the alias-resolved predicate alone would walk straight past it.
+  it('folds a row stored under an alias of a fold source', async () => {
+    const out = await inOverrideInstall(
+      { aliases: { obstructs: 'blocks' }, inverses: { obstructs: 'blocked_by' } },
+      `addFact('a1', 'obstructs', 'b1', { validFrom: '2026-07-01' });
+       foldInverses({ apply: true });
+       report('a1');`,
+    );
+    assert.deepStrictEqual(out, [['b1', 'blocked_by', 'a1']]);
+  });
+
+  // Both sources fold to blocked_by, and neither is canonical yet, so no twin
+  // lookup finds the other. Left alone that writes two identical live rows which
+  // no re-run can merge, because neither uses a source predicate any more.
+  it('collapses two sources that fold onto the same relationship', async () => {
+    const out = await inOverrideInstall(
+      { inverses: { blocks: 'blocked_by', obstructs: 'blocked_by' } },
+      `addFact('a2', 'blocks', 'b2', { validFrom: '2026-07-01' });
+       addFact('a2', 'obstructs', 'b2', { validFrom: '2026-07-04' });
+       foldInverses({ apply: true });
+       report('a2');`,
+    );
+    assert.deepStrictEqual(out, [['b2', 'blocked_by', 'a2']]);
   });
 
   // The migration exists because consolidate's dedup cannot see the old
