@@ -133,10 +133,13 @@ MCP server runs via: `kb mcp`
 real server (`src/mcp.js`) as a child, replacing that child whenever a `.js` or
 `.json` file under `src/` changes and no tool call is in flight. Edit, save, and
 the next call is served by the new code — no reconnect, because the connection
-the client holds was never the one that went away. Two things still need a
-reconnect: a change to `src/mcp-supervisor.js` or `src/restart-on-change.js`
-themselves, and a change to the server's declared capabilities, which are pinned
-by the first child's `initialize` response.
+the client holds was never the one that went away.
+
+Three changes still need a reconnect: `src/mcp-supervisor.js` or
+`src/restart-on-change.js` themselves (only the child is replaced); the server's
+declared capabilities, which are pinned by the first child's `initialize`
+response; and `.env`, which `bin/kb.js` reads once at startup and children only
+inherit. Code reloads, configuration does not.
 
 `kb stale-servers` lists running servers that predate their own checkout's last
 source change — the ones that will never notice on their own.

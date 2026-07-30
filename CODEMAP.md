@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 124
-- **Total lines:** 16,384
+- **Total lines:** 16,396
 
 ## Architecture Overview
 ```
@@ -70,7 +70,7 @@ bin/
 | harvest.js | 366 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
-| mcp-supervisor.js | 283 | superviseMcpServer | Taken from the client's own default rather than restated: past its timeout a |
+| mcp-supervisor.js | 295 | superviseMcpServer | Taken from the client's own default rather than restated: past its timeout a |
 | mcp.js | 51 | start | Allow direct execution |
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
 | restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |

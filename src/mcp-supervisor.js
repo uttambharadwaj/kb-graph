@@ -59,10 +59,18 @@ function onLines(stream, handle) {
  * open across a child swap makes the reload invisible; replaying the recorded
  * handshake is what makes the new child a continuation rather than a stranger.
  *
- * Two things do not survive: a change to this file or to the watcher (only the
- * child is replaced), and a change to the server's declared capabilities or
- * protocol version, which are pinned by the first child's initialize response.
- * Both still need a real reconnect.
+ * Three things do not survive: a change to this file or to the watcher (only the
+ * child is replaced), a change to the server's declared capabilities or protocol
+ * version, which are pinned by the first child's initialize response, and a
+ * change to .env, which is read once by the CLI entry point and reaches children
+ * only as inherited environment. All three still need a real reconnect.
+ *
+ * Deliberately no pause/resume backpressure between the two pipes. Both SDK ends
+ * honour it, so this process is the one that buffers — but only ever one message
+ * per direction, because MCP is request/response. Pausing the client's stdin to
+ * fix that would risk never resuming it, since the drain that lifts the pause
+ * comes from a child that may have just died, and a deaf supervisor is a worse
+ * failure than a buffered reply.
  */
 export function superviseMcpServer({
   stdin = process.stdin,
@@ -257,6 +265,10 @@ export function superviseMcpServer({
     else child.stdin.write(`${line}\n`);
   };
 
+  // Kill and go, with no graceful drain: StdioClientTransport.close ends stdin,
+  // then escalates to SIGTERM about two seconds later, so anything that waits
+  // here gets killed mid-cleanup. It signals this pid rather than the process
+  // group, which is why the child also exits on its own stdin EOF.
   const shutdown = () => {
     const old = child;
     child = null;
