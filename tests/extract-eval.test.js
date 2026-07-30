@@ -49,4 +49,45 @@ head-injection, which was fixed in commit b1d6832.`);
     }
     assert.ok(mentions(facts, '539'), 'PR #539 was not treated as an entity');
   });
+
+  // Observed once in production 2026-07-29: wrote "production_metronome
+  // misconfigured_to sandbox_metronome" from a sentence calling the pointing
+  // deliberate. Subject and object right; the predicate supplied a judgment the
+  // text contradicts, which reads downstream as a finding, not a description.
+  //
+  // This case has never been reproduced: 0/6 on the pre-fix prompt from the
+  // sentence alone, 0/6 embedded in a full debrief, and 0/6 with the qualifier
+  // stripped (the shape a split chunk produces — see PF-3058). It is a guard
+  // for a rule we believe in, not a regression test for a measured failure.
+  it('does not editorialize a deliberate configuration into a defect', async () => {
+    const { facts } = await extractFacts(
+      'Production Metronome and Stripe configuration points at sandbox Metronome and Stripe test mode, ' +
+      'which is temporary and tracked by PF-3043 for revert.',
+    );
+    const judged = facts.filter(f =>
+      /misconfigur|broken|violat|wrong|incorrect|bad_/.test(f.predicate.toLowerCase()));
+    assert.deepStrictEqual(judged, [], 'asserted a defect the source called deliberate');
+    assert.ok(
+      mentions(facts, 'metronome') || mentions(facts, 'stripe'),
+      'dropped the configuration fact entirely rather than describing it neutrally',
+    );
+  });
+
+  // Observed 2026-07-29: wrote "wallet_identity migrated_to users_row" from a
+  // sentence saying the eight PRs doing it are all open. Past-tense predicate
+  // for unmerged work — the completion is asserted before it happens.
+  // Reproduces: 3/6 runs on the pre-fix prompt (migrated_to, moved_to), 0/6 with
+  // the tense rule. This one is a real regression test.
+  it('does not report in-flight work as completed', async () => {
+    const { facts } = await extractFacts(
+      'Kris owns an 8-PR stack moving wallet identity off the wallets table and onto the users row. ' +
+      'All eight PRs are still open.',
+    );
+    const completed = facts.filter(f =>
+      /^(migrated_to|moved_to|renamed_to|replaced_by)$/.test(f.predicate.toLowerCase()));
+    assert.deepStrictEqual(completed, [], 'asserted a migration the source says is unmerged');
+    // Without this the test passes on an empty extraction, which is not the
+    // behaviour being bought — the work still has to be recorded, as a proposal.
+    assert.ok(mentions(facts, 'wallet'), 'dropped the in-flight migration instead of recording it');
+  });
 });
