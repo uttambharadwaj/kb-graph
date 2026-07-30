@@ -1,10 +1,12 @@
 import { execFileSync } from 'child_process';
-import { existsSync, watch } from 'fs';
+import { existsSync, readFileSync, watch } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
-const SOURCE_FILE = /\.(js|mjs|cjs)$/;
+// predicates.json is read once at import like any module, so it is source for
+// reload purposes. kb stale-servers imports this to stay on the same definition.
+export const SOURCE_FILE = /\.(js|mjs|cjs|json)$/;
 const DEBOUNCE_MS = 1000;
 const IDLE_POLL_MS = 250;
 
@@ -13,7 +15,9 @@ const IDLE_POLL_MS = 250;
 // filtered out before this runs; a failure here means "wait", not "give up".
 function parses(file) {
   try {
-    execFileSync(process.execPath, ['--check', file], { stdio: 'ignore' });
+    // `node --check` treats JSON as JS and rejects it, so json needs its own gate.
+    if (file.endsWith('.json')) JSON.parse(readFileSync(file, 'utf8'));
+    else execFileSync(process.execPath, ['--check', file], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
