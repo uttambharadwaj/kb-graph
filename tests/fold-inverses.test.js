@@ -158,6 +158,25 @@ describe('fold-inverses migration', () => {
     assert.strictEqual(live[0].valid_from, '2026-07-01');
   });
 
+  // Two live rows whose objects are equivalent is a pre-existing duplicate the
+  // fold now has to choose between. It must join the oldest, which it gets from
+  // the scan's ORDER BY rather than from any explicit sort — so this locks that
+  // ordering, which otherwise reads as cosmetic.
+  it('merges into the oldest of several equivalent twins', () => {
+    legacy('svc_r', 'blocked_by', 'ux-labs pr #4100', '2026-06-20');
+    legacy('svc_r', 'blocked_by', 'pr #4100', '2026-06-25');
+    // Older than both, so whichever twin absorbs it is the one that gets
+    // backdated — that is what makes the choice observable at all.
+    legacy('pr #4100', 'blocks', 'svc_r', '2026-06-01');
+    foldInverses({ apply: true });
+
+    const live = liveFor('svc_r').filter(r => r.predicate === 'blocked_by');
+    const backdated = live.filter(r => r.valid_from === '2026-06-01');
+    assert.deepStrictEqual(backdated.map(r => r.object), ['ux-labs pr #4100'],
+      `the oldest twin must be the one that absorbed it: ${JSON.stringify(live)}`);
+    assert.strictEqual(live.length, 2, `the fold must not add a third row: ${JSON.stringify(live)}`);
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.

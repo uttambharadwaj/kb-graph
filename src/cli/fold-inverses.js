@@ -31,6 +31,9 @@ export function foldInverses({ apply = false } = {}) {
     // ponytail: full scan. Filtering by predicate in SQL would miss rows stored
     // under an alias of a fold source, and at this table's size reading every
     // row is cheaper than being clever about which spellings to ask for.
+    // ORDER BY is load-bearing, not cosmetic: buckets are filled in this order,
+    // so the first sameEntity match is the oldest row, which is the one a merge
+    // should keep.
     const rows = db.prepare(
       'SELECT id, subject, predicate, object, valid_from, valid_to FROM facts ORDER BY valid_from',
     ).all();
