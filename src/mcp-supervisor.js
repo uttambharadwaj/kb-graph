@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import { spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -5,9 +6,10 @@ import { restartOnSourceChange } from './restart-on-change.js';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), 'mcp.js');
 const IDLE_POLL_MS = 250;
-// The SDK client abandons a request after 60s, so a pending id older than that
-// will never be awaited — counting it as in-flight would block every reload.
-const REQUEST_TTL_MS = 60000;
+// Taken from the client's own default rather than restated: past its timeout a
+// request will never be awaited, and counting it as in-flight would block every
+// reload. A copy would drift silently the first time the SDK changed it.
+const REQUEST_TTL_MS = DEFAULT_REQUEST_TIMEOUT_MSEC;
 // Consecutive children that died without answering anything. Past this the tree
 // is broken rather than flaky, and respawning just burns the machine.
 const MAX_BOOT_FAILURES = 3;
