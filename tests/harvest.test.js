@@ -24,8 +24,8 @@ writeFileSync(stub, [
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending } = await import('../src/harvest.js');
-const { getDb } = await import('../src/db.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
+const { getDb, getHealth } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
   it('extracts Claude Code user/assistant text turns', () => {
@@ -61,6 +61,110 @@ describe('harvest transcript parsing', () => {
 
   it('tolerates malformed lines', () => {
     assert.strictEqual(extractTranscriptText('not json\n{"broken":'), '');
+  });
+});
+
+describe('harvest candidate selection', () => {
+  const jsonl = (name, lines) => {
+    const path = join(tmp, name);
+    writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n'));
+    return path;
+  };
+
+  // Every claude -p this server runs leaves a transcript, so without this the
+  // harvest reads its own prompts and each run manufactures the next run's input.
+  it('tells print-mode transcripts apart from interactive sessions', () => {
+    const own = jsonl('own-call.jsonl', [
+      { type: 'queue-operation', operation: 'enqueue', content: 'You are a knowledge base summarizer.' },
+      { type: 'attachment', entrypoint: 'sdk-cli', cwd: '/' },
+    ]);
+    const real = jsonl('real-session.jsonl', [
+      { type: 'attachment', entrypoint: 'cli', cwd: '/Users/someone/code' },
+      { type: 'user', message: { content: 'fix the login bug' } },
+    ]);
+
+    assert.strictEqual(isPrintModeTranscript(own), true);
+    assert.strictEqual(isPrintModeTranscript(real), false);
+  });
+
+  // Every way of not recognising a transcript has to end in harvesting it. A
+  // detector that drops what it cannot read loses the work it exists to keep.
+  it('harvests anything it cannot positively identify', () => {
+    const cases = {
+      'no marker at all': jsonl('no-marker.jsonl', [{ type: 'user', message: { content: 'hi' } }]),
+      'a third entrypoint value': jsonl('desktop.jsonl', [{ type: 'attachment', entrypoint: 'claude-desktop' }]),
+      'the marker quoted inside user content': jsonl('quoted.jsonl', [
+        { type: 'user', message: { content: 'the file said {"entrypoint":"sdk-cli"} which confused me' } },
+      ]),
+      'a file that does not exist': join(tmp, 'does-not-exist.jsonl'),
+    };
+    for (const [what, path] of Object.entries(cases)) {
+      assert.strictEqual(isPrintModeTranscript(path), false, `${what} must be harvested`);
+    }
+
+    // Only the head is read, so a marker pushed past the window is invisible.
+    // Harvesting is the safe answer; dropping would lose a real session.
+    const buried = jsonl('buried-marker.jsonl', [
+      { type: 'user', message: { content: 'x'.repeat(70000) } },
+      { type: 'attachment', entrypoint: 'sdk-cli' },
+    ]);
+    assert.strictEqual(isPrintModeTranscript(buried), false, 'a marker past the scan window must not drop the file');
+  });
+
+  // The queue has to drain in arrival order. Taking the newest starves the tail
+  // permanently, because a session that ages out of the window is gone for good.
+  it('takes the oldest pending sessions, not the newest', () => {
+    // Shuffled, so this pins the ordering rather than "slices from the front".
+    const shuffled = [17, 3, 41, 0, 28, 9, 33, 22, 5, 38]
+      .flatMap(base => Array.from({ length: 4 }, (_, i) => ({ path: `/t/${base}-${i}.jsonl`, mtime: base * 10 + i })));
+    const work = selectWork(shuffled);
+
+    assert.strictEqual(work.length, MAX_SESSIONS_PER_RUN);
+    const oldest = shuffled.map(c => c.mtime).sort((a, b) => a - b).slice(0, MAX_SESSIONS_PER_RUN);
+    assert.deepStrictEqual(work.map(c => c.mtime), oldest);
+  });
+
+  it('leaves a shorter queue alone', () => {
+    const candidates = Array.from({ length: 4 }, (_, i) => ({ path: `/t/${i}.jsonl`, mtime: i }));
+    assert.strictEqual(selectWork(candidates).length, 4);
+  });
+
+  // The wiring, not the pieces: that the filter is applied at all, that the
+  // count reported is the number dropped, and that the backlog math adds up.
+  it('counts what it passed over rather than reporting only what it did', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    writeFileSync(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
+    writeFileSync(join(root, 'short.jsonl'), [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'user', message: { content: 'too short to be worth a note' } }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.printModeCalls, 1, 'the print-mode transcript must be counted, not just dropped');
+    assert.strictEqual(summary.pending, 1, 'and must not reach the pending queue');
+    assert.strictEqual(summary.tooShort, 1, 'a session passed over for length is still passed over');
+    assert.strictEqual(summary.sessions, 0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // The heartbeat has to record that the job ran, not what it found. Derived
+  // from harvested rows, a quiet weekend looked identical to a dead launchd
+  // job — and skipping print-mode transcripts makes quiet runs the normal case.
+  it('is healthy after a run with nothing to harvest', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    writeFileSync(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
+    // Nothing has ever been harvested here, so harvest_log cannot supply the
+    // timestamp and only the heartbeat can. Runs last in this file.
+    getDb().prepare('DELETE FROM harvest_log').run();
+
+    await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    const health = getHealth();
+    assert.ok(health.last_harvest, 'a run that found nothing still ran');
+    assert.deepStrictEqual(health.warnings.filter(w => w.includes('harvest')), [],
+      'finding nothing is not a broken job');
+    rmSync(root, { recursive: true, force: true });
   });
 });
 

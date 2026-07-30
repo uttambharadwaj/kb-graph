@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 120
-- **Total lines:** 15,524
+- **Total lines:** 15,685
 
 ## Architecture Overview
 ```
@@ -64,10 +64,10 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 606 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
+| db.js | 610 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
 | extract.js | 451 | EXTRACT_PROMPT, buildExtractPrompt, chunkForExtract, extractFacts, sameEntity... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 248 | initFactSchema, sqlTimestamp, mergeEntity, addFact, queryFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
-| harvest.js | 283 | factsRequested, LESSONS_PROMPT, findTranscripts, extractTranscriptText, chunkText... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
+| harvest.js | 336 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
 | mcp.js | 43 | start | Allow direct execution |
@@ -208,7 +208,7 @@ bin/
 | extract.test.js | 549 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 226 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| harvest.test.js | 156 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| harvest.test.js | 260 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | ingest.test.js | 32 | - | Body |
 | inverse-fold.test.js | 176 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 60 | - | - |
