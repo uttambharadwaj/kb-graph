@@ -43,6 +43,24 @@ function embeddingCount() {
   }
 }
 
+// A refusal is a dead end unless it names the way forward, and the caller who
+// hits one is usually trying to correct the very note that matched — which
+// dedup will refuse every time, because a correction resembles what it corrects.
+function duplicateRefusal(matches) {
+  const id = matches?.[0]?.document_id;
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        skipped: true,
+        reason: 'duplicate_detected',
+        matches,
+        ...(id && { remedy: `To replace #${id} rather than add a note beside it, call kb_write with supersedes: ${id}.` }),
+      }, null, 2),
+    }],
+  };
+}
+
 // Dedup depends on embeddings. If it can't run, say so in the response instead
 // of silently skipping — a silent skip reads as "no duplicates found".
 async function dedupOrExplain(content) {
@@ -202,6 +220,7 @@ export function getToolDefinitions() {
           // Files-first invariant: no DB-only writes. Every historical
           // vault/DB divergence traced back to this tool bypassing the vault.
           const result = await writeNote(getVaultPath(), { title, content, type: 'capture', tags });
+          if (result.skipped) return duplicateRefusal(result.matches);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -219,7 +238,7 @@ export function getToolDefinitions() {
           .optional().default('capture').describe('Note type — determines vault folder destination'),
         tags: z.string().optional().describe('Comma-separated tags'),
         project: z.string().optional().describe('Project name (e.g. my-app, backend, frontend)'),
-        supersedes: z.number().int().optional().describe('ID of an existing note this one replaces — that note is marked superseded and pointed at this one.'),
+        supersedes: z.number().int().optional().describe('ID of an existing note this one replaces — that note is marked superseded and pointed at this one, or updated in place if the new note lands on its own file. This is also how you correct a note: without it, dedup refuses a near-duplicate, and a correction is always a near-duplicate of what it corrects.'),
       },
       handler: async ({ title, content, type, tags, project, supersedes }) => {
         try {
@@ -229,17 +248,30 @@ export function getToolDefinitions() {
             return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
           }
           const result = await writeNote(getVaultPath(), { title, content, type, tags, project, excludeId: supersedes });
-          if (result.skipped) {
-            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-          }
+          if (result.skipped) return duplicateRefusal(result.matches);
+
+          // The note is on disk and indexed from here on, so nothing below may
+          // report a failure: a caller told the write failed writes it again,
+          // and that duplicate is worse than bookkeeping that did not finish.
           let supersedeNote = '';
           if (supersedes != null) {
-            if (result.docId) {
-              supersedeDocument(supersedes, { replacementId: result.docId, reason: `superseded by #${result.docId}` });
-              supersedeNote = `; superseded #${supersedes} (replaced by #${result.docId})`;
-            } else {
-              supersedeDocument(supersedes, { reason: 'superseded by replacement note' });
-              supersedeNote = `; superseded #${supersedes} (replacement id unavailable — reindex may have failed)`;
+            try {
+              if (result.docId === supersedes) {
+                // A note's vault path is its type, the date and a slug of its
+                // title, so re-writing all three lands on the target's own file
+                // and reindexes into its id. The write *is* the replacement —
+                // there is no older note left to retire, and marking this one
+                // superseded would point it at itself.
+                supersedeNote = `; updated #${supersedes} in place`;
+              } else if (result.docId) {
+                supersedeDocument(supersedes, { replacementId: result.docId, reason: `superseded by #${result.docId}` });
+                supersedeNote = `; superseded #${supersedes} (replaced by #${result.docId})`;
+              } else {
+                supersedeDocument(supersedes, { reason: 'superseded by replacement note' });
+                supersedeNote = `; superseded #${supersedes} (replacement id unavailable — reindex may have failed)`;
+              }
+            } catch (err) {
+              supersedeNote = `; WARNING: the note was written, but superseding #${supersedes} failed: ${err.message}`;
             }
           }
           const relatedNote = result.related.length
@@ -354,7 +386,7 @@ export function getToolDefinitions() {
         try {
           const dedup = await dedupOrExplain(content);
           if (dedup.duplicate) {
-            return { content: [{ type: 'text', text: JSON.stringify({ skipped: true, reason: 'duplicate_detected', matches: dedup.duplicate.matches }, null, 2) }] };
+            return duplicateRefusal(dedup.duplicate.matches);
           }
           const vaultPath = getVaultPath();
           const result = captureWeb({ title, url, content, tags, project }, vaultPath);

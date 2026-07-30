@@ -3,8 +3,8 @@
 > Generated: 2026-07-30
 
 ## Quick Stats
-- **Files:** 125
-- **Total lines:** 16,521
+- **Files:** 126
+- **Total lines:** 16,635
 
 ## Architecture Overview
 ```
@@ -77,7 +77,7 @@ bin/
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
-| tools.js | 760 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | Dedup depends on embeddings. If it can't run, say so in the response instead |
+| tools.js | 792 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-note.js | 128 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
@@ -232,6 +232,7 @@ bin/
 | v1.test.js | 189 | - | tests/v1.test.js |
 | vault-indexer.test.js | 87 | - | Test Research |
 | vault-parser.test.js | 55 | - | Test Note |
+| write-correction.test.js | 82 | - | - |
 
 ## tests/helpers/
 
