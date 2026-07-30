@@ -25,7 +25,10 @@ export function foldInverses({ apply = false } = {}) {
   const db = getDb();
 
   const swap = db.prepare('UPDATE facts SET subject = ?, predicate = ?, object = ? WHERE id = ?');
-  const backdate = db.prepare('UPDATE facts SET valid_from = ? WHERE id = ?');
+  // source travels with valid_from: they describe one observation, and taking
+  // the date without it leaves the survivor citing a source that never saw the
+  // fact that early.
+  const backdate = db.prepare('UPDATE facts SET valid_from = ?, source = ? WHERE id = ?');
   const drop = db.prepare('DELETE FROM facts WHERE id = ?');
   // Every read and every write in one transaction. ~13 MCP subprocesses share
   // this DB, so a row read outside it can be retired before the delete lands —
@@ -39,7 +42,7 @@ export function foldInverses({ apply = false } = {}) {
     // so the first sameEntity match is the oldest row, which is the one a merge
     // should keep.
     const rows = db.prepare(
-      'SELECT id, subject, predicate, object, valid_from, valid_to FROM facts ORDER BY valid_from',
+      'SELECT id, subject, predicate, object, valid_from, valid_to, source FROM facts ORDER BY valid_from',
     ).all();
 
     // Every live row a fold could land on: those already canonical, plus the
@@ -87,7 +90,9 @@ export function foldInverses({ apply = false } = {}) {
         // younger. A null one is not missing — as-of queries read it as valid
         // before any date, so it is the earliest start there is, and dropping
         // it would hide the relationship before the survivor's date.
-        if (startsEarlier(row.valid_from, twin.valid_from)) backdate.run(row.valid_from ?? null, twin.id);
+        if (startsEarlier(row.valid_from, twin.valid_from)) {
+          backdate.run(row.valid_from ?? null, row.source ?? null, twin.id);
+        }
         drop.run(row.id);
       }
     }

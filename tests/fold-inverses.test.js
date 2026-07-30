@@ -194,6 +194,21 @@ describe('fold-inverses migration', () => {
     assert.strictEqual(before.length, 1, 'must still be valid before the dated twin started');
   });
 
+  // valid_from and source describe one observation. Taking the date without the
+  // source leaves the survivor claiming a provenance that never saw the fact
+  // that early — a mismatch consolidate never creates, because it does not
+  // backdate at all.
+  it('carries source along with the date it backdates to', () => {
+    addFact('svc_t', 'blocked_by', 'pf_920', { validFrom: '2026-06-01', source: 'canonical-src' });
+    addFact('pf_920', 'blocks', 'svc_t', { validFrom: '2026-05-01', source: 'legacy-src' });
+    foldInverses({ apply: true });
+
+    const live = liveFor('svc_t');
+    assert.strictEqual(live.length, 1);
+    assert.strictEqual(live[0].valid_from, '2026-05-01');
+    assert.strictEqual(live[0].source, 'legacy-src', 'the date and its source must come from the same row');
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.
