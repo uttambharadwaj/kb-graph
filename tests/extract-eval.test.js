@@ -15,7 +15,10 @@ const { extractFacts } = await import('../src/extract.js');
 const mentions = (facts, token) =>
   facts.some(f => `${f.subject} ${f.predicate} ${f.object}`.toLowerCase().includes(token));
 
-describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 300000 }, () => {
+// 15 minutes for the suite: a case is one model call per chunk and a
+// multi-chunk case runs to ~110s on its own, so a budget sized for the old
+// single-sentence cases cancels the newer ones and reports it as a failure.
+describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 900000 }, () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   // Observed 2026-07-28: extracted "decimalToScaledInteger incorrectly_handles
@@ -34,14 +37,14 @@ describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 3
   // with skipped: [] claiming nothing was passed over.
   it('records stated PR/commit/reviewer facts, or admits skipping them', async () => {
     const { facts, skipped } = await extractFacts(`
-On 2026-07-29, PR #539 in tinyfish-io/internal-tools-backend was squash-merged to main as
-commit fde94d6 by uttambharadwaj. It was approved by paveldudka. The merge triggered workflow
-container_CD_frontend.yml run 30422764087, which deployed the internal-tools frontend to
+On 2026-07-29, PR #539 in acme-co/billing-api was squash-merged to main as
+commit fde94d6 by robin. It was approved by dana. The merge triggered workflow
+container_CD_frontend.yml run 30422764087, which deployed the billing frontend to
 production successfully. CodeRabbit reviewed PR #539 and raised one Major finding about regex
 head-injection, which was fixed in commit b1d6832.`);
 
     const accounted = skipped.map(s => JSON.stringify(s).toLowerCase()).join(' ');
-    for (const token of ['fde94d6', 'paveldudka', 'production', 'coderabbit', 'b1d6832']) {
+    for (const token of ['fde94d6', 'dana', 'production', 'coderabbit', 'b1d6832']) {
       assert.ok(
         mentions(facts, token) || accounted.includes(token),
         `"${token}" is stated in the input but appears in neither facts nor skipped`,
@@ -57,12 +60,12 @@ head-injection, which was fixed in commit b1d6832.`);
   //
   // This case has never been reproduced: 0/6 on the pre-fix prompt from the
   // sentence alone, 0/6 embedded in a full debrief, and 0/6 with the qualifier
-  // stripped (the shape a split chunk produces — see PF-3058). It is a guard
+  // stripped (the shape a split chunk produces — see the chunking ticket). It is a guard
   // for a rule we believe in, not a regression test for a measured failure.
   it('does not editorialize a deliberate configuration into a defect', async () => {
     const { facts } = await extractFacts(
       'Production Metronome and Stripe configuration points at sandbox Metronome and Stripe test mode, ' +
-      'which is temporary and tracked by PF-3043 for revert.',
+      'which is temporary and tracked by TICKET-42 for revert.',
     );
     const judged = facts.filter(f =>
       /misconfigur|broken|violat|wrong|incorrect|bad_/.test(f.predicate.toLowerCase()));
@@ -80,7 +83,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // the tense rule. This one is a real regression test.
   it('does not report in-flight work as completed', async () => {
     const { facts } = await extractFacts(
-      'Kris owns an 8-PR stack moving wallet identity off the wallets table and onto the users row. ' +
+      'Alice owns an 8-PR stack moving wallet identity off the wallets table and onto the users row. ' +
       'All eight PRs are still open.',
     );
     const completed = facts.filter(f =>
@@ -89,5 +92,41 @@ head-injection, which was fixed in commit b1d6832.`);
     // Without this the test passes on an empty extraction, which is not the
     // behaviour being bought — the work still has to be recorded, as a proposal.
     assert.ok(mentions(facts, 'wallet'), 'dropped the in-flight migration instead of recording it');
+  });
+
+  // The mirror of the case above: a state the text says has ENDED, with nothing
+  // naming what replaced it. Reproduced 1/1 on the pre-fix prompt as "harvest
+  // reads model_calls_as_work_sessions" — present tense, from "used to read".
+  // The past event is still wanted; only the past state is not.
+  it('does not report an ended state as current', async () => {
+    const { facts } = await extractFacts(
+      'Harvest used to read its own model calls as if they were work sessions. That caused the backlog.',
+    );
+    const current = facts.filter(f =>
+      /^(reads|processes|includes|treats)$/.test(f.predicate.toLowerCase()) &&
+      /model.call|own.call/.test(f.object.toLowerCase()));
+    assert.deepStrictEqual(current, [], 'asserted a behaviour the source says has ended');
+    assert.ok(mentions(facts, 'backlog'), 'dropped the past event too — only the past state should go');
+  });
+
+  // The one that mattered most, because it is invisible without the fix.
+  // English simple past says both "was and still is" and "was and no longer
+  // is", and the sentence that disambiguates is the *next* one — which the
+  // ~250-char split routinely puts in another chunk. Measured on this exact
+  // text: 3/3 runs emitted a false current fact before neighbours were passed
+  // as context, 0/3 after.
+  it('uses neighbouring chunks to tell an ended state from a current one', async () => {
+    const { facts } = await extractFacts(
+      'The team spent the morning tracing a duplicate-note problem in the knowledge base. ' +
+      'Several notes on the same subject had accumulated over three weeks without anyone noticing. ' +
+      'The investigation began by measuring the two code paths against each other on identical input. ' +
+      'The duplicate threshold was declared in three modules and the debrief skill instructed callers ' +
+      'to use 0.7, while the write used 0.85. PR #22 moved DUP_THRESHOLD into src/embeddings/search.js ' +
+      'and added a shared duplicatesIn verdict function that both paths call. ' +
+      'The skill was corrected at the same time to pass no threshold at all.',
+    );
+    const stale = facts.filter(f => /0\.7|three.modules/i.test(`${f.subject} ${f.predicate} ${f.object}`));
+    assert.deepStrictEqual(stale, [], 'dated the pre-fix configuration today');
+    assert.ok(mentions(facts, '22') || mentions(facts, 'dup_threshold'), 'dropped the change itself');
   });
 });
