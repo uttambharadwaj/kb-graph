@@ -72,13 +72,22 @@ export function buildExtractPrompt(text) {
 const TARGET_CHUNK_CHARS = 250;
 const MAX_CONCURRENT_CALLS = 8; // each is a `claude` subprocess; long input widens chunks, not fan-out
 
+const slicesOf = (text, size) => {
+  const out = [];
+  for (let i = 0; i < text.length; i += size) out.push(text.slice(i, i + size));
+  return out;
+};
+
 export function chunkForExtract(text) {
   const sentences = text.split(/(?<=[.!?])\s+/);
 
   const build = size => {
     const chunks = [];
     let cur = '';
-    for (const sentence of sentences) {
+    // Sentence boundaries are the preferred cut, but a transcript of code, JSON
+    // or bullet lists has none — then one "sentence" is the whole window, and
+    // the fan-out stops bounding anything. Cut those on width instead.
+    for (const sentence of sentences.flatMap(s => (s.length > size ? slicesOf(s, size) : [s]))) {
       if (cur && (cur + ' ' + sentence).length > size) {
         chunks.push(cur);
         cur = sentence;

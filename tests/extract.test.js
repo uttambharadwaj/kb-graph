@@ -454,6 +454,15 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(chunkForExtract('one fact.'), ['one fact.']);
   });
 
+  it('splits on width when the text has no sentence boundaries', () => {
+    // Otherwise one call gets the whole window, which is what loses it.
+    const chunks = chunkForExtract('x'.repeat(12000));
+
+    assert.ok(chunks.length > 1, 'handed the whole window to one call');
+    assert.ok(chunks.length <= 8, `${chunks.length} chunks is more than the fan-out allows`);
+    assert.strictEqual(chunks.join(''), 'x'.repeat(12000), 'dropped or duplicated text');
+  });
+
   it('reports a dead chunk instead of returning the survivors as complete', async () => {
     const res = await kbExtract('DEAD_CHUNK', { source: 'test', observationDate: '2026-06-24' });
 
