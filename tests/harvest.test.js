@@ -24,7 +24,7 @@ writeFileSync(stub, [
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isAgentCall } = await import('../src/harvest.js');
 const { getDb } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -61,6 +61,50 @@ describe('harvest transcript parsing', () => {
 
   it('tolerates malformed lines', () => {
     assert.strictEqual(extractTranscriptText('not json\n{"broken":'), '');
+  });
+});
+
+describe('harvest candidate selection', () => {
+  const jsonl = (name, lines) => {
+    const path = join(tmp, name);
+    writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n'));
+    return path;
+  };
+
+  // Every claude -p this server runs leaves a transcript, so without this the
+  // harvest reads its own prompts and each run manufactures the next run's input.
+  it('tells its own model calls apart from real sessions', () => {
+    const own = jsonl('own-call.jsonl', [
+      { type: 'queue-operation', operation: 'enqueue', content: 'You are a knowledge base summarizer.' },
+      { type: 'attachment', entrypoint: 'sdk-cli', cwd: '/' },
+    ]);
+    const real = jsonl('real-session.jsonl', [
+      { type: 'attachment', entrypoint: 'cli', cwd: '/Users/someone/code' },
+      { type: 'user', message: { content: 'fix the login bug' } },
+    ]);
+
+    assert.strictEqual(isAgentCall(own), true);
+    assert.strictEqual(isAgentCall(real), false);
+    // An unreadable or markerless file must be harvested, not dropped on a
+    // field we cannot see.
+    assert.strictEqual(isAgentCall(jsonl('no-marker.jsonl', [{ type: 'user', message: { content: 'hi' } }])), false);
+    assert.strictEqual(isAgentCall(join(tmp, 'does-not-exist.jsonl')), false);
+  });
+
+  // The queue has to drain in arrival order. Taking the newest starves the tail
+  // permanently, because a session that ages out of the window is gone for good.
+  it('takes the oldest pending sessions, not the newest', () => {
+    const candidates = Array.from({ length: 35 }, (_, i) => ({ path: `/t/${i}.jsonl`, mtime: i }));
+    const work = selectWork(candidates);
+
+    assert.strictEqual(work.length, 30);
+    assert.strictEqual(work[0].mtime, 0, 'the oldest pending session must be in this run');
+    assert.strictEqual(work.at(-1).mtime, 29);
+  });
+
+  it('leaves a shorter queue alone', () => {
+    const candidates = Array.from({ length: 4 }, (_, i) => ({ path: `/t/${i}.jsonl`, mtime: i }));
+    assert.strictEqual(selectWork(candidates).length, 4);
   });
 });
 

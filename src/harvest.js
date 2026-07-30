@@ -3,7 +3,7 @@
 // /debrief. Lessons go through writeNote (embedding dedup + related-links),
 // tagged auto-debrief with the session as provenance; facts, when enabled,
 // go through kb_extract's consolidation (dedup + retire-on-contradiction).
-import { readdirSync, readFileSync, statSync, existsSync } from 'fs';
+import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { getDb } from './db.js';
@@ -43,6 +43,33 @@ Drop: exploratory reads, transient back-and-forth, anything already obvious from
 Content must be self-contained markdown: what happened, why it matters, how to apply it. Title states the insight, not the activity ("X silently drops Y", not "Debugged X"). Use lowercase base repo names for project (e.g. my-app, backend, infra). If nothing qualifies, return {"notes": []}.`;
 
 // --- transcript discovery ---------------------------------------------------
+
+// Every `claude -p` this server runs — extraction, classification, summaries —
+// writes a transcript like any session, so without this the harvest reads its
+// own prompts back and each night's calls become the next night's input. Print
+// mode is tagged 'sdk-cli' where an interactive session is tagged 'cli'; that
+// also excludes print-mode runs a user made by hand, which are not work
+// sessions either. Only the head is read: the field appears in the opening
+// records, and these files run to megabytes.
+const AGENT_ENTRYPOINT = 'sdk-cli';
+const ENTRYPOINT_SCAN_BYTES = 65536;
+
+export function isAgentCall(path) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const buf = Buffer.alloc(ENTRYPOINT_SCAN_BYTES);
+    const read = readSync(fd, buf, 0, buf.length, 0);
+    const found = buf.toString('utf8', 0, read).match(/"entrypoint"\s*:\s*"([^"]*)"/);
+    // No marker means an older or foreign format — harvest it rather than
+    // silently dropping a real session on a field we cannot see.
+    return found?.[1] === AGENT_ENTRYPOINT;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* already gone */ }
+  }
+}
 
 function* walkJsonl(dir) {
   let entries;
@@ -193,24 +220,33 @@ export function stillPending(db, candidates, wantFacts) {
   });
 }
 
+// findTranscripts sorts oldest first, so this drains the queue in arrival
+// order. Taking the newest instead starves the tail permanently: sessions
+// arrive faster than the cap, and one that ages out of the discovery window
+// stops being a candidate at all, so it is never harvested by anything.
+export const selectWork = candidates => candidates.slice(0, MAX_SESSIONS_PER_RUN);
+
 export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
 
   // An explicit --path is an instruction, not a sweep: run it whatever the
-  // watermark says.
-  const candidates = onlyPath
-    ? [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }]
-    : stillPending(db, findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000 }), wantFacts);
-
-  const pending = candidates.length;
-  const work = pending > MAX_SESSIONS_PER_RUN ? candidates.slice(-MAX_SESSIONS_PER_RUN) : candidates;
-  if (pending > work.length) {
-    console.log(`Capping run to ${work.length} of ${pending} sessions (rest picked up next run)`);
+  // watermark says, and whatever wrote it.
+  let candidates, agentCalls = 0;
+  if (onlyPath) {
+    candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }];
+  } else {
+    const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000 });
+    const sessions = found.filter(t => !isAgentCall(t.path));
+    agentCalls = found.length - sessions.length;
+    candidates = stillPending(db, sessions, wantFacts);
   }
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0 };
+  const pending = candidates.length;
+  const work = selectWork(candidates);
+
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, skipped: pending - work.length, agentCalls };
   for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
@@ -243,6 +279,11 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
 
   const doneFacts = wantFacts ? `${summary.facts} facts, ` : 'fact extraction off, ';
   console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors`);
+  // A run that reached only part of the queue must say so. Reporting only what
+  // was processed reads as "everything", which is how a growing backlog stayed
+  // invisible while sessions aged out of the window unharvested.
+  if (summary.skipped) console.log(`Backlog: ${summary.skipped} of ${summary.pending} pending sessions not reached this run`);
+  if (summary.agentCalls) console.log(`Skipped ${summary.agentCalls} of this server's own model calls`);
 
   // Fold any fresh session notes into their workstream state notes so state
   // stays current nightly without a separate job. No-ops when nothing is fresh.
