@@ -55,6 +55,26 @@ async function dedupOrExplain(content) {
   }
 }
 
+// A hot entity (a repo, an active workstream) is where the history lives, so it
+// is exactly the query that used to exceed the tool-result budget and return
+// nothing at all. 25 keeps a page small; the ceiling holds even if asked higher.
+const FACT_PAGE_DEFAULT = 25;
+// The binding cap: a row count is only a proxy for what actually fails, which is
+// the serialized response exceeding the caller's tool-result budget and handing
+// them nothing at all. Facts measure ~315 chars each on the real graph, so this
+// is what decides the page size in practice.
+const FACT_RESULT_MAX_CHARS = 30000;
+// Not an output bound — bytes always bind first. This only stops a caller who
+// asks for 100000 from making us serialize the whole graph before shrinking it.
+const FACT_PAGE_MAX = 200;
+
+// A truncated page has to be the useful half: what is true now, most recent
+// first. Retired rows sort last so they are what a small limit drops.
+function compareFactsForDisplay(a, b) {
+  if (a.current !== b.current) return a.current ? -1 : 1;
+  return String(b.valid_from ?? '').localeCompare(String(a.valid_from ?? ''));
+}
+
 const ADMIN_ONLY_TOOLS = new Set([
   'kb_classify',
   'kb_extract',
@@ -622,11 +642,38 @@ export function getToolDefinitions() {
         entity: z.string().describe('Entity to query (e.g. "my-app", "auth-service", "browser profiles")'),
         as_of: z.string().optional().describe('Date filter — only facts valid at this date (YYYY-MM-DD)'),
         direction: z.enum(['outgoing', 'incoming', 'both']).optional().default('both').describe('outgoing (entity->?), incoming (?->entity), or both'),
+        limit: z.number().int().positive().optional().default(FACT_PAGE_DEFAULT)
+          .describe(`Max facts to return (default ${FACT_PAGE_DEFAULT}, capped at ${FACT_PAGE_MAX}). Current facts come first, then most recent.`),
       },
-      handler: async ({ entity, as_of, direction }) => {
+      handler: async ({ entity, as_of, direction, limit }) => {
         try {
-          const results = queryFact(entity, { asOf: as_of, direction });
-          return { content: [{ type: 'text', text: JSON.stringify({ entity, as_of, facts: results, count: results.length }, null, 2) }] };
+          // The cap lives here, not in queryFact: consolidation in extract.js
+          // calls that too, and a truncated view there would silently miss a
+          // held fact and write a duplicate instead of matching it.
+          const all = queryFact(entity, { asOf: as_of, direction }).sort(compareFactsForDisplay);
+          // Default here as well as in the schema: a non-numeric limit would make
+          // slice() return an empty page, and "no facts" is indistinguishable
+          // from "this entity has none" to whoever asked.
+          const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, FACT_PAGE_MAX) : FACT_PAGE_DEFAULT;
+
+          const render = (facts) => {
+            const body = { entity, as_of, facts, count: facts.length, total: all.length };
+            // Never let a truncated page read as the whole story.
+            if (facts.length < all.length) {
+              body.truncated = `showing ${facts.length} of ${all.length} — narrow with as_of/direction, or raise limit (max ${FACT_PAGE_MAX}, subject to a response-size cap)`;
+            }
+            return JSON.stringify(body, null, 2);
+          };
+
+          let shown = all.slice(0, n);
+          let text = render(shown);
+          // Shrink until the response fits. Dropping rows keeps the caller's
+          // best facts (current, most recent) rather than handing back nothing.
+          while (shown.length > 1 && text.length > FACT_RESULT_MAX_CHARS) {
+            shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
+            text = render(shown);
+          }
+          return { content: [{ type: 'text', text }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
