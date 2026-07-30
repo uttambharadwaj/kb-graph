@@ -7,18 +7,24 @@ import { join } from 'path';
 const tmp = mkdtempSync(join(tmpdir(), 'kb-harvest-'));
 process.env.KB_DIR = tmp;
 process.env.OBSIDIAN_VAULT_PATH = tmp;  // else a real run would touch the live vault
+delete process.env.KB_HARVEST_FACTS;    // a host that opted in must not fail the suite
 
 // A claude that answers instantly, so the harvest runs end to end without the
-// real CLI. Set before importing: claude-cli reads CLAUDE_PATH once. The reply
-// answers both prompts at once — no lessons, but one perfectly good fact — so
-// reinstating the extraction pass would write a row and fail the test below.
+// real CLI. Set before importing: claude-cli reads CLAUDE_PATH once. One reply
+// answers both prompts — no lessons, one fact — and the fact carries a call
+// counter so every call contributes a distinct row rather than a duplicate.
 const stub = join(tmp, 'claude-stub');
-const reply = JSON.stringify({ notes: [], facts: [{ subject: 'tkt-1000', predicate: 'blocks', object: 'tkt-1001', category: 'status' }], skipped: [] });
-writeFileSync(stub, `#!/bin/sh\ncat > /dev/null\ncat <<'EOF'\n${JSON.stringify({ result: reply })}\nEOF\n`);
+const counter = join(tmp, 'calls');
+writeFileSync(stub, [
+  '#!/bin/sh',
+  'cat > /dev/null',
+  `n=$(cat ${counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counter}`,
+  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"tkt-%s\\\\",\\\\"predicate\\\\":\\\\"blocks\\\\",\\\\"object\\\\":\\\\"tkt-x\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$n"`,
+].join('\n') + '\n');
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, runHarvest, factsRequested } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested } = await import('../src/harvest.js');
 const { getDb } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -58,19 +64,34 @@ describe('harvest transcript parsing', () => {
   });
 });
 
+describe('harvest chunking', () => {
+  it('keeps short texts as sequential chunks', () => {
+    const chunks = chunkText('x'.repeat(25000));
+    assert.strictEqual(chunks.length, 3);
+    assert.strictEqual(chunks[0].length, 12000);
+  });
+
+  it('caps long texts to head + tail chunks', () => {
+    const text = 'a'.repeat(12000 * 30);
+    const chunks = chunkText(text);
+    assert.strictEqual(chunks.length, 20);
+  });
+});
+
 describe('harvest fact extraction', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   // The stub answers with a fact whatever it is asked, so whether a row lands
-  // is decided entirely by the flag and not by what the transcript says.
+  // is decided entirely by the flag and not by what the transcript says. Long
+  // enough to clear MIN_TEXT_CHARS and to span more than one chunk, so the
+  // per-chunk loop and its running total are both exercised.
   const write = name => {
     const path = join(tmp, name);
     writeFileSync(path, [
       JSON.stringify({ type: 'user', message: { content: 'who owns the billing service?' } }),
-      // Repeated to clear MIN_TEXT_CHARS; below it the session is skipped.
       JSON.stringify({
         type: 'assistant',
-        message: { content: [{ type: 'text', text: 'The billing service is owned by the payments team. '.repeat(200) }] },
+        message: { content: [{ type: 'text', text: 'The billing service is owned by the payments team. '.repeat(300) }] },
       }),
     ].join('\n'));
     return path;
@@ -88,8 +109,16 @@ describe('harvest fact extraction', () => {
   it('extracts when asked', async () => {
     const summary = await runHarvest({ onlyPath: write('opted-in.jsonl'), facts: true });
 
-    assert.strictEqual(summary.facts, 1);
-    assert.strictEqual(factCount(), 1);
+    assert.ok(summary.facts > 1, `expected the chunks to add up, got ${summary.facts}`);
+    assert.strictEqual(summary.facts, factCount(), 'the reported count must be the total written, not the last chunk');
+  });
+
+  it('takes the last fact flag on the command line', async () => {
+    await runHarvestCli(['--no-facts', `--path=${write('cli-off.jsonl')}`]);
+    const before = factCount();
+    await runHarvestCli(['--no-facts', '--facts', `--path=${write('cli-on.jsonl')}`]);
+
+    assert.ok(factCount() > before, '--facts last must win over an earlier --no-facts');
   });
 
   it('reads KB_HARVEST_FACTS when the caller says nothing', () => {

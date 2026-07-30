@@ -242,8 +242,8 @@ export function canonicalTriple(f) {
 // exactly right for a ticket — in_review then done is a real transition — and a
 // junk drawer for a repo, where "v1.1-complete" and "deploy branch in sync" are
 // both true and neither supersedes the other. So single-valued applies only to
-// subjects naming one state-bearing thing: an id ending in digits (pf-2019,
-// pr_#3583, vault-service#59), never a bare name (mako, browser_profiles).
+// subjects naming one state-bearing thing: an id ending in digits (tkt-4821,
+// pr_#3583, svc-api#59), never a bare name (mako, browser_profiles).
 // Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
 // text; this asks whether the whole subject is one.
 const compilePattern = pattern => {
@@ -272,6 +272,22 @@ export function splitListObject(fact) {
   return parts.map(object => ({ ...fact, object }));
 }
 
+// recorded_at is compared as a raw string, so an ISO instant ("...T12:00:00Z")
+// sorts above every same-day SQL timestamp — 'T' > ' ' — and the staleness
+// guard below fails open on the exact input it exists to reject. Anything not
+// already in SQL shape goes through Date, which also fixes the offset on a
+// local-time instant. Left as-is when it already matches, because Date parses
+// "YYYY-MM-DD HH:MM:SS" as local time and would shift a correct UTC value.
+const SQL_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+export function normalizeObservedAt(value) {
+  if (!value) return null;
+  if (SQL_TIMESTAMP.test(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error(`observed_at is not a date: ${value}`);
+  return sqlTimestamp(parsed);
+}
+
 // Apply extracted facts to the facts table with consolidation:
 //   - identical triple already present  -> skipped (duplicate)
 //   - same object spelled differently   -> skipped (the graph's spelling wins)
@@ -281,7 +297,7 @@ export function splitListObject(fact) {
 export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
-  const observedAtTs = observedAt || sqlTimestamp();
+  const observedAtTs = normalizeObservedAt(observedAt) || sqlTimestamp();
 
   for (const raw of facts.flatMap(splitListObject)) {
     if (!raw?.subject || !raw?.predicate || !raw?.object) {

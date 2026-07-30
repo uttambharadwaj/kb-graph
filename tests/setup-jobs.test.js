@@ -12,6 +12,19 @@ test('JOBS defines harvest, reindex, synthesis', () => {
   assert.deepEqual(JOBS.map(j => j.name), ['harvest', 'reindex', 'synthesis']);
 });
 
+// A scheduled job inherits no shell environment, so an opt-in that only lives
+// in the user's profile silently never reaches the run it governs.
+test('the harvest job carries KB_HARVEST_FACTS, and only the harvest job', () => {
+  const [harvest, reindex] = JOBS;
+  const on = { ...OPTS, harvestFacts: '1' };
+
+  assert.match(renderPlist(harvest, on), /<key>KB_HARVEST_FACTS<\/key>\s*<string>1<\/string>/);
+  assert.match(renderSystemdUnits(harvest, on).service, /Environment="KB_HARVEST_FACTS=1"/);
+
+  assert.doesNotMatch(renderPlist(reindex, on), /KB_HARVEST_FACTS/);
+  assert.doesNotMatch(renderPlist(harvest, OPTS), /KB_HARVEST_FACTS/, 'unset must not write an empty opt-in');
+});
+
 test('renderPlist mirrors the reference install', () => {
   const harvest = renderPlist(JOBS[0], OPTS);
   assert.match(harvest, /<string>com\.kb\.harvest<\/string>/);

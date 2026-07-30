@@ -146,6 +146,12 @@ function buildEnvContent(cfg) {
     '# Full match (lowercased) becomes the bus channel name. Default: pf-(\\d+)',
     '# KB_TICKET_REGEX=jira-(\\d+)',
     '',
+    '# Let the nightly harvest extract facts as well as lessons (1, true or yes).',
+    '# Off by default: it is the expensive half, and unattended it writes an open',
+    '# predicate vocabulary. Set it before `kb setup` — the scheduled job takes a',
+    '# copy, so changing it here later needs a `kb setup` re-run.',
+    '# KB_HARVEST_FACTS=1',
+    '',
   ];
 
   // API keys per agent

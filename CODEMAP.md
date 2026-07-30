@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 120
-- **Total lines:** 15,398
+- **Total lines:** 15,493
 
 ## Architecture Overview
 ```
@@ -65,9 +65,9 @@ bin/
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 606 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 435 | EXTRACT_PROMPT, buildExtractPrompt, chunkForExtract, extractFacts, sameEntity... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 451 | EXTRACT_PROMPT, buildExtractPrompt, chunkForExtract, extractFacts, sameEntity... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 248 | initFactSchema, sqlTimestamp, mergeEntity, addFact, queryFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
-| harvest.js | 267 | factsRequested, LESSONS_PROMPT, findTranscripts, extractTranscriptText, chunkText... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
+| harvest.js | 268 | factsRequested, LESSONS_PROMPT, findTranscripts, extractTranscriptText, chunkText... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
 | mcp.js | 43 | start | Allow direct execution |
@@ -126,8 +126,8 @@ bin/
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
 | search-cli.js | 26 | search | - |
 | setup-hooks.js | 48 | mergeClaudeHooks, installClaudeHooks | src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code setting |
-| setup-jobs.js | 131 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
-| setup.js | 628 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| setup-jobs.js | 138 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
+| setup.js | 634 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 106 | sourceMtime, staleServers, runStaleServersCli | `ps -eo lstart` pads the day-of-month to a fixed width, which Date.parse |
 | status.js | 38 | status | - |
 | stop.js | 25 | stop | - |
@@ -205,10 +205,10 @@ bin/
 | claude-cli.test.js | 39 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | extract-eval.test.js | 94 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
-| extract.test.js | 526 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 549 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 226 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| harvest.test.js | 111 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| harvest.test.js | 140 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | ingest.test.js | 32 | - | Body |
 | inverse-fold.test.js | 176 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 60 | - | - |
@@ -216,7 +216,7 @@ bin/
 | runtime-node.test.js | 64 | - | - |
 | setup-env-preserve.test.js | 9 | - | - |
 | setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
-| setup-jobs.test.js | 74 | - | tests/setup-jobs.test.js |
+| setup-jobs.test.js | 87 | - | tests/setup-jobs.test.js |
 | source-hygiene.test.js | 26 | - | - |
 | stale-servers.test.js | 105 | - | - |
 | supersession.test.js | 145 | - | - |

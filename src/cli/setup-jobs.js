@@ -21,6 +21,17 @@ const xmlEscape = s => String(s)
 // systemd Environment=: % is a specifier, " ends the quoted value
 const sdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
 
+// A scheduled job inherits nothing — no shell profile, and dotenv resolves .env
+// against the launcher's cwd (/ under launchd), not the install. Whatever the
+// job needs has to be written into the unit here, and changing it later means
+// re-running `kb setup`.
+const jobEnv = (job, opts) => ({
+  OBSIDIAN_VAULT_PATH: opts.vaultPath,
+  CLAUDE_PATH: opts.claudePath ?? '',
+  // Only the harvest reads it, and only when the installing environment set it.
+  ...(job.name === 'harvest' && opts.harvestFacts ? { KB_HARVEST_FACTS: opts.harvestFacts } : {}),
+});
+
 export function renderPlist(job, opts) {
   const cmd = command(job, opts).map(c => `        <string>${xmlEscape(c)}</string>`).join('\n');
   const sched = job.schedule.interval
@@ -43,10 +54,7 @@ ${sched}
     <string>/tmp/kb-${job.name}.err</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>OBSIDIAN_VAULT_PATH</key>
-        <string>${xmlEscape(opts.vaultPath)}</string>
-        <key>CLAUDE_PATH</key>
-        <string>${xmlEscape(opts.claudePath ?? '')}</string>
+${Object.entries(jobEnv(job, opts)).map(([k, v]) => `        <key>${k}</key>\n        <string>${xmlEscape(v)}</string>`).join('\n')}
     </dict>
 </dict>
 </plist>
@@ -60,8 +68,7 @@ Description=KB ${job.name}
 [Service]
 Type=oneshot
 ExecStart=${command(job, opts).join(' ')}
-Environment="OBSIDIAN_VAULT_PATH=${sdEscape(opts.vaultPath)}"
-Environment="CLAUDE_PATH=${sdEscape(opts.claudePath ?? '')}"
+${Object.entries(jobEnv(job, opts)).map(([k, v]) => `Environment="${k}=${sdEscape(v)}"`).join('\n')}
 `;
   const trigger = job.schedule.interval
     ? `OnBootSec=${job.schedule.interval}\nOnUnitActiveSec=${job.schedule.interval}`
@@ -79,8 +86,8 @@ WantedBy=timers.target
   return { service, timer };
 }
 
-export function installJobs({ home, nodeBin, kbRoot, vaultPath, claudePath, load = true }) {
-  const opts = { nodeBin, kbRoot, vaultPath, claudePath };
+export function installJobs({ home, nodeBin, kbRoot, vaultPath, claudePath, harvestFacts = process.env.KB_HARVEST_FACTS, load = true }) {
+  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts };
   const steps = [];
   if (process.platform === 'darwin') {
     const dir = join(home, 'Library', 'LaunchAgents');
