@@ -67,6 +67,11 @@ export const FACT_RESULT_MAX_CHARS = 30000;
 // Not an output bound — bytes always bind first. This only stops a caller who
 // asks for 100000 from making us serialize the whole graph before shrinking it.
 const FACT_PAGE_MAX = 200;
+// entities.name is TEXT with no length bound and kb_extract fills it from model
+// output, so one row can be arbitrarily wide. Dropping rows cannot fix that —
+// the last row is undroppable — so bound the fields and the row is bounded too.
+// Longest name in the live graph is 260, so this clips nothing today.
+const FACT_FIELD_MAX_CHARS = 500;
 
 // A truncated page has to be the useful half: what is true now, most recent
 // first. Retired rows sort last so they are what a small limit drops.
@@ -656,8 +661,20 @@ export function getToolDefinitions() {
           // from "this entity has none" to whoever asked.
           const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, FACT_PAGE_MAX) : FACT_PAGE_DEFAULT;
 
+          let clipped = 0;
+          const clip = (v) => {
+            if (typeof v !== 'string' || v.length <= FACT_FIELD_MAX_CHARS) return v;
+            clipped += 1;
+            return `${v.slice(0, FACT_FIELD_MAX_CHARS)}… [clipped ${v.length - FACT_FIELD_MAX_CHARS} chars]`;
+          };
+
           const render = (facts) => {
+            clipped = 0;
+            facts = facts.map(f => ({
+              ...f, subject: clip(f.subject), object: clip(f.object), source: clip(f.source),
+            }));
             const body = { entity, as_of, facts, count: facts.length, total: all.length };
+            if (clipped) body.clipped = `${clipped} field(s) exceeded ${FACT_FIELD_MAX_CHARS} chars and were shortened`;
             // Never let a truncated page read as the whole story.
             if (facts.length < all.length) {
               body.truncated = `showing ${facts.length} of ${all.length} — narrow with as_of/direction, or raise limit (max ${FACT_PAGE_MAX}, subject to a response-size cap)`;

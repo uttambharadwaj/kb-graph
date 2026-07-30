@@ -13,6 +13,7 @@ const { addFact, queryFact, invalidateFact } = await import('../src/facts.js');
 const HOT_FACTS = 250;
 const RETIRED_FACTS = 3;
 const { getToolDefinitions, FACT_RESULT_MAX_CHARS } = await import('../src/tools.js');
+const HUGE = 'z'.repeat(80000);
 
 const factQuery = getToolDefinitions().find(t => t.name === 'kb_fact_query');
 const call = async (args) => JSON.parse((await factQuery.handler(args)).content[0].text);
@@ -39,6 +40,9 @@ describe('kb_fact_query result cap', () => {
     for (let i = 0; i < 150; i++) {
       addFact('wide-repo', 'chose', `option-${i}-${'x'.repeat(300)}`, { validFrom: '2026-06-01', source: 'test' });
     }
+    // One row wider than the whole budget. Dropping rows cannot rescue this:
+    // the loop bottoms out at one row and that row is still over budget.
+    addFact('giant-repo', 'chose', HUGE, { validFrom: '2026-01-01', source: 'test' });
     addFact('quiet-repo', 'chose', 'only-option', { validFrom: '2026-01-01', source: 'test' });
   });
 
@@ -92,6 +96,14 @@ describe('kb_fact_query result cap', () => {
     assert.ok(size <= FACT_RESULT_MAX_CHARS, `response was ${size} chars, over the ${FACT_RESULT_MAX_CHARS} budget`);
     assert.ok(res.facts.length < res.total, 'must report that it dropped rows');
     assert.match(res.truncated, /showing \d+ of/);
+  });
+
+  it('stays in budget when a single fact is wider than the budget', async () => {
+    const res = await call({ entity: 'giant-repo', direction: 'outgoing' });
+    const size = JSON.stringify(res, null, 2).length;
+    assert.ok(size <= FACT_RESULT_MAX_CHARS, `response was ${size} chars despite the cap`);
+    assert.strictEqual(res.facts.length, 1, 'the fact itself must still be reported');
+    assert.match(res.clipped, /exceeded \d+ chars/);
   });
 
   // Consolidation calls queryFact directly and must see every row; a cap there
