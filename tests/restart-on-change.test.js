@@ -63,7 +63,7 @@ describe('restart on source change', () => {
   it('exits when a source file changes', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'seed.js'), 'export const seed = 2;\n');
-    await until(() => exited() === 1, 'the watcher to exit on a source change');
+    await until(() => exited() === 1, 'an exit after a source change');
   });
 
   it('ignores files that are not source', async () => {
@@ -79,7 +79,7 @@ describe('restart on source change', () => {
   it('exits when predicates.json changes', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'predicates.json'), '{"single_valued":["status"]}\n');
-    await until(() => exited() === 1, 'the watcher to exit on a predicates.json change');
+    await until(() => exited() === 1, 'an exit after a predicates.json change');
   });
 
   // `node --check` reads JSON as JS and rejects all of it, so the json branch
@@ -103,20 +103,21 @@ describe('restart on source change', () => {
     writeFileSync(join(dir, 'seed.js'), 'export function half(  {\n');
     await settle(QUIET_MS);
     writeFileSync(join(dir, 'seed.js'), 'export const seed = 3;\n');
-    await until(() => exited() === 1, 'the watcher to exit once the tree parses again');
+    await until(() => exited() === 1, 'an exit once the tree parses again');
   });
 
   it('restarts after a source file is deleted', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'gone.js'), 'export const gone = 1;\n');
-    await until(() => exited() >= 1, 'the create to register before deleting');
+    // Exactly one, not at least one: waiting for >= 1 could return while the
+    // create's exit is still settling, and a late second one would then satisfy
+    // the delete's assertion below without the delete having done anything.
+    await until(() => exited() === 1, "the create's exit, before deleting");
     const beforeDelete = exited();
 
     unlinkSync(join(dir, 'gone.js'));
-    await until(
-      () => exited() === beforeDelete + 1,
-      'a deleted file must not wedge the watcher waiting to parse it',
-    );
+    // A deleted file must not wedge the watcher waiting to parse it.
+    await until(() => exited() === beforeDelete + 1, "the delete's exit");
   });
 
   it('waits for an in-flight tool call before exiting', async () => {
@@ -127,6 +128,6 @@ describe('restart on source change', () => {
     assert.strictEqual(exited(), 0, 'must not cut a running tool call short');
 
     busy = false;
-    await until(() => exited() === 1, 'the exit to land once the tool call finishes');
+    await until(() => exited() === 1, 'an exit once the tool call finishes');
   });
 });
