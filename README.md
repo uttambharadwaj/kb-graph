@@ -267,6 +267,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | `CLAUDE_PATH` | No | `claude` on PATH | Claude CLI binary, used by harvest/classification |
 | `CLASSIFY_MODEL` | No | claude-haiku-4-5-20251001 | Model for write-time AI work |
 | `KB_HARVEST_FACTS` | No | off | `1`/`true`/`yes` makes the nightly harvest extract facts as well as lessons. Off because it is the expensive half and writes an open vocabulary unattended. Scheduled jobs inherit no environment, so `kb setup` copies this into the job definition — set it *before* setup, or re-run setup after changing it |
+| `KB_HARVEST_SDK_SESSIONS` | No | off | `1`/`true`/`yes` harvests print-mode (SDK) transcripts too. Off because the harvest's own `claude -p` calls look like sessions — 98% of candidates on a busy install. Turn on if you drive Claude Code headlessly and want that work captured |
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
 | `KB_TICKET_REGEX` | No | `pf-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name |

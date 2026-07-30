@@ -578,10 +578,14 @@ export function getHealth() {
 
   const ageHours = (row) => row ? (Date.now() - new Date(row.updated_at + 'Z').getTime()) / 3600000 : null;
   const reindex = getMeta('last_reindex');
-  const harvestRow = db.prepare(
-    "SELECT MAX(harvested_at) t FROM harvest_log"
-  ).get();
-  const harvestAge = harvestRow?.t ? (Date.now() - new Date(harvestRow.t + 'Z').getTime()) / 3600000 : null;
+  // A heartbeat has to record that the job ran, not what it happened to find:
+  // harvest_log only grows when there was a transcript worth reading, so a
+  // quiet weekend used to look identical to a broken launchd job. Fall back to
+  // the log for installs whose last run predates the heartbeat.
+  const harvest = getMeta('last_harvest');
+  const harvestLogged = db.prepare("SELECT MAX(harvested_at) t FROM harvest_log").get()?.t || null;
+  const lastHarvest = harvest?.updated_at || harvestLogged;
+  const harvestAge = lastHarvest ? (Date.now() - new Date(lastHarvest + 'Z').getTime()) / 3600000 : null;
   const synthesis = getMeta('last_synthesis');
 
   const warnings = [];
@@ -597,7 +601,7 @@ export function getHealth() {
     embeddings: `${embedded}/${docs}`,
     summaries: `${summarized}/${vaultFiles}`,
     last_reindex: reindex?.updated_at || null,
-    last_harvest: harvestRow?.t || null,
+    last_harvest: lastHarvest,
     last_synthesis: synthesis?.updated_at || null,
     ok: warnings.length === 0,
     warnings,

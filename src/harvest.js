@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
-import { getDb } from './db.js';
+import { getDb, setMeta } from './db.js';
 import { kbExtract } from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
@@ -16,7 +16,7 @@ const CHUNK_CHARS = 12000;          // matches kb_extract's input window
 const HEAD_CHUNKS = 4;              // long sessions: keep the setup...
 const MAX_CHUNKS = 20;              // ...and the last 16 chunks (conclusions live at the end)
 const MIN_TEXT_CHARS = 4000;        // below this a session taught us nothing durable
-const MAX_SESSIONS_PER_RUN = 30;
+export const MAX_SESSIONS_PER_RUN = 30;
 
 // Fact extraction is off unless asked for. It runs kb_extract over every chunk
 // of every transcript, which is where nearly all of this job's token cost went,
@@ -46,30 +46,40 @@ Content must be self-contained markdown: what happened, why it matters, how to a
 
 // Every `claude -p` this server runs — extraction, classification, summaries —
 // writes a transcript like any session, so without this the harvest reads its
-// own prompts back and each night's calls become the next night's input. Print
-// mode is tagged 'sdk-cli' where an interactive session is tagged 'cli'; that
-// also excludes print-mode runs a user made by hand, which are not work
-// sessions either. Only the head is read: the field appears in the opening
-// records, and these files run to megabytes.
-const AGENT_ENTRYPOINT = 'sdk-cli';
+// own prompts back and each night's calls become the next night's input.
+//
+// What the marker proves is "print mode", not "ours": the CLI stamps 'sdk-cli'
+// on any non-interactive run and 'cli' on an interactive one. That is the right
+// default — a print-mode run is a tool call, not a work session — but someone
+// who drives Claude Code headlessly and wants that harvested sets
+// KB_HARVEST_SDK_SESSIONS=1. Note that claude-cli.js passes
+// CLAUDE_CODE_ENTRYPOINT=cli and the CLI overrides it; do not "fix" either side
+// to agree with the other.
+//
+// Only the head is read — the field sits in the opening records and these files
+// run to megabytes. A marker past the window, or none at all, means the
+// transcript is harvested: an unrecognised format must not silently swallow
+// real work.
+const PRINT_MODE_ENTRYPOINT = 'sdk-cli';
 const ENTRYPOINT_SCAN_BYTES = 65536;
+const headBuffer = Buffer.allocUnsafe(ENTRYPOINT_SCAN_BYTES); // reused: this is synchronous and not reentrant
 
-export function isAgentCall(path) {
+export function isPrintModeTranscript(path) {
   let fd;
   try {
     fd = openSync(path, 'r');
-    const buf = Buffer.alloc(ENTRYPOINT_SCAN_BYTES);
-    const read = readSync(fd, buf, 0, buf.length, 0);
-    const found = buf.toString('utf8', 0, read).match(/"entrypoint"\s*:\s*"([^"]*)"/);
-    // No marker means an older or foreign format — harvest it rather than
-    // silently dropping a real session on a field we cannot see.
-    return found?.[1] === AGENT_ENTRYPOINT;
+    const read = readSync(fd, headBuffer, 0, headBuffer.length, 0);
+    const found = headBuffer.toString('utf8', 0, read).match(/"entrypoint"\s*:\s*"([^"]*)"/);
+    return found?.[1] === PRINT_MODE_ENTRYPOINT;
   } catch {
     return false;
   } finally {
     if (fd !== undefined) try { closeSync(fd); } catch { /* already gone */ }
   }
 }
+
+export const harvestsPrintModeSessions = () =>
+  ['1', 'true', 'yes'].includes((process.env.KB_HARVEST_SDK_SESSIONS || '').toLowerCase());
 
 function* walkJsonl(dir) {
   let entries;
@@ -81,11 +91,11 @@ function* walkJsonl(dir) {
   }
 }
 
-export function findTranscripts({ sinceMs }) {
-  const roots = [
+export function findTranscripts({ sinceMs, searchRoots }) {
+  const roots = (searchRoots || [
     join(homedir(), '.claude', 'projects'),
     join(homedir(), '.codex', 'sessions'),
-  ].filter(existsSync);
+  ]).filter(existsSync);
 
   const out = [];
   for (const root of roots) {
@@ -220,37 +230,39 @@ export function stillPending(db, candidates, wantFacts) {
   });
 }
 
-// findTranscripts sorts oldest first, so this drains the queue in arrival
-// order. Taking the newest instead starves the tail permanently: sessions
-// arrive faster than the cap, and one that ages out of the discovery window
-// stops being a candidate at all, so it is never harvested by anything.
-export const selectWork = candidates => candidates.slice(0, MAX_SESSIONS_PER_RUN);
+// Drain in arrival order. Taking the newest starves the tail permanently:
+// sessions arrive faster than the cap, and one that ages out of the discovery
+// window stops being a candidate at all, so it is never harvested by anything.
+// Sorts rather than trusting the caller — the guarantee belongs here.
+export const selectWork = candidates =>
+  [...candidates].sort((a, b) => a.mtime - b.mtime).slice(0, MAX_SESSIONS_PER_RUN);
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts } = {}) {
+export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
 
   // An explicit --path is an instruction, not a sweep: run it whatever the
   // watermark says, and whatever wrote it.
-  let candidates, agentCalls = 0;
+  let candidates, printModeCalls = 0;
   if (onlyPath) {
     candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }];
   } else {
-    const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000 });
-    const sessions = found.filter(t => !isAgentCall(t.path));
-    agentCalls = found.length - sessions.length;
+    const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000, searchRoots });
+    const sessions = harvestsPrintModeSessions() ? found : found.filter(t => !isPrintModeTranscript(t.path));
+    printModeCalls = found.length - sessions.length;
     candidates = stillPending(db, sessions, wantFacts);
   }
 
   const pending = candidates.length;
   const work = selectWork(candidates);
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, skipped: pending - work.length, agentCalls };
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, notReached: pending - work.length, printModeCalls };
   for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
       if (r.skipped) {
+        summary.tooShort++;
         // Watermark short sessions too — no point re-reading them nightly.
         if (!dryRun) db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime) VALUES (?, ?)').run(path, mtime);
         continue;
@@ -279,15 +291,15 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
 
   const doneFacts = wantFacts ? `${summary.facts} facts, ` : 'fact extraction off, ';
   console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors`);
-  // A run that reached only part of the queue must say so. Reporting only what
-  // was processed reads as "everything", which is how a growing backlog stayed
-  // invisible while sessions aged out of the window unharvested.
-  if (summary.skipped) console.log(`Backlog: ${summary.skipped} of ${summary.pending} pending sessions not reached this run`);
-  if (summary.agentCalls) console.log(`Skipped ${summary.agentCalls} of this server's own model calls`);
+  // Everything the run passed over, so the totals account for the whole queue.
+  if (summary.tooShort) console.log(`${summary.tooShort} sessions too short to harvest`);
+  if (summary.notReached) console.log(`Backlog: ${summary.notReached} of ${summary.pending} pending sessions not reached this run`);
+  if (summary.printModeCalls) console.log(`Skipped ${summary.printModeCalls} print-mode (SDK) transcripts — set KB_HARVEST_SDK_SESSIONS=1 to harvest them`);
 
   // Fold any fresh session notes into their workstream state notes so state
   // stays current nightly without a separate job. No-ops when nothing is fresh.
   if (!dryRun) {
+    setMeta('last_harvest', String(summary.sessions));
     try {
       const { runConsolidateState } = await import('./state.js');
       await runConsolidateState({ vaultPath });
