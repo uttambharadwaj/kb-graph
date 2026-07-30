@@ -53,11 +53,30 @@ describe('restart on source change', () => {
     assert.strictEqual(exited(), 1);
   });
 
-  it('ignores files that are not javascript', async () => {
+  it('ignores files that are not source', async () => {
     const { dir, exited } = await harness();
     writeFileSync(join(dir, 'notes.md'), 'const readme = 1;\n');
     await settle(QUIET_MS);
     assert.strictEqual(exited(), 0);
+  });
+
+  // predicates.json configures which predicates retire a prior fact. It is read
+  // once at import like any module, so shipping a change to it without a restart
+  // leaves every live server consolidating on the old cardinality rules.
+  it('exits when predicates.json changes', async () => {
+    const { dir, exited } = await harness();
+    writeFileSync(join(dir, 'predicates.json'), '{"single_valued":["status"]}\n');
+    await settle(QUIET_MS);
+    assert.strictEqual(exited(), 1);
+  });
+
+  // `node --check` reads JSON as JS and rejects all of it, so the json branch
+  // has to be its own gate — otherwise every json write looks half-written.
+  it('keeps serving when json is caught half-written', async () => {
+    const { dir, exited } = await harness();
+    writeFileSync(join(dir, 'predicates.json'), '{"single_valued":[\n');
+    await settle(QUIET_MS);
+    assert.strictEqual(exited(), 0, 'truncated json must not exit into a broken config');
   });
 
   it('keeps serving when the tree is caught half-written', async () => {

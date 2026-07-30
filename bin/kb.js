@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bin/kb.js — CLI entry point
-// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
+// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import 'dotenv/config';
@@ -22,6 +22,7 @@ const commands = {
   'wakeup-hook': () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
   'prompt-hint': () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
   'link-backfill': () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),
+  'stale-servers': () => import('../src/cli/stale-servers.js').then(m => m.runStaleServersCli()),
   harvest: () => import('../src/harvest.js').then(m => m.runHarvestCli(args)),
   'consolidate-state': () => import('../src/state.js').then(m => m.runConsolidateStateCli(args)),
   'entity-merge': () => import('../src/facts.js').then(m => {
@@ -103,6 +104,7 @@ Commands:
   tags               Show tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
   wakeup-hook        Print compact KB briefing (for SessionStart hooks)
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)
+  stale-servers      List running MCP servers that started before the last src/ change
   bus-send           Send a local message bus message
   bus-read           Read messages using a stored per-reader cursor
   bus-status         Show channel readers, backlog, heartbeats, and latest control
