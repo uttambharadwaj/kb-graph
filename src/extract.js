@@ -33,6 +33,7 @@ Rules:
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
 - Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixed_in, status, uses, calls_over_http. Invent one only when none of them says it.
+- A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
 - If nothing durable is present, return {"facts": [], "skipped": [...]}.
@@ -172,6 +173,56 @@ const SINGLE_VALUED = new Set((builtin?.single_valued || []).map(normPred));
 for (const p of override?.single_valued || []) SINGLE_VALUED.add(normPred(p));
 for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 
+// The extractor picks a direction per call, so one relationship arrives as
+// (a, blocks, b) today and (b, blocked_by, a) tomorrow — both live, retiring
+// independently, so a change phrased one way leaves the other stale and true.
+// Unlike an alias, an inverse also swaps subject and object.
+// Overrides merge by source key, so an install choosing the opposite direction
+// of a built-in leaves both — blocks -> blocked_by and blocked_by -> blocks —
+// and canonicalTriple then toggles a spelling instead of converging it, while
+// the migration flips those rows on every run. A target that is also a source
+// is the shape of both that cycle and a chain, so drop the pair and fold
+// neither: no folding is the old behaviour, a toggle is corruption.
+const withoutCycles = (entries) => {
+  const sources = new Set(entries.map(([from]) => from));
+  return entries.filter(([from, to]) => {
+    if (!sources.has(to)) return true;
+    console.error(`kb_extract: ignoring inverse ${from} -> ${to}: ${to} is itself folded, which would never converge`);
+    return false;
+  });
+};
+
+export const PREDICATE_INVERSES = Object.fromEntries(withoutCycles(
+  Object.entries({ ...builtin?.inverses, ...override?.inverses })
+    // normPred, not rawPred: canonicalTriple looks up an alias-resolved
+    // predicate, so a raw key an alias rewrites could never match. It also keeps
+    // an aliased target from slipping past the single-valued check below —
+    // `assigned` reads as many-valued until the alias resolves it to assigned_to.
+    .map(([from, to]) => [normPred(from), normPred(to)])
+    // Folding a single-valued predicate would move the retirement it drives onto
+    // a different subject, which is the failure this whole map exists to stop.
+    // An install that configures one gets told, not silently un-retired.
+    .filter(([from, to]) => {
+      const bad = [from, to].filter(p => SINGLE_VALUED.has(p));
+      if (bad.length) console.error(`kb_extract: ignoring inverse ${from} -> ${to}: ${bad.join(', ')} is single-valued`);
+      return !bad.length;
+    }),
+));
+
+// The direction a stored predicate folds to, or undefined if it is already
+// canonical. Takes the raw spelling: a row written before an alias was
+// registered still carries the old one, and it folds just the same.
+export const inverseTargetOf = predicate => PREDICATE_INVERSES[normPred(predicate)];
+
+// The triple as it will be stored: canonical predicate, canonical direction.
+export function canonicalTriple(f) {
+  const pred = normPred(f.predicate);
+  const inverse = PREDICATE_INVERSES[pred];
+  return inverse
+    ? { ...f, subject: f.object, predicate: inverse, object: f.subject }
+    : { ...f, predicate: pred };
+}
+
 // Cardinality belongs to (subject, predicate), not to the predicate. `status` is
 // exactly right for a ticket — in_review then done is a real transition — and a
 // junk drawer for a repo, where "v1.1-complete" and "deploy branch in sync" are
@@ -217,13 +268,14 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
   const observedAtTs = observedAt || sqlTimestamp();
 
-  for (const f of facts.flatMap(splitListObject)) {
-    const { subject, predicate, object } = f || {};
-    if (!subject || !predicate || !object) {
-      skipped.push({ fact: f, reason: 'incomplete_triple' });
+  for (const raw of facts.flatMap(splitListObject)) {
+    if (!raw?.subject || !raw?.predicate || !raw?.object) {
+      skipped.push({ fact: raw, reason: 'incomplete_triple' });
       continue;
     }
-    const pred = normPred(predicate);
+    // Skip reports carry the folded triple, since that is what was attempted.
+    const f = canonicalTriple(raw);
+    const { subject, predicate: pred, object } = f;
 
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
     // normPred on the stored predicate too: rows written before an alias was
@@ -353,11 +405,11 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
 
   if (dryRun) {
     rememberPreview(key, { facts, skipped });
-    // Candidates are shown post-split and post-alias, since that is the triple
+    // Candidates are shown post-split, post-alias and post-direction, since that is the triple
     // consolidation will write — previewing the raw predicate would disagree
     // with the commit for exactly the drift this preview exists to expose.
     const candidates = facts.flatMap(splitListObject)
-      .map(f => (f?.predicate ? { ...f, predicate: normPred(f.predicate) } : f));
+      .map(f => (f?.subject && f?.predicate && f?.object ? canonicalTriple(f) : f));
     return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
   }
 
