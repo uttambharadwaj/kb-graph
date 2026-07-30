@@ -142,6 +142,22 @@ describe('fold-inverses migration', () => {
     assert.strictEqual(out.length, 1, `expected one row, got ${JSON.stringify(out)}`);
   });
 
+  // consolidate matches its subject exactly and its object through sameEntity,
+  // so "ux-labs pr #3865" and "pr #3865" are one fact to the writer. Matching
+  // objects exactly here would split what the next write then treats as a
+  // duplicate — two live rows the writer believes are one.
+  it('merges into a twin whose object is an equivalent spelling', () => {
+    legacy('pr #3865', 'blocks', 'svc_q', '2026-07-01');
+    legacy('svc_q', 'blocked_by', 'ux-labs pr #3865', '2026-07-05');
+    foldInverses({ apply: true });
+
+    const live = liveFor('svc_q');
+    assert.strictEqual(live.length, 1, `expected one row, got ${JSON.stringify(live)}`);
+    // The graph's existing spelling wins, as it does in consolidate.
+    assert.strictEqual(live[0].object, 'ux-labs pr #3865');
+    assert.strictEqual(live[0].valid_from, '2026-07-01');
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.

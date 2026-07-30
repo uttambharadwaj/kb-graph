@@ -4,15 +4,18 @@
 // position only. So the next mention of that relationship lands as a second live
 // row — the fold creates the very pair it exists to prevent until this has run.
 import { getDb } from '../db.js';
-import { canonicalTriple, inverseTargetOf } from '../extract.js';
+import { canonicalTriple, inverseTargetOf, sameEntity } from '../extract.js';
 
-// One identity for a row however it was spelled: canonicalTriple folds a
-// minority-direction predicate and resolves an aliased one, so a twin written
-// under an alias of the canonical predicate lands on the same key.
-const identityOf = row => {
-  const t = canonicalTriple({ subject: row.subject, predicate: row.predicate, object: row.object });
-  return `${t.subject}\0${t.predicate}\0${t.object}`;
-};
+// The triple as it will be stored: canonicalTriple folds a minority-direction
+// predicate and resolves an aliased one.
+const canonicalise = row =>
+  canonicalTriple({ subject: row.subject, predicate: row.predicate, object: row.object });
+
+// Rows sharing a subject and predicate, which is as far as an exact key can go.
+// consolidate matches its subject exactly and its object through sameEntity, so
+// the object comparison has to happen inside the bucket or this migration would
+// split a fact the writer treats as one.
+const bucketKey = t => `${t.subject}\0${t.predicate}`;
 
 export function foldInverses({ apply = false } = {}) {
   const db = getDb();
@@ -32,30 +35,38 @@ export function foldInverses({ apply = false } = {}) {
       'SELECT id, subject, predicate, object, valid_from, valid_to FROM facts ORDER BY valid_from',
     ).all();
 
-    // Rows already in the canonical direction, by identity. Comparing the stored
-    // predicate exactly would miss one written under an alias of the canonical
-    // spelling, and the duplicate that creates is permanent — neither row is a
-    // fold source afterwards, so a re-run cannot merge them.
-    const canonical = new Map();
+    // Every live row a fold could land on: those already canonical, plus the
+    // destinations this run is about to claim. Both belong in one structure —
+    // two configured sources can fold onto one predicate, and neither is
+    // canonical beforehand, so nothing but the claim would catch the second.
+    // Either way the duplicate would be permanent, since a folded row is no
+    // longer a fold source and a re-run could not find it.
+    const destinations = new Map();
+    const bucketOf = (t) => {
+      const k = bucketKey(t);
+      if (!destinations.has(k)) destinations.set(k, []);
+      return destinations.get(k);
+    };
     for (const row of rows) {
       if (row.valid_to !== null || inverseTargetOf(row.predicate)) continue;
-      canonical.set(identityOf(row), { id: row.id, valid_from: row.valid_from });
+      const t = canonicalise(row);
+      bucketOf(t).push({ id: row.id, valid_from: row.valid_from, object: t.object });
     }
 
-    // Two configured sources can fold onto one predicate, and neither is
-    // canonical yet, so neither is in the map above. Claiming the destination
-    // catches the second one, for the same permanence reason.
-    const claimed = new Map();
     const plan = [];
     for (const row of rows) {
       const predicate = inverseTargetOf(row.predicate);
       if (!predicate) continue;
-      const key = identityOf(row);
+      const t = canonicalise(row);
       // Retired rows are history, not competing assertions: they get the
       // direction rewritten but are never merged away, or the record of when
       // the relationship stopped being stated that way goes with them.
-      const twin = row.valid_to === null ? canonical.get(key) || claimed.get(key) : null;
-      if (row.valid_to === null && !twin) claimed.set(key, { id: row.id, valid_from: row.valid_from });
+      const twin = row.valid_to === null
+        ? bucketOf(t).find(c => sameEntity(c.object, t.object))
+        : null;
+      if (row.valid_to === null && !twin) {
+        bucketOf(t).push({ id: row.id, valid_from: row.valid_from, object: t.object });
+      }
       plan.push({ row, predicate, twin });
     }
 
