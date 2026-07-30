@@ -1,6 +1,31 @@
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
 
+// The score at or above which a note is a duplicate rather than a relative.
+// Lives here because both the write path and kb_check_duplicate must use this
+// one value: a check run at a different threshold than the write it precedes
+// returns a verdict about a question nobody asked.
+export const DUP_THRESHOLD = 0.85;
+
+/**
+ * The duplicate verdict, from an already-scored candidate list.
+ *
+ * Shared so that kb_check_duplicate and the write path cannot answer the same
+ * question differently. The write path needs its candidates for related-links
+ * as well, so it scores once and calls this — passing the list rather than the
+ * text is what keeps it to a single embedding pass.
+ */
+export function duplicatesIn(similar, threshold = DUP_THRESHOLD) {
+  return similar
+    .filter((s) => s.score >= threshold)
+    .map((s) => ({
+      document_id: s.document_id,
+      title: s.title,
+      tags: s.tags,
+      similarity: Math.round(s.score * 1000) / 1000,
+    }));
+}
+
 // Brute-force cosine similarity — works for <2000 notes.
 // If vault exceeds 2000 notes, consider sqlite-vss extension for ANN search.
 export async function semanticSearch(query, { limit = 10, project, type, includeSuperseded = false } = {}) {
@@ -74,16 +99,15 @@ export async function similarDocs(content, { limit = 10, includeSuperseded = fal
   return scored.slice(0, limit);
 }
 
-export async function checkDuplicate(content, { threshold = 0.85 } = {}) {
-  const matches = (await similarDocs(content, { limit: 50 }))
-    .filter(s => s.score >= threshold)
-    .map(s => ({
-      document_id: s.document_id,
-      title: s.title,
-      tags: s.tags,
-      similarity: Math.round(s.score * 1000) / 1000,
-    }));
-
+/**
+ * Whether `content` already exists in the KB.
+ *
+ * `content` must be the note body that will be written, because that is what
+ * the write path embeds — a summary of the note scores against a different
+ * point in the space and predicts nothing about the write that follows.
+ */
+export async function checkDuplicate(content, { threshold = DUP_THRESHOLD } = {}) {
+  const matches = duplicatesIn(await similarDocs(content, { limit: 50 }), threshold);
   return {
     is_duplicate: matches.length > 0,
     matches: matches.slice(0, 5),

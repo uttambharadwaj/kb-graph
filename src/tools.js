@@ -6,7 +6,7 @@ import { indexVaultFile } from './vault/indexer.js';
 import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
-import { hybridSearch, checkDuplicate } from './embeddings/search.js';
+import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { writeNote, relatedForDoc } from './write-note.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats } from './facts.js';
 import { kbExtract } from './extract.js';
@@ -47,7 +47,7 @@ function embeddingCount() {
 // of silently skipping — a silent skip reads as "no duplicates found".
 async function dedupOrExplain(content) {
   try {
-    const dup = await checkDuplicate(content, { threshold: 0.85 });
+    const dup = await checkDuplicate(content);
     if (dup.is_duplicate) return { duplicate: dup };
     return { note: '' };
   } catch (err) {
@@ -541,10 +541,10 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_check_duplicate',
-      description: 'Check if content already exists in the knowledge base before writing. Returns similar matches above the threshold. Call this before kb_write or kb_ingest to avoid duplicates.',
+      description: `Check whether content already exists in the knowledge base, using the same comparison kb_write will make. Pass the exact note body you are about to write: the write path embeds that body, so a summary or a title scores against different text and predicts nothing. Leave threshold unset to get the write's own verdict — a lower threshold reports notes kb_write will accept as merely related, and a higher one hides notes it will reject as duplicates.`,
       schema: {
-        content: z.string().describe('Content to check for duplicates'),
-        threshold: z.number().optional().default(0.85).describe('Similarity threshold 0-1 (default 0.85)'),
+        content: z.string().describe('The exact note body that will be passed to kb_write'),
+        threshold: z.number().optional().default(DUP_THRESHOLD).describe(`Similarity threshold 0-1. Defaults to ${DUP_THRESHOLD}, the value kb_write uses; change it only to explore, not to pre-check a write.`),
       },
       handler: async ({ content, threshold }) => {
         try {

@@ -3,12 +3,14 @@
 // human-triggered or automatic — enters the KB the same way, connected.
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
-import { similarDocs } from './embeddings/search.js';
+import { similarDocs, duplicatesIn, DUP_THRESHOLD } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { getVaultFile, getDb } from './db.js';
 import { splitTags } from './tags.js';
 
-export const DUP_THRESHOLD = 0.85;
+// Re-exported, not redeclared: kb_check_duplicate answers with this same value,
+// and a second copy is the drift that made the pre-check disagree with the write.
+export { DUP_THRESHOLD };
 export const RELATED_MIN = 0.55;
 export const RELATED_K = 3;
 
@@ -69,17 +71,9 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   // retires by design — exclude that target so it doesn't block the write.
   if (excludeId != null) similar = similar.filter(s => s.document_id !== excludeId);
 
-  const dups = similar.filter(s => s.score >= DUP_THRESHOLD);
+  const dups = duplicatesIn(similar);
   if (dups.length) {
-    return {
-      skipped: true,
-      reason: 'duplicate_detected',
-      matches: dups.slice(0, 5).map(s => ({
-        document_id: s.document_id,
-        title: s.title,
-        similarity: Math.round(s.score * 1000) / 1000,
-      })),
-    };
+    return { skipped: true, reason: 'duplicate_detected', matches: dups.slice(0, 5) };
   }
   const related = similar
     .filter(s => s.score >= RELATED_MIN && s.score < DUP_THRESHOLD)
