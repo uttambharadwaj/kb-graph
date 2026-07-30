@@ -45,7 +45,7 @@ async function harness({ isBusy = () => false } = {}) {
   watchers.push(
     restartOnSourceChange({
       isBusy,
-      exit: () => { exits += 1; },
+      onChange: () => { exits += 1; },
       dir,
       debounceMs: DEBOUNCE_MS,
       idlePollMs: IDLE_POLL_MS,

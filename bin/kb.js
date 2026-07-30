@@ -13,7 +13,7 @@ const args = process.argv.slice(3);
 const commands = {
   start:    () => import('../src/server.js').then(m => m.start()),
   stop:     () => import('../src/cli/stop.js').then(m => m.stop()),
-  mcp:      () => import('../src/mcp.js').then(m => m.start()),
+  mcp:      () => import('../src/mcp-supervisor.js').then(m => m.superviseMcpServer()),
   register: () => import('../src/cli/register.js').then(m => m.register(args)),
   ingest:   () => import('../src/cli/ingest-cli.js').then(m => m.ingest(args[0])),
   search:   () => import('../src/cli/search-cli.js').then(m => m.search(args.join(' '))),

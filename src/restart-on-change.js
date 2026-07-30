@@ -25,22 +25,21 @@ function parses(file) {
 }
 
 /**
- * Exit when the server's own source changes, so the next tool call gets a
- * process running the new code.
+ * Call `onChange` when the server's own source changes and nothing is in
+ * flight, so the running code can be replaced with what is on disk.
  *
  * A stdio MCP server serves the code it was spawned with, forever: Node caches
- * every module at import, so a fix reaches a running session only when someone
- * reconnects by hand. The client, though, respawns a dead stdio server
- * transparently on the next tool call. So exiting *is* the reload, and it picks
- * up renamed tools and changed schemas too, which swapping handlers in place
- * cannot.
+ * every module at import, so a fix reaches a running session only when the
+ * process holding it is replaced. Who does the replacing is the caller's
+ * business — mcp-supervisor.js swaps a child process underneath a connection it
+ * keeps open, while a server run directly exits and is reconnected by hand.
  *
- * Never exits mid-tool-call: `isBusy` gates it, and a pending restart waits.
+ * Never fires mid-tool-call: `isBusy` gates it, and a pending change waits.
  * Returns the watcher, or null where recursive watch is unavailable.
  */
 export function restartOnSourceChange({
   isBusy,
-  exit = () => process.exit(0),
+  onChange,
   dir = SRC_DIR,
   debounceMs = DEBOUNCE_MS,
   idlePollMs = IDLE_POLL_MS,
@@ -48,16 +47,16 @@ export function restartOnSourceChange({
   const changed = new Set();
   let timer = null;
 
-  const exitWhenIdle = () => {
-    if (!isBusy()) return exit();
-    timer = setTimeout(exitWhenIdle, idlePollMs);
+  const fireWhenIdle = () => {
+    if (!isBusy()) return onChange();
+    timer = setTimeout(fireWhenIdle, idlePollMs);
     timer.unref();
   };
 
   const settled = () => {
     const files = [...changed].map((f) => join(dir, f)).filter(existsSync);
     changed.clear();
-    if (files.every(parses)) exitWhenIdle();
+    if (files.every(parses)) fireWhenIdle();
   };
 
   try {

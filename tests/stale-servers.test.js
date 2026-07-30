@@ -8,9 +8,11 @@ const { staleServers, sourceMtime } = await import('../src/cli/stale-servers.js'
 
 const CUTOFF = Date.parse('Wed Jul 29 22:43:07 2026');
 const at = () => CUTOFF;
-const ps = (...lines) => ['  PID STARTED                          ARGS', ...lines].join('\n');
-const server = (pid, lstart, root = '/repo') =>
-  `${String(pid).padStart(5)} ${lstart} /opt/node/bin/node ${root}/bin/kb.js mcp`;
+const ps = (...lines) => ['  PID  PPID STARTED                          ARGS', ...lines].join('\n');
+const server = (pid, lstart, root = '/repo', ppid = 1) =>
+  `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${lstart} /opt/node/bin/node ${root}/bin/kb.js mcp`;
+const child = (pid, lstart, root = '/repo', ppid = 1) =>
+  `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${lstart} /opt/node/bin/node ${root}/src/mcp.js`;
 
 describe('staleServers', () => {
   it('reports a server started before the last source change', () => {
@@ -66,7 +68,7 @@ describe('staleServers', () => {
   // bus-notifier runs from the same bin/kb.js and is far more numerous than the
   // MCP servers; matching it would bury the processes that actually matter.
   it('does not match other kb.js subcommands', () => {
-    const line = '  2975 Sat Jul 25 22:45:32 2026 /opt/node/bin/node /repo/bin/kb.js bus-notifier --agent claude';
+    const line = '  2975     1 Sat Jul 25 22:45:32 2026 /opt/node/bin/node /repo/bin/kb.js bus-notifier --agent claude';
     assert.deepStrictEqual(staleServers(ps(line), at).stale, []);
   });
 
@@ -78,6 +80,33 @@ describe('staleServers', () => {
 
   it('ignores lines that are not processes', () => {
     assert.deepStrictEqual(staleServers("total garbage\n\n", at).stale, []);
+  });
+
+  // A supervisor never reloads itself, so its start time keeps receding past
+  // every future change. Judging it would report a session that is in fact
+  // serving current code, every single time, until the report meant nothing.
+  it('judges a supervisor through its child, not by its own start time', () => {
+    const { stale } = staleServers(ps(
+      server(500, 'Mon Jul  6 10:14:20 2026'),
+      child(501, 'Wed Jul 29 23:00:54 2026', '/repo', 500),
+    ), at);
+    assert.deepStrictEqual(stale, []);
+  });
+
+  it('reports a supervised child that is serving older code', () => {
+    const { stale } = staleServers(ps(
+      server(600, 'Mon Jul  6 10:14:20 2026'),
+      child(601, 'Mon Jul  6 10:14:21 2026', '/repo', 600),
+    ), at);
+    assert.deepStrictEqual(stale.map(s => s.pid), [601]);
+  });
+
+  // Until every session has reconnected once, plain `kb.js mcp` servers from
+  // before the supervisor shipped are still running — and they are the ones
+  // that will never notice a change on their own.
+  it('still reports a pre-supervisor server that has no child', () => {
+    const { stale } = staleServers(ps(server(700, 'Mon Jul  6 10:14:20 2026')), at);
+    assert.deepStrictEqual(stale.map(s => s.pid), [700]);
   });
 
   // predicates.json is read once at import, so a server predating a change to it
