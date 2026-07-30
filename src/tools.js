@@ -598,7 +598,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_extract',
-      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued (e.g. status "beta" -> "GA") — many-valued predicates like owns keep both. Assertions the extractor chose not to record come back in "skipped" with a reason. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
+      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued AND the subject names one state-bearing thing — a ticket or issue id (pf-2019 status "in_review" -> "done"). A repo, project or person accumulates instead, so "knowledge-base-server status X" never retires "status Y"; retire those by hand with kb_fact_invalidate. Cumulative predicates (owns, chose, shipped_via) always keep both. Assertions the extractor chose not to record come back in "skipped" with a reason. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
       schema: {
         text: z.string().describe('The conversation or session transcript to extract facts from'),
         source: z.string().optional().describe('Provenance for the facts (e.g. "debrief:2026-06-24", "session:<id>")'),
