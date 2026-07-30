@@ -11,13 +11,24 @@ const DAY_MS = 86400000;
 // rejects; collapsing runs of spaces is enough to make it a date it accepts.
 const parseStart = (lstart) => Date.parse(lstart.replace(/\s+/g, ' ').trim());
 
-/** Newest mtime under src/ — a server started before this is serving older code. */
+/**
+ * Newest mtime under src/ — a server started before this is serving older code.
+ * Walks by hand rather than with readdir's `recursive` option: that landed in
+ * Node 18.17 and is silently ignored before it, which would scan only the top
+ * level and report a genuinely stale server as current.
+ */
 export function sourceMtime(dir = SRC_DIR) {
   let newest = 0;
-  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile() || !SOURCE_FILE.test(entry.name)) continue;
-    newest = Math.max(newest, statSync(join(entry.parentPath ?? entry.path, entry.name)).mtimeMs);
-  }
+  const walk = (d) => {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && SOURCE_FILE.test(entry.name)) {
+        newest = Math.max(newest, statSync(full).mtimeMs);
+      }
+    }
+  };
+  walk(dir);
   return newest;
 }
 
