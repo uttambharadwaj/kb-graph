@@ -42,7 +42,7 @@ esac
 chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
-const { consolidate, kbExtract, chunkForExtract } = await import('../src/extract.js');
+const { consolidate, kbExtract, chunkForExtract, extractFacts, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
 const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity } = await import('../src/facts.js');
 
@@ -198,6 +198,24 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.invalidated.length, 0, 'an older observation must not retire the newer fact');
     assert.deepStrictEqual(currentObject('pf-9020', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
+  });
+
+  // Truncation is not a model decision, so nothing downstream reports it. An
+  // `added` list with no matching `skipped` entry claims the whole input was
+  // examined, which for anything over the window it was not.
+  it('reports input it never sent to the model', async () => {
+    const tail = 'THE_TAIL_FACT: svc-z depends_on svc-y.';
+    const res = await extractFacts('x'.repeat(MAX_EXTRACT_CHARS) + tail);
+
+    const truncation = res.skipped.find(s => s.reason?.startsWith('input_truncated'));
+    assert.ok(truncation, `no truncation entry in ${JSON.stringify(res.skipped)}`);
+    assert.match(truncation.reason, new RegExp(`${tail.length} of`), 'must say how much was dropped');
+    assert.match(truncation.assertion, /THE_TAIL_FACT/, 'and show the start of what was dropped');
+  });
+
+  it('says nothing about truncation when nothing was truncated', async () => {
+    const res = await extractFacts('svc-a depends_on svc-b.');
+    assert.deepStrictEqual(res.skipped.filter(s => s.reason?.startsWith('input_truncated')), []);
   });
 
   it('rejects an observed_at that is not a date rather than mis-ordering it', () => {

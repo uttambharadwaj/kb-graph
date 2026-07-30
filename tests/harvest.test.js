@@ -148,6 +148,40 @@ describe('harvest candidate selection', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // The lessons pass keeps the head and the tail of a long session and drops
+  // what is between — which on a long session is the work itself. A note count
+  // cannot show that, so the run has to.
+  it('reports the middle of a long session as unread', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const turn = text => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
+    writeFileSync(join(root, 'long.jsonl'), [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      turn('opening: '.repeat(800)),
+      turn('the middle, where the debugging happened. '.repeat(2000)),
+      turn('conclusion: '.repeat(2000)),
+    ].join('\n'));
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.sessions, 1);
+    assert.strictEqual(summary.partial, 1, 'a session whose middle was never sent is not fully read');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not call a session partial when all of it was read', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    writeFileSync(join(root, 'short-enough.jsonl'), [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a fine session. '.repeat(400) }] } }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.sessions, 1);
+    assert.strictEqual(summary.partial, 0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   // The heartbeat has to record that the job ran, not what it found. Derived
   // from harvested rows, a quiet weekend looked identical to a dead launchd
   // job — and skipping print-mode transcripts makes quiet runs the normal case.

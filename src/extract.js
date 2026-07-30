@@ -50,10 +50,15 @@ Example
 Input: "Production billing points at the sandbox provider, which is temporary and tracked by TICKET-42 for revert. Alice owns an 8-PR stack moving user identity onto the accounts row; all eight are still open."
 Output: {"facts":[{"subject":"production_billing","predicate":"deliberately_points_at","object":"sandbox_provider","category":"architecture"},{"subject":"ticket-42","predicate":"tracks_revert_of","object":"production_billing_sandbox_pointing","category":"status"},{"subject":"alice","predicate":"owns","object":"user_identity_pr_stack","category":"ownership"},{"subject":"user_identity","predicate":"migration_proposed_in","object":"user_identity_pr_stack","category":"decision"}],"skipped":[]}`;
 
+// One window, named once. extractFacts truncates to it and reports the
+// remainder; this second guard is the backstop for a caller that reaches
+// buildExtractPrompt directly, and must never be the first place text is lost.
+export const MAX_EXTRACT_CHARS = 12000;
+
 export function buildExtractPrompt(text) {
   // Task restated after the transcript so dialogue in the text can't lure the
   // model into replying to the conversation instead of extracting from it.
-  return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, 12000)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
+  return `${EXTRACT_PROMPT}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
 // The fan-out bounds the RESPONSE, and that is what makes it load-bearing.
@@ -107,7 +112,9 @@ export function chunkForExtract(text) {
 
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
-  const chunks = chunkForExtract(text.slice(0, 12000));
+  const examined = text.slice(0, MAX_EXTRACT_CHARS);
+  const dropped = text.length - examined.length;
+  const chunks = chunkForExtract(examined);
   const results = await Promise.all(chunks.map(async (chunk, i) => {
     try {
       // 120s: 60s was killing calls during slow API windows (observed
@@ -126,9 +133,18 @@ export async function extractFacts(text) {
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
     // this accounting exists to expose, so say the accounting is missing.
-    skipped: results.flatMap(r => (Array.isArray(r?.skipped)
-      ? r.skipped
-      : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
+    skipped: [
+      // Truncation is not a model decision, so nothing downstream would ever
+      // report it. Text nobody read is the same omission as a fact nobody
+      // emitted, and belongs in the same channel.
+      ...(dropped ? [{
+        assertion: text.slice(MAX_EXTRACT_CHARS, MAX_EXTRACT_CHARS + 120),
+        reason: `input_truncated: ${dropped.toLocaleString('en-US')} of ${text.length.toLocaleString('en-US')} characters not examined`,
+      }] : []),
+      ...results.flatMap(r => (Array.isArray(r?.skipped)
+        ? r.skipped
+        : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
+    ],
   };
 }
 
