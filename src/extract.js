@@ -132,25 +132,44 @@ export function chunkForExtract(text) {
   return chunks.length ? chunks : [text];
 }
 
+// 120s: 60s was killing calls during slow API windows (observed 2026-07-07,
+// exit 143). This is a deadline per chunk, not for the whole call, and the two
+// numbers being equal is why a timed-out chunk can never report in time: chunks
+// run concurrently, so a chunk reaching this deadline means the call has
+// already spent the same 120s an MCP client gives the whole tool, and it gets
+// backgrounded before the failure row reaches the caller.
+const CHUNK_TIMEOUT_MS = 120000;
+
+// A second attempt, as the lessons pass in harvest.js already does. It cannot
+// rescue the interactive contract — a retry only starts once the first attempt
+// has consumed the entire call budget, so the call is backgrounded either way.
+// It is for the facts: a chunk that dies takes everything it covered with it,
+// and short input is a single chunk, where that is the whole extraction.
+const CHUNK_ATTEMPTS = 2;
+
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
   const examined = text.slice(0, MAX_EXTRACT_CHARS);
   const dropped = text.length - examined.length;
   const chunks = chunkForExtract(examined);
   const results = await Promise.all(chunks.map(async (chunk, i) => {
-    try {
-      // 120s: 60s was killing calls during slow API windows (observed
-      // 2026-07-07, exit 143).
-      return await runClaudeJSON(
-        buildExtractPrompt(chunk, { before: chunks[i - 1] ?? '', after: chunks[i + 1] ?? '' }),
-        { timeout: 120000 },
-      );
-    } catch (err) {
-      // A dead chunk is input nobody looked at. Silently returning the other
-      // chunks' facts would report partial coverage as complete.
-      console.error(`kb_extract: chunk ${i + 1}/${chunks.length} failed: ${err.message}`);
-      return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `chunk_failed: ${err.message}` }] };
+    const prompt = buildExtractPrompt(chunk, { before: chunks[i - 1] ?? '', after: chunks[i + 1] ?? '' });
+    let failure;
+    for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
+      try {
+        // One result per chunk however many attempts it took: a failed attempt
+        // rejects without a value (runClaude drops stdout unless the exit was
+        // clean), so no partial output survives to be batched alongside the
+        // retry's and read as a single-valued conflict.
+        return await runClaudeJSON(prompt, { timeout: CHUNK_TIMEOUT_MS });
+      } catch (err) {
+        failure = err;
+        console.error(`kb_extract: chunk ${i + 1}/${chunks.length} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${err.message}`);
+      }
     }
+    // A dead chunk is input nobody looked at. Silently returning the other
+    // chunks' facts would report partial coverage as complete.
+    return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `chunk_failed: ${failure.message}` }] };
   }));
 
   return {
