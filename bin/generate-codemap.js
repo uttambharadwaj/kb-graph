@@ -126,7 +126,7 @@ md += `## Key Data Flows
 1. **Intake:** Obsidian clip → sync → vault → \`scanVault()\` → \`parseVaultNote()\` → \`upsertVaultFile()\` → SQLite
 2. **Classify:** \`processNewClippings()\` → \`classifyNote()\` (claude CLI) → update frontmatter → reindex
 3. **Search:** \`kb_context\` (summaries) → \`kb_search\` (FTS5) → \`kb_search_smart\` (FTS5 + embeddings)
-4. **Safety:** Hook intercepts Bash → pattern match → \`reviewDestructiveAction()\` → KB search → block/allow
+4. **Safety:** caller opts in (\`kb_safety_check\` tool or \`kb safety-check\`) → KB search → \`reviewDestructiveAction()\` → verdict; a reviewer that cannot answer blocks
 5. **Capture:** \`captureSession()\` / \`captureFix()\` → write to vault → \`indexVault()\` → searchable
 
 ## MCP Tools (${16} total)

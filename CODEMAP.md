@@ -3,8 +3,8 @@
 > Generated: 2026-07-31
 
 ## Quick Stats
-- **Files:** 127
-- **Total lines:** 17,260
+- **Files:** 129
+- **Total lines:** 17,486
 
 ## Architecture Overview
 ```
@@ -63,9 +63,9 @@ bin/
 |------|-------|---------|---------|
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
-| claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| claude-cli.js | 88 | modelEnv, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 610 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 604 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 627 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 254 | initFactSchema, sqlTimestamp, entityKey, mergeEntity, addFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
@@ -175,7 +175,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| review.js | 136 | reviewDestructiveAction, multiModelReview | Multi-model review: ask all 3, take the most conservative answer |
+| review.js | 95 | reviewDestructiveAction, multiModelReview | Safety gate for destructive actions — blocks when the reviewer cannot answer. |
 
 ## src/sync/
 
@@ -203,12 +203,12 @@ bin/
 | api-key.test.js | 57 | - | tests/api-key.test.js |
 | autobind.test.js | 185 | - | - |
 | bus.test.js | 1102 | - | - |
-| claude-cli.test.js | 39 | - | Fake claude binaries so these tests need no network and run in ms. |
+| claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
 | extract-context.test.js | 67 | - | - |
 | extract-eval.test.js | 192 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
-| extract.test.js | 790 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 834 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 278 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |
@@ -218,6 +218,7 @@ bin/
 | register.test.js | 60 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | runtime-node.test.js | 64 | - | - |
+| safety-review.test.js | 89 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | setup-env-preserve.test.js | 9 | - | - |
 | setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
 | setup-jobs.test.js | 87 | - | tests/setup-jobs.test.js |
@@ -235,6 +236,12 @@ bin/
 | vault-parser.test.js | 55 | - | Test Note |
 | write-correction.test.js | 82 | - | - |
 
+## tests/bench/
+
+| File | Lines | Exports | Purpose |
+|------|-------|---------|---------|
+| extract-call-cost.mjs | 75 | - | Where an extraction call spends its wall time, measured from the CLI's own |
+
 ## tests/helpers/
 
 | File | Lines | Exports | Purpose |
@@ -248,7 +255,7 @@ bin/
 1. **Intake:** Obsidian clip → sync → vault → `scanVault()` → `parseVaultNote()` → `upsertVaultFile()` → SQLite
 2. **Classify:** `processNewClippings()` → `classifyNote()` (claude CLI) → update frontmatter → reindex
 3. **Search:** `kb_context` (summaries) → `kb_search` (FTS5) → `kb_search_smart` (FTS5 + embeddings)
-4. **Safety:** Hook intercepts Bash → pattern match → `reviewDestructiveAction()` → KB search → block/allow
+4. **Safety:** caller opts in (`kb_safety_check` tool or `kb safety-check`) → KB search → `reviewDestructiveAction()` → verdict; a reviewer that cannot answer blocks
 5. **Capture:** `captureSession()` / `captureFix()` → write to vault → `indexVault()` → searchable
 
 ## MCP Tools (16 total)
