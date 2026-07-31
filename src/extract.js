@@ -90,8 +90,12 @@ export function buildExtractPrompt(text, { before = '', after = '' } = {}) {
 // optimisation and it does not work: each chunk re-sends the ~5.5k prompt, but
 // buying that back costs whole sessions.
 // Latency, measured on a 10-assertion paragraph (2026-07-29): 120.4s in one
-// call, 36-107s in four, 166.6s sequential. Per-call latency varies 10-75s for
-// same-size chunks — that part is the API, not this code.
+// call, 36-107s in four, 166.6s sequential.
+// The wide per-call spread on same-size chunks was read as API variance. It is
+// not: input is fixed at ~36,800 tokens per call while generated tokens swing
+// 1,821-10,163, and the wall time follows them. Almost all of that is thinking,
+// which claude-cli.js now caps — see the note on MAX_THINKING_TOKENS there
+// before reaching for chunk width again.
 const TARGET_CHUNK_CHARS = 250;
 const MAX_CONCURRENT_CALLS = 8; // each is a `claude` subprocess; long input widens chunks, not fan-out
 
