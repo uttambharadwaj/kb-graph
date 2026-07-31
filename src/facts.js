@@ -41,7 +41,9 @@ export function initFactSchema() {
 // same way, and the format lives here because this is where the column does.
 export const sqlTimestamp = (d = new Date()) => d.toISOString().replace('T', ' ').slice(0, 19);
 
-function entityId(name) {
+// Exported so callers keying anything by subject key it the way the rows do —
+// a second spelling of this collapse rule is a group that misses a collision.
+export function entityId(name) {
   return name.toLowerCase().replace(/\s+/g, '_').replace(/'/g, '');
 }
 

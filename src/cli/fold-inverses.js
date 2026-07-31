@@ -1,4 +1,6 @@
-// One-time (re-runnable) migration for rows written before inverse folding.
+// One-time (re-runnable) migration for rows written before direction folding —
+// both kinds: a mirrored predicate (blocks / blocked_by) and a work item stored
+// as the subject of implements.
 // consolidate() now stores one direction per relationship, but a row already in
 // the minority direction is invisible to its dedup, which looks at the subject
 // position only. So the next mention of that relationship lands as a second live
@@ -10,6 +12,13 @@ import { canonicalTriple, inverseTargetOf, sameEntity } from '../extract.js';
 // predicate and resolves an aliased one.
 const canonicalise = row =>
   canonicalTriple({ subject: row.subject, predicate: row.predicate, object: row.object });
+
+// A row is stored in the wrong direction when its predicate is a fold source, or
+// when canonicalisation moves its subject. The second clause is not implied by
+// the first: the role fold re-points a relationship whose predicate is already
+// canonical, so asking the predicate alone would walk straight past it.
+const isMisdirected = (row, canonical) =>
+  !!inverseTargetOf(row.predicate) || canonical.subject !== row.subject;
 
 // Rows sharing a subject and predicate, which is as far as an exact key can go.
 // consolidate matches its subject exactly and its object through sameEntity, so
@@ -58,16 +67,15 @@ export function foldInverses({ apply = false } = {}) {
       return destinations.get(k);
     };
     for (const row of rows) {
-      if (row.valid_to !== null || inverseTargetOf(row.predicate)) continue;
-      const t = canonicalise(row);
-      bucketOf(t).push({ id: row.id, valid_from: row.valid_from, object: t.object });
+      const canonical = canonicalise(row);
+      if (row.valid_to !== null || isMisdirected(row, canonical)) continue;
+      bucketOf(canonical).push({ id: row.id, valid_from: row.valid_from, object: canonical.object });
     }
 
     const plan = [];
     for (const row of rows) {
-      const predicate = inverseTargetOf(row.predicate);
-      if (!predicate) continue;
       const t = canonicalise(row);
+      if (!isMisdirected(row, t)) continue;
       // Retired rows are history, not competing assertions: they get the
       // direction rewritten but are never merged away, or the record of when
       // the relationship stopped being stated that way goes with them.
@@ -77,14 +85,19 @@ export function foldInverses({ apply = false } = {}) {
       if (row.valid_to === null && !twin) {
         bucketOf(t).push({ id: row.id, valid_from: row.valid_from, object: t.object });
       }
-      plan.push({ row, predicate, twin });
+      plan.push({ row, canonical: t, twin });
     }
 
     const merges = plan.filter(p => p.twin);
     const folds = plan.filter(p => !p.twin);
 
     if (write) {
-      for (const { row, predicate } of folds) swap.run(row.object, predicate, row.subject, row.id);
+      // From the canonical triple, not from a swap of the stored one: a row that
+      // folds twice — inverse then roles — lands back on its own subject with
+      // only the predicate rewritten, and a blind swap would undo that.
+      for (const { row, canonical } of folds) {
+        swap.run(canonical.subject, canonical.predicate, canonical.object, row.id);
+      }
       for (const { row, twin } of merges) {
         // Keep the earlier valid_from, so a merge never makes a fact look
         // younger. A null one is not missing — as-of queries read it as valid

@@ -10,7 +10,7 @@ import { join } from 'path';
 const tmp = mkdtempSync(join(tmpdir(), 'kb-extract-eval-'));
 process.env.KB_DIR = tmp;
 
-const { extractFacts, chunkForExtract } = await import('../src/extract.js');
+const { extractFacts, chunkForExtract, canonicalTriple } = await import('../src/extract.js');
 
 const mentions = (facts, token) =>
   facts.some(f => `${f.subject} ${f.predicate} ${f.object}`.toLowerCase().includes(token));
@@ -155,5 +155,36 @@ head-injection, which was fixed in commit b1d6832.`);
       mentions(facts, 'ticket-42') || facts.some(f => /deliberat|temporary|revert/.test(f.predicate.toLowerCase())),
       'dropped the qualifier that the chunk split put out of view',
     );
+  });
+
+  // Reproduced on the pre-fix prompt from this sentence: three "statuses" for
+  // one PR in production, two in a replay here. They are three variables —
+  // lifecycle, review, merge queue — flattened onto one predicate name, and
+  // consolidation reads them as competing values of one, so all but the last
+  // are retired the moment they are written.
+  it('does not flatten lifecycle, review and queue standing onto one status', async () => {
+    const { facts } = await extractFacts(
+      'PR #48 is still open and not merged; it is approved and in the merge queue.',
+    );
+    const statuses = facts.filter(f => f.predicate.toLowerCase() === 'status');
+    assert.ok(statuses.length <= 1, `${statuses.length} status rows for one PR: ${JSON.stringify(statuses)}`);
+    assert.ok(mentions(facts, 'approved'), 'dropped the review state instead of moving it off status');
+  });
+
+  // Observed in production on the ticket-in-parentheses shape below: the ticket
+  // landed in the subject of `implements`, which asserts that a ticket built
+  // something and leaves "what implements tkt-99" unanswered. Asserted on the
+  // canonical triple, since that is what reaches the graph — generation is not
+  // reproducible enough to gate on the raw emission, and the guard that has to
+  // hold is that no work item is ever stored as an implementer.
+  it('never stores a work item as the implementer', async () => {
+    const { facts } = await extractFacts(
+      'PR #48 (tkt-99, the threshold config client) merged to main on 2026-07-30 as squash commit 380c761.',
+    );
+    const inverted = facts.map(canonicalTriple).filter(f =>
+      /^(implements|addresses|fixes|closes|resolves)$/.test(f.predicate)
+      && /^tkt-\d+$/i.test(f.subject.trim()));
+    assert.deepStrictEqual(inverted, [], 'stored a ticket as the thing doing the implementing');
+    assert.ok(mentions(facts, 'tkt-99'), 'dropped the ticket the PR belongs to');
   });
 });
