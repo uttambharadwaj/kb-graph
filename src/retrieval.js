@@ -5,7 +5,18 @@
 // derivation can't drift between call sites.
 import { getDb } from './db.js';
 
-export const SURFACES = ['kb_read', 'kb_search', 'kb_context', 'briefing', 'hint'];
+// Named individually so the report's SQL can reference a surface instead of
+// restating the literal: a rename there would otherwise report zero rather
+// than fail, and zero is already the expected reading for other reasons.
+export const SURFACE = {
+  READ: 'kb_read',
+  SEARCH: 'kb_search',
+  CONTEXT: 'kb_context',
+  BRIEFING: 'briefing',
+  HINT: 'hint',
+};
+
+export const SURFACES = Object.values(SURFACE);
 
 // session_id from Claude Code's hook stdin JSON is the only *documented*
 // source — stable across every hook fired in one session. Stdio MCP

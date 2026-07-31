@@ -1,4 +1,5 @@
 import { getDb } from '../db.js';
+import { SURFACE } from '../retrieval.js';
 
 function pct(n, total) {
   return total > 0 ? `${((n / total) * 100).toFixed(1)}%` : 'n/a';
@@ -55,11 +56,11 @@ export function retrievalReport(db = getDb()) {
       COUNT(*) AS hints_emitted,
       SUM(CASE WHEN EXISTS (
         SELECT 1 FROM retrievals r2
-        WHERE r2.surface = 'kb_read' AND r2.doc_id = h.doc_id
+        WHERE r2.surface = '${SURFACE.READ}' AND r2.doc_id = h.doc_id
           AND r2.session = h.session AND r2.created_at > h.created_at
       ) THEN 1 ELSE 0 END) AS followed
     FROM retrievals h
-    WHERE h.surface = 'hint'
+    WHERE h.surface = '${SURFACE.HINT}'
   `).get();
 
   const missRate = db.prepare(`
@@ -81,7 +82,8 @@ export function runRetrievalReportCli() {
 
   console.log('\nBy doc_type:');
   for (const t of byType) {
-    console.log(`  ${t.doc_type.padEnd(12)} ${String(t.retrieved).padStart(4)}/${String(t.total).padEnd(4)} (${pct(t.retrieved, t.total)})`);
+    // doc_type is nullable in the schema, so a row can group under NULL.
+    console.log(`  ${(t.doc_type ?? '(none)').padEnd(12)} ${String(t.retrieved).padStart(4)}/${String(t.total).padEnd(4)} (${pct(t.retrieved, t.total)})`);
   }
 
   const retrievedWithin30d = freshness.retrieved_within_30d || 0;
