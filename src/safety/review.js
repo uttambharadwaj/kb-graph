@@ -1,39 +1,15 @@
-import { spawn } from 'child_process';
+// Safety gate for destructive actions — blocks when the reviewer cannot answer.
 import { searchDocuments } from '../db.js';
-import { modelEnv } from '../claude-cli.js';
+import { runClaudeJSON } from '../claude-cli.js';
 
-const CLAUDE_PATH = process.env.CLAUDE_PATH || 'claude';
+const REVIEW_MODEL = 'claude-haiku-4-5-20251001';
+const REVIEW_MODELS = [REVIEW_MODEL];
 
-function runModel(model, prompt) {
-  return new Promise((resolve) => {
-    const proc = spawn(CLAUDE_PATH, [
-      '-p', '--model', model,
-      '--output-format', 'json',
-      '--max-turns', '1',
-    ], {
-      // This path needs the thinking ceiling more than the extractor does: an
-      // overrun resolves as a missing verdict rather than an error, so a
-      // reviewer that deliberates too long fails open and quietly.
-      env: modelEnv(),
-      timeout: 30000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    proc.stdout.on('data', d => { stdout += d; });
-    proc.on('close', code => {
-      try {
-        const response = JSON.parse(stdout);
-        resolve({ model, verdict: response.result || 'no response', error: null });
-      } catch {
-        resolve({ model, verdict: null, error: `exit ${code}` });
-      }
-    });
-    proc.on('error', err => resolve({ model, verdict: null, error: err.message }));
-    proc.stdin.write(prompt);
-    proc.stdin.end();
-  });
-}
+// Shorter than the extractor's: a human is waiting on this before a destructive
+// action. The generated-token spread that walks extraction calls past their
+// deadline applies here too, so an overrun is an expected outcome rather than an
+// exceptional one, and has to read as a block.
+const REVIEW_TIMEOUT_MS = Number(process.env.KB_REVIEW_TIMEOUT_MS) || 30000;
 
 const REVIEW_PROMPT = `You are a safety reviewer for a VPS operations team. A destructive action is about to be taken.
 
@@ -55,48 +31,26 @@ Rules:
 - Any git force push to main = MEDIUM
 - Routine container restarts, rebuilds = LOW`;
 
-export async function reviewDestructiveAction(action, context = '') {
-  // Search KB for relevant past incidents
+// A reviewer that could not answer is not a reviewer that approved. The reason
+// is carried through verbatim so an operator can tell a timeout from a crash.
+const noVerdict = (model, reason) => ({
+  safe: false,
+  risk_level: 'unknown',
+  concerns: [`Safety review did not complete: ${reason}`],
+  recommendation: 'manual review needed',
+  reasoning: reason,
+  model,
+});
+
+function gatherKbContext(action) {
   const kbResults = searchDocuments(action.slice(0, 100), 5);
   const kbContext = kbResults
     .map(r => `[${r.doc_type}] ${r.title}: ${r.snippet?.replace(/<\/?mark>/g, '').slice(0, 150)}`)
     .join('\n');
-
-  const fullPrompt = `${REVIEW_PROMPT}
-
-ACTION: ${action}
-
-${context ? `ADDITIONAL CONTEXT: ${context}` : ''}
-
-KB SEARCH RESULTS (past incidents/lessons):
-${kbContext || 'No relevant past incidents found.'}`;
-
-  // Run through Claude Haiku (fast, cheap)
-  const result = await runModel('claude-haiku-4-5-20251001', fullPrompt);
-
-  let parsed;
-  try {
-    const jsonStr = result.verdict?.replace(/^```json?\n?/, '').replace(/\n?```$/, '').trim();
-    parsed = JSON.parse(jsonStr);
-  } catch {
-    parsed = { safe: false, risk_level: 'unknown', concerns: ['Could not parse review'], recommendation: 'manual review needed', reasoning: result.verdict || result.error };
-  }
-
-  return {
-    ...parsed,
-    model: result.model,
-    kb_matches: kbResults.length,
-  };
+  return { kbResults, kbContext };
 }
 
-// Multi-model review: ask all 3, take the most conservative answer
-export async function multiModelReview(action, context = '') {
-  const kbResults = searchDocuments(action.slice(0, 100), 5);
-  const kbContext = kbResults
-    .map(r => `[${r.doc_type}] ${r.title}: ${r.snippet?.replace(/<\/?mark>/g, '').slice(0, 150)}`)
-    .join('\n');
-
-  const fullPrompt = `${REVIEW_PROMPT}
+const buildPrompt = (action, context, kbContext) => `${REVIEW_PROMPT}
 
 ACTION: ${action}
 
@@ -105,34 +59,35 @@ ${context ? `ADDITIONAL CONTEXT: ${context}` : ''}
 KB SEARCH RESULTS (past incidents/lessons):
 ${kbContext || 'No relevant past incidents found.'}`;
 
-  // Fan out to all 3 models simultaneously
-  const models = [
-    'claude-haiku-4-5-20251001',
-    // Codex and Gemini would go here when available via CLI
-    // For now, run Haiku twice with different temperature seeds as a proxy
-  ];
+async function askModel(model, prompt) {
+  try {
+    return { ...await runClaudeJSON(prompt, { model, timeout: REVIEW_TIMEOUT_MS }), model };
+  } catch (err) {
+    return noVerdict(model, err.message);
+  }
+}
 
-  const reviews = await Promise.all(models.map(m => runModel(m, fullPrompt)));
+export async function reviewDestructiveAction(action, context = '') {
+  const { kbResults, kbContext } = gatherKbContext(action);
+  const verdict = await askModel(REVIEW_MODEL, buildPrompt(action, context, kbContext));
+  return { ...verdict, kb_matches: kbResults.length };
+}
 
-  const parsed = reviews.map(r => {
-    try {
-      const jsonStr = r.verdict?.replace(/^```json?\n?/, '').replace(/\n?```$/, '').trim();
-      return { ...JSON.parse(jsonStr), model: r.model };
-    } catch {
-      return { safe: false, risk_level: 'unknown', model: r.model, concerns: ['Parse error'], recommendation: 'manual review' };
-    }
-  });
+// Multi-model review: ask all of them, take the most conservative answer.
+export async function multiModelReview(action, context = '') {
+  const { kbResults, kbContext } = gatherKbContext(action);
+  const prompt = buildPrompt(action, context, kbContext);
+  const reviews = await Promise.all(REVIEW_MODELS.map(m => askModel(m, prompt)));
 
-  // Most conservative wins: if ANY model says unsafe, it's unsafe
-  const anySaysUnsafe = parsed.some(p => !p.safe);
+  const anySaysUnsafe = reviews.some(r => !r.safe);
   const highestRisk = ['critical', 'high', 'medium', 'low'].find(
-    level => parsed.some(p => p.risk_level === level)
+    level => reviews.some(r => r.risk_level === level)
   ) || 'unknown';
 
   return {
     safe: !anySaysUnsafe,
     risk_level: highestRisk,
-    reviews: parsed,
+    reviews,
     kb_matches: kbResults.length,
     consensus: anySaysUnsafe ? 'BLOCKED — at least one model flagged this as unsafe' : 'APPROVED — all models agree this is safe',
   };
