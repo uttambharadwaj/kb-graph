@@ -7,6 +7,22 @@ import { spawn } from 'child_process';
 const CLAUDE_PATH = process.env.CLAUDE_PATH || 'claude';
 const DEFAULT_MODEL = process.env.CLASSIFY_MODEL || 'claude-haiku-4-5-20251001';
 
+// A ceiling, not a target. Wall time on these calls is generated tokens, and
+// the adaptive budget spends 1,821 of them on one call and 10,163 on the next
+// for identical input — that tail is what walks a chunk past its timeout and
+// drops its facts. Never set this to 0: the deliberation is what applies the
+// past-tense rule, and without it the extractor dates dead states as current
+// (4 stale facts per run, 3 of 3 runs).
+const THINKING_BUDGET = process.env.MAX_THINKING_TOKENS || '4096';
+
+// The environment every model subprocess here runs under, shared so a second
+// caller cannot quietly opt out of the ceiling.
+export const modelEnv = () => ({
+  ...process.env,
+  CLAUDE_CODE_ENTRYPOINT: 'cli',
+  MAX_THINKING_TOKENS: THINKING_BUDGET,
+});
+
 export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
@@ -22,7 +38,7 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = 
       // the call to its full timeout (observed 2026-07-29, a SessionEnd hook).
       '--settings', '{"hooks":{}}',
     ], {
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
+      env: modelEnv(),
       timeout,
       stdio: ['pipe', 'pipe', 'pipe'],
     });

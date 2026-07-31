@@ -27,7 +27,27 @@ prompt=$(cat)
 echo x >> "$KB_DIR/calls"   # so tests can assert how many times the model was asked
 case "$prompt" in
   *DEAD_CHUNK*) exit 3 ;;
-  *"preview me"*) echo '{"result": "{\"facts\": [{\"subject\": \"pr #777\", \"predicate\": \"merged_via\", \"object\": \"commit abc1234\"}], \"skipped\": []}"}' ;;
+  # Fails once per test run, then succeeds — a chunk that dies transiently.
+  *FLAKY_CHUNK*)
+    if [ -f "$KB_DIR/flaked" ]; then
+      echo '${envelope({ facts: [{ subject: 'pr #999', predicate: 'merged_via', object: 'commit bee5678' }], skipped: [] })}'
+    else
+      touch "$KB_DIR/flaked"; exit 3
+    fi ;;
+  # Writes a full, valid response and THEN dies, so a retry that kept the
+  # failed attempt's output would batch two objects for one single-valued edge.
+  *PARTIAL_THEN_OK*)
+    if [ -f "$KB_DIR/partialed" ]; then
+      echo '${envelope({ facts: [{ subject: 'pr #1001', predicate: 'status', object: 'merged' }], skipped: [] })}'
+    else
+      touch "$KB_DIR/partialed"
+      echo '${envelope({ facts: [{ subject: 'pr #1001', predicate: 'status', object: 'open' }], skipped: [] })}'
+      exit 3
+    fi ;;
+  *"preview me"*) echo '${envelope({
+    facts: [{ subject: 'pr #777', predicate: 'merged_via', object: 'commit abc1234' }],
+    skipped: [],
+  })}' ;;
   *"alias me"*) echo '${envelope({
     facts: [{ subject: 'pr #888', predicate: 'merged_as', object: 'commit def5678' }],
     skipped: [],
@@ -495,6 +515,9 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(preview.dry_run, true);
     assert.strictEqual(committed.from_preview, true, 'commit re-ran the extractor');
     assert.strictEqual(callCount() - before, 1, 'model was called twice for one preview+commit');
+    // Without this the comparison below holds for two empty lists, which is
+    // what a stub returning unparseable JSON silently produces.
+    assert.ok(preview.candidates.length > 0, 'stub returned no candidates to compare');
     assert.deepStrictEqual(
       committed.added.map(f => `${f.subject}|${f.predicate}|${f.object}`),
       preview.candidates.map(f => `${f.subject}|${f.predicate}|${f.object}`),
@@ -527,6 +550,27 @@ describe('kb_extract consolidation', () => {
     assert.ok(chunks.length > 1, 'handed the whole window to one call');
     assert.ok(chunks.length <= 8, `${chunks.length} chunks is more than the fan-out allows`);
     assert.strictEqual(chunks.join(''), 'x'.repeat(12000), 'dropped or duplicated text');
+  });
+
+  // A chunk that dies takes every fact it covered with it, and short input is a
+  // single chunk — so one transient failure is the whole extraction.
+  it('retries a chunk that fails once rather than losing its facts', async () => {
+    const before = callCount();
+    const { facts, skipped } = await extractFacts('FLAKY_CHUNK');
+
+    assert.strictEqual(callCount() - before, 2, 'did not make a second attempt');
+    assert.deepStrictEqual(skipped, [], 'reported a recovered chunk as skipped');
+    assert.deepStrictEqual(facts.map(f => f.subject), ['pr #999']);
+  });
+
+  // The retry and the intra-call conflict check were written independently, and
+  // a retry that kept a dead attempt's output would feed the conflict check two
+  // objects for one single-valued edge — a disagreement the model never had.
+  it('does not batch a failed attempt output with its retry', async () => {
+    const res = await kbExtract('PARTIAL_THEN_OK', { source: 'test', observationDate: '2026-07-31' });
+
+    assert.deepStrictEqual(res.conflicts, [], 'a retry manufactured a single-valued conflict');
+    assert.deepStrictEqual(res.added.map(f => f.object), ['merged'], 'kept the dead attempt output');
   });
 
   it('reports a dead chunk instead of returning the survivors as complete', async () => {

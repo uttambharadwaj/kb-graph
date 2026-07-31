@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { searchDocuments } from '../db.js';
+import { modelEnv } from '../claude-cli.js';
 
 const CLAUDE_PATH = process.env.CLAUDE_PATH || 'claude';
 
@@ -10,7 +11,10 @@ function runModel(model, prompt) {
       '--output-format', 'json',
       '--max-turns', '1',
     ], {
-      env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'cli' },
+      // This path needs the thinking ceiling more than the extractor does: an
+      // overrun resolves as a missing verdict rather than an error, so a
+      // reviewer that deliberates too long fails open and quietly.
+      env: modelEnv(),
       timeout: 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
