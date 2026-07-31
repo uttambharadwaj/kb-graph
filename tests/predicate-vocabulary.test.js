@@ -77,6 +77,14 @@ describe('predicate vocabulary canonicalization', () => {
       ['web-app', 'deploy-to', 'production'],
     ]);
 
+    // A doubled consonant before -ed: ship keeps one p, shipped has two, and a
+    // rule that strips only the -ed leaves them in different families.
+    convergesOn('a verb that doubles its consonant before -ed', [
+      ['tkt-99', 'shipped_via', 'commit 380c761'],
+      ['tkt-99', 'ships_via', 'commit 380c761'],
+      ['tkt-99', 'ship_via', 'commit 380c761'],
+    ]);
+
     // Both spellings sit on one entity pair in a real graph.
     convergesOn('an apostrophe the extractor sometimes types and sometimes not', [
       ['my-app', "doesn't_send", 'profile_id'],
@@ -216,6 +224,18 @@ describe('predicate vocabulary canonicalization', () => {
           `edge('a', 'benchmarks-against', 'b')`,
         ),
         'a -[benchmarked_against]-> b',
+      );
+    });
+
+    // A verb whose -s and -ed forms both turn a consonant + y into -ies / -ied.
+    // No built-in predicate is one, so only an install reaches these rules.
+    it('folds a -y verb the install added, in either inflection', () => {
+      assert.deepStrictEqual(
+        inOverrideInstall(
+          { preferred: ['verified_on'] },
+          `[edge('a', 'verifies_on', 'b'), edge('a', 'verify_on', 'b'), edge('a', 'verified_on', 'b')]`,
+        ),
+        ['a -[verified_on]-> b', 'a -[verified_on]-> b', 'a -[verified_on]-> b'],
       );
     });
   });

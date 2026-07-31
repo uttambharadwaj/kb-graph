@@ -219,14 +219,12 @@ export async function extractFacts(text) {
 // though the reverse does not hold — consolidate hands addFact the canonical
 // predicate and hands invalidateFact the raw stored one, which is the only pair
 // of directions that has to line up.
-//
-// Everything below the first line is spelling variance that carries no meaning,
-// and folding it needs no list: an unseen phrasing converges the same way a
-// known one does. That matters because the extractor re-picks a spelling on
-// every call — one run says source_of_truth_for and the next is_source_of_truth_for
-// — and each spelling is a separate edge that kb_fact_query under-returns from
-// and that cardinality-based retirement can never supersede.
-const COPULA = /^(?:is|are|was|were|be|been|being)_(?=.)/;
+// The rest is spelling variance that carries no meaning, so folding it needs no
+// list and an unseen phrasing converges like a known one: the extractor writes
+// source_of_truth_for on one call and is_source_of_truth_for on the next.
+// Trailing underscores are already gone when this runs, so it can never empty
+// the predicate — it needs one after the copula.
+const COPULA = /^(?:is|are|was|were|be|been|being)_/;
 const rawPred = p => p.toLowerCase()
   .replace(/['’]/g, '')
   .replace(/[\s-]+/g, '_')
@@ -311,22 +309,18 @@ const PREDICATE_ALIASES = Object.fromEntries(withoutChains(
 // extractor picks among them per call. Trailing tokens are left alone because
 // they are not verbs and their plurals are meaning — calls_over_https is not
 // calls_over_http.
-const IRREGULAR = Object.assign(Object.create(null), {
-  has: 'have', had: 'have', is: 'be', was: 'be', are: 'be', were: 'be',
-});
 function stem(token) {
   const base = inflectionOf(token);
   // The suffix rules disagree about the silent e — merges loses only the s while
   // merged loses the whole ed — so drop a trailing e from every stem and let
   // them meet. This is a grouping key, never a stored predicate, so merg is as
-  // good a key as merge.
+  // good a key as merge, and it is what makes a separate -es rule unnecessary:
+  // fixes -> fixe -> fix reaches the same place.
   return base.replace(/e$/, '');
 }
 function inflectionOf(token) {
-  if (Object.hasOwn(IRREGULAR, token)) return IRREGULAR[token];
   if (/(?:ss|us|is)$/.test(token)) return token;              // status, focus — not a plural
   if (/[^aeiou]ies$/.test(token)) return `${token.slice(0, -3)}y`;
-  if (/(?:ch|sh|s|x|z)es$/.test(token)) return token.slice(0, -2);
   if (/[a-z]s$/.test(token)) return token.slice(0, -1);
   if (/[^aeiou]ied$/.test(token)) return `${token.slice(0, -3)}y`;
   if (/([^aeiou])\1ed$/.test(token)) return token.slice(0, -3);  // shipped -> ship
