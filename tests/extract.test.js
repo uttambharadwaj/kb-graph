@@ -653,6 +653,24 @@ describe('kb_extract consolidation', () => {
       assert.strictEqual(res.conflicts.length, 1);
     });
 
+    it('reads two objects an entity merge has folded together as one value', () => {
+      // The store holds one row for them, so reporting a conflict would send the
+      // caller after a contradiction that does not exist.
+      addFact('tkt-4850', 'status', 'shipped_v1', { validFrom: '2026-07-01', source: 'seed' });
+      mergeEntity('shipped_v1', 'released_v1');
+
+      const res = consolidate([
+        { subject: 'tkt-4850', predicate: 'status', object: 'shipped_v1' },
+        { subject: 'tkt-4850', predicate: 'status', object: 'released_v1' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.conflicts, []);
+      assert.deepStrictEqual(res.added, []);
+      // and it is reported as the re-spelling it is, not as a byte-identical repeat
+      assert.ok(res.skipped.some(s => s.reason === 'equivalent_spelling_of_existing'),
+        `expected a re-spelling skip, got ${JSON.stringify(res.skipped.map(s => s.reason))}`);
+    });
+
     it('still loses to a fact recorded after the text it is replaying', () => {
       // Suppressing the retirement must not also suppress the staleness guard:
       // old text stays old whether or not the batch carrying it agreed with
@@ -727,10 +745,23 @@ describe('kb_extract consolidation', () => {
 
     it('leaves a relationship between two work items alone', () => {
       assert.deepStrictEqual(
-        roles(canonicalTriple({ subject: 'tkt-4821', predicate: 'fixes', object: 'tkt-4900' })),
-        ['tkt-4821', 'fixes', 'tkt-4900'],
+        roles(canonicalTriple({ subject: 'tkt-4821', predicate: 'implements', object: 'tkt-4900' })),
+        ['tkt-4821', 'implements', 'tkt-4900'],
       );
     });
+
+    // The rule is about who can BUILD, not about who can be named first. A work
+    // item cannot build code, so it cannot be the subject of implements — but it
+    // targets problems all day, and reading those as reversed turns "this ticket
+    // fixes the version skew" into "the version skew fixes this ticket".
+    for (const predicate of ['fixes', 'addresses', 'closes', 'resolves']) {
+      it(`leaves a work item as the subject of ${predicate}`, () => {
+        assert.deepStrictEqual(
+          roles(canonicalTriple({ subject: 'tkt-4821', predicate, object: 'version_skew' })),
+          ['tkt-4821', predicate, 'version_skew'],
+        );
+      });
+    }
 
     it('leaves a work item that carries a label after it in the object', () => {
       // Still a relationship between two work items, so still no way to tell

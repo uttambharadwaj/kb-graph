@@ -181,9 +181,10 @@ head-injection, which was fixed in commit b1d6832.`);
     const { facts } = await extractFacts(
       'PR #48 (tkt-99, the threshold config client) merged to main on 2026-07-30 as squash commit 380c761.',
     );
+    // implements only: a work item cannot build code, but it can target a
+    // problem, so it is a legitimate subject of fixes/addresses/closes.
     const inverted = facts.map(canonicalTriple).filter(f =>
-      /^(implements|addresses|fixes|closes|resolves)$/.test(f.predicate)
-      && /^tkt-\d+$/i.test(f.subject.trim()));
+      f.predicate === 'implements' && /^tkt-\d+$/i.test(f.subject.trim()));
     assert.deepStrictEqual(inverted, [], 'stored a ticket as the thing doing the implementing');
     assert.ok(mentions(facts, 'tkt-99'), 'dropped the ticket the PR belongs to');
   });

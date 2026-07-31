@@ -33,9 +33,9 @@ Rules:
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: points_at, configured_to, depends_on — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixed_in, status, uses, calls_over_http. Invent one only when none of them says it.
+- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixes, status, uses, calls_over_http. Invent one only when none of them says it.
 - A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
-- A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). The same order holds for addresses, fixes, closes and resolves. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
+- A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
 - status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
@@ -360,6 +360,12 @@ export function splitListObject(fact) {
 // since folded together.
 const conflictKey = f => `${entityKey(f.subject)}\0${f.predicate}`;
 
+// One value, however it is spelled: a variant carrying the same reference, or a
+// name an entity merge has since folded onto another. The store keeps one row
+// for either, so a comparison that splits them retires a row in favour of
+// itself and reports a contradiction that does not exist.
+const sameValue = (a, b) => sameEntity(a, b) || entityKey(a) === entityKey(b);
+
 /**
  * The (subject, predicate) pairs this one batch gives two or more objects for,
  * where a new object retires the old one.
@@ -384,9 +390,7 @@ function findSingleValuedConflicts(facts) {
     if (!retiresOnContradiction(f)) continue;
     const key = conflictKey(f);
     const group = groups.get(key) || { subject: f.subject, predicate: f.predicate, objects: [] };
-    // Two spellings of one value are one value: "web-app pr #48" and "pr #48"
-    // would otherwise read as a contradiction the caller cannot act on.
-    if (!group.objects.some(o => sameEntity(o, f.object))) group.objects.push(f.object);
+    if (!group.objects.some(o => sameValue(o, f.object))) group.objects.push(f.object);
     groups.set(key, group);
   }
   return [...groups.values()]
@@ -451,7 +455,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // the value is also held — kb_fact_add writes without consolidating, so both
     // can coexist.
     const contradicted = retiresOnContradiction(f)
-      ? held.filter(r => !sameEntity(r.object, object))
+      ? held.filter(r => !sameValue(r.object, object))
       : [];
 
     // An assertion observed before a fact we already hold is older news, not a
@@ -513,7 +517,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // held is predicate-normalised; addFact is not — it looks up the canonical
     // edge only, so a row written under a pre-alias spelling is invisible to it
     // and the same fact lands twice, once per spelling. Catch both here.
-    const existing = held.find(r => sameEntity(r.object, object));
+    const existing = held.find(r => sameValue(r.object, object));
     if (existing) {
       const sameSpelling = normEntity(existing.object) === normEntity(object);
       skipped.push({
