@@ -27,6 +27,16 @@ export function getBusResourceLimit() {
   return readInt('KB_BUS_RESOURCE_LIMIT', 50);
 }
 
+export function getBusNotifierIntervalMs() {
+  return readInt('KB_BUS_NOTIFIER_INTERVAL_MS', 1000);
+}
+
+// 15 minutes of an unchanging digest. Safe to exit that early because hooks
+// re-launch a notifier and refresh the digest on the very next prompt.
+export function getBusNotifierIdleMs() {
+  return readInt('KB_BUS_NOTIFIER_IDLE_MS', 900000);
+}
+
 const DEFAULT_TICKET_RE = /pf-(\d+)/i;
 let ticketRegexWarned = false;
 

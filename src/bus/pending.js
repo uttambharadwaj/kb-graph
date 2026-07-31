@@ -73,3 +73,10 @@ export function writeBusNotifierPid({ agent, cwd, pid }) {
 export function clearBusNotifierPid({ agent, cwd }) {
   rmSync(getBusNotifierPidPath({ agent, cwd }), { force: true });
 }
+
+// Only the recorded owner may clear the claim; a superseded notifier must not deregister its successor.
+export function releaseBusNotifierPid({ agent, cwd, pid }) {
+  if (readBusNotifierPid({ agent, cwd }) !== Number(pid)) return false;
+  clearBusNotifierPid({ agent, cwd });
+  return true;
+}

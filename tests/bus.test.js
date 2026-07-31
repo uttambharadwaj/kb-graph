@@ -1,15 +1,15 @@
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { createHash } from 'crypto';
 import { closeBusDb } from '../src/bus/db.js';
 import { listBusRuns, registerBusAgent, runBusAgentDaemonOnce } from '../src/bus/agentd.js';
 import { listBusSessions, registerBusSession, runBusGatewayOnce } from '../src/bus/gateway.js';
-import { readBusPending } from '../src/bus/pending.js';
+import { getBusNotifierPidPath, readBusNotifierPid, readBusPending } from '../src/bus/pending.js';
 import {
   formatBusNotificationDigest,
   onBusMessage,
@@ -37,6 +37,8 @@ afterEach(() => {
   delete process.env.KB_BUS_HOME;
   delete process.env.KB_BUS_DB_PATH;
   delete process.env.KB_BUS_RETENTION_MESSAGES;
+  delete process.env.KB_BUS_NOTIFIER_IDLE_MS;
+  delete process.env.KB_BUS_NOTIFIER_INTERVAL_MS;
   delete process.env.BUS_AGENT_TEST_OUT;
   while (tempDirs.length) rmSync(tempDirs.pop(), { recursive: true, force: true });
 });
@@ -1097,5 +1099,176 @@ describe('bus notification digest', () => {
     assert.match(digest, /#9 codex:implementer \(artifact\) — "first"/);
     assert.match(digest, /…and 1 more/);
     assert.match(digest, /Run bus_read ws:ticket-42 --reader claude:architect to consume\./);
+  });
+});
+
+describe('bus notifier lifecycle', () => {
+  const spawnedPids = [];
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function isAlive(pid) {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function waitUntil(predicate, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return true;
+      await sleep(25);
+    }
+    return predicate();
+  }
+
+  function makeWorkspace(home, name) {
+    const dir = join(home, 'workspaces', name);
+    mkdirSync(dir, { recursive: true });
+    return realpathSync(dir);
+  }
+
+  async function bindWorkspace(home, dir, channel) {
+    await execFileAsync('node', [
+      join(process.cwd(), 'bin/bus-bind.js'), channel, '--reader', 'claude:architect', '--agent', 'claude',
+    ], { cwd: dir, env: { ...process.env, KB_BUS_HOME: home } });
+  }
+
+  function serveNotifier({ home, cwd, intervalMs = 100, idleMs = 30000 }) {
+    const child = spawn('node', [
+      'bin/bus-notifier.js', '--agent', 'claude', '--cwd', cwd, '--interval-ms', String(intervalMs), '--serve',
+    ], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, KB_BUS_HOME: home, KB_BUS_NOTIFIER_IDLE_MS: String(idleMs) },
+    });
+    child.unref();
+    spawnedPids.push(child.pid);
+    return child.pid;
+  }
+
+  async function daemonizeNotifier({ home, cwd, intervalMs = 100, idleMs = 30000 }) {
+    const { stdout } = await execFileAsync('node', [
+      'bin/bus-notifier.js', '--agent', 'claude', '--cwd', cwd, '--interval-ms', String(intervalMs), '--daemonize',
+    ], {
+      cwd: process.cwd(),
+      env: { ...process.env, KB_BUS_HOME: home, KB_BUS_NOTIFIER_IDLE_MS: String(idleMs) },
+    });
+    const result = JSON.parse(stdout);
+    if (result.pid) spawnedPids.push(result.pid);
+    return result;
+  }
+
+  afterEach(async () => {
+    while (spawnedPids.length) {
+      const pid = spawnedPids.pop();
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+    await sleep(50);
+  });
+
+  it('supersedes an older notifier so one workspace keeps at most one', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'supersede');
+    await bindWorkspace(home, workspace, 'ws:notifier-supersede');
+
+    const first = serveNotifier({ home, cwd: workspace });
+    assert.ok(await waitUntil(() => readBusNotifierPid({ agent: 'claude', cwd: workspace }) === first));
+
+    const second = serveNotifier({ home, cwd: workspace });
+    assert.ok(await waitUntil(() => !isAlive(first)), 'older notifier should exit once superseded');
+    assert.strictEqual(isAlive(second), true);
+    assert.strictEqual(readBusNotifierPid({ agent: 'claude', cwd: workspace }), second);
+  });
+
+  it('bounds concurrent daemonize invocations to a single live notifier', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'race');
+    await bindWorkspace(home, workspace, 'ws:notifier-race');
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => daemonizeNotifier({ home, cwd: workspace }))
+    );
+    const pids = [...new Set(results.map(result => result.pid).filter(Boolean))];
+    assert.ok(pids.length > 0);
+
+    assert.ok(
+      await waitUntil(() => pids.filter(isAlive).length <= 1),
+      `expected at most one live notifier, saw ${pids.filter(isAlive).length}`
+    );
+  });
+
+  it('exits once it has been idle past its deadline', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'idle');
+    await bindWorkspace(home, workspace, 'ws:notifier-idle');
+
+    const pid = serveNotifier({ home, cwd: workspace, intervalMs: 50, idleMs: 250 });
+    assert.ok(await waitUntil(() => !isAlive(pid)), 'idle notifier should exit on its own');
+    assert.strictEqual(readBusNotifierPid({ agent: 'claude', cwd: workspace }), null);
+  });
+
+  it('refuses to daemonize a workspace with no binding', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'unbound');
+
+    const result = await daemonizeNotifier({ home, cwd: workspace });
+    assert.strictEqual(result.started, false);
+    assert.strictEqual(result.reason, 'no-binding');
+    assert.strictEqual(result.pid, null);
+    assert.strictEqual(existsSync(getBusNotifierPidPath({ agent: 'claude', cwd: workspace })), false);
+  });
+
+  it('exits when its workspace binding moves to a nearer directory', async () => {
+    const home = makeBusHome();
+    const parent = makeWorkspace(home, 'rebind');
+    const child = makeWorkspace(home, join('rebind', 'nested'));
+    await bindWorkspace(home, parent, 'ws:notifier-rebind');
+
+    const pid = serveNotifier({ home, cwd: child });
+    assert.ok(await waitUntil(() => readBusNotifierPid({ agent: 'claude', cwd: parent }) === pid));
+
+    await bindWorkspace(home, child, 'ws:notifier-rebind-nested');
+    assert.ok(await waitUntil(() => !isAlive(pid)), 'notifier should exit when its scope no longer applies');
+  });
+
+  it('exits when its workspace directory is deleted', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'deleted');
+    await bindWorkspace(home, workspace, 'ws:notifier-deleted');
+
+    const pid = serveNotifier({ home, cwd: workspace });
+    assert.ok(await waitUntil(() => readBusNotifierPid({ agent: 'claude', cwd: workspace }) === pid));
+
+    rmSync(workspace, { recursive: true, force: true });
+    assert.ok(await waitUntil(() => !isAlive(pid)), 'notifier should exit when its workspace is gone');
+  });
+
+  it('keeps the pending digest current even when no daemon is resident', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'refresh');
+    await bindWorkspace(home, workspace, 'ws:notifier-refresh');
+
+    sendBusMessage({
+      channel: 'ws:notifier-refresh',
+      sender: 'codex:implementer',
+      kind: 'question',
+      message: 'refreshed by the hook itself',
+      recipient: 'claude:architect',
+    });
+
+    const result = await daemonizeNotifier({ home, cwd: workspace });
+    assert.strictEqual(result.started, true);
+
+    const pending = readBusPending({ agent: 'claude', cwd: workspace });
+    assert.match(pending.digest, /refreshed by the hook itself/);
   });
 });
