@@ -375,7 +375,7 @@ const conflictKey = f => `${entityId(f.subject)}\0${f.predicate}`;
  * duplicate is visible on the next query and repairable; a wrong retirement is
  * neither.
  */
-export function findSingleValuedConflicts(facts) {
+function findSingleValuedConflicts(facts) {
   const groups = new Map();
   for (const raw of facts.flatMap(splitListObject)) {
     if (!raw?.subject || !raw?.predicate || !raw?.object) continue;
