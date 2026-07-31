@@ -219,6 +219,7 @@ kb search <query>      Search from the terminal
 kb classify            Auto-classify unprocessed vault notes
 kb summarize           Generate summaries for unsummarized notes
 kb entity-merge        Merge two entity aliases in the fact store
+kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
 ```

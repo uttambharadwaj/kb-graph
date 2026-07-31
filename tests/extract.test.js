@@ -71,7 +71,8 @@ process.env.CLAUDE_PATH = fakeClaude;
 
 const { consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
-const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity } = await import('../src/facts.js');
+const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity, entityKey } = await import('../src/facts.js');
+const { getDb } = await import('../src/db.js');
 
 const currentObject = (subject, predicate) =>
   queryFact(subject, { direction: 'outgoing' })
@@ -266,11 +267,14 @@ describe('kb_extract consolidation', () => {
   });
 
   it('refuses when any live row of the triple would invert, not just the first', () => {
-    // mergeEntity collapses two entities into one triple, leaving several live
-    // rows; the UPDATE hits all of them, so the latest start decides.
-    addFact('pf-9012', 'status', 'label-alpha', { validFrom: '2026-07-01', source: 'seed' });
-    addFact('pf-9012', 'status', 'label-beta', { validFrom: '2026-07-29', source: 'seed' });
-    mergeEntity('label-alpha', 'label-beta');
+    // Several live rows on one triple, written straight to the table because no
+    // writer produces that state any more — addFact refuses it and a merge now
+    // collapses it. Rows from before that are still on disk, and the UPDATE
+    // below hits all of them, so the latest start decides.
+    addFact('pf-9012', 'status', 'label-beta', { validFrom: '2026-07-01', source: 'seed' });
+    getDb().prepare(
+      'INSERT INTO facts (id, subject, predicate, object, valid_from, source) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run('f_pf-9012_status_label-beta_dup', entityKey('pf-9012'), 'status', entityKey('label-beta'), '2026-07-29', 'seed');
 
     const res = invalidateFact('pf-9012', 'status', 'label-beta', { ended: '2026-07-15' });
 

@@ -8,7 +8,7 @@ import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { writeNote, relatedForDoc } from './write-note.js';
-import { addFact, queryFact, invalidateFact, factTimeline, factStats } from './facts.js';
+import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
 import { getRecentNotes, generateSynthesisPrompt } from './synthesis/weekly-review.js';
 import { processNewClippings } from './classify/processor.js';
@@ -91,6 +91,9 @@ const FACT_PAGE_MAX = 200;
 // the last row is undroppable — so bound the fields and the row is bounded too.
 // Longest name in the live graph is 260, so this clips nothing today.
 const FACT_FIELD_MAX_CHARS = 500;
+// Enough near-identical ids to show the caller the shape of what is missing
+// without the disclosure itself eating the page it is warning about.
+const FACT_NEAR_MAX = 5;
 
 // A truncated page has to be the useful half: what is true now, most recent
 // first. Retired rows sort last so they are what a small limit drops.
@@ -696,7 +699,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_fact_query',
-      description: 'Query the knowledge graph for an entity\'s relationships. Returns typed facts with temporal validity. Optionally filter by date to see what was true at a point in time.',
+      description: 'Query the knowledge graph for an entity\'s relationships. Returns typed facts with temporal validity. Optionally filter by date to see what was true at a point in time. The entity name is canonicalized before lookup — case and separators (space, hyphen, underscore, dot, slash) are interchangeable, so "auth service" and "auth-service" are one node. Spellings a separator fold cannot reach come back in "other_spellings" with their fact counts: the answer is partial whenever that field is present, and those ids have to be queried separately or merged with "kb entity-merge".',
       schema: {
         entity: z.string().describe('Entity to query (e.g. "my-app", "auth-service", "browser profiles")'),
         as_of: z.string().optional().describe('Date filter — only facts valid at this date (YYYY-MM-DD)'),
@@ -710,6 +713,11 @@ export function getToolDefinitions() {
           // calls that too, and a truncated view there would silently miss a
           // held fact and write a duplicate instead of matching it.
           const all = queryFact(entity, { asOf: as_of, direction }).sort(compareFactsForDisplay);
+          // Canonicalisation folds separator and case variants, but not every
+          // spelling of one concept is a separator apart. What is left is a
+          // complete-looking answer holding a fraction of what is stored, which
+          // the caller cannot tell from a whole one — so name the rest.
+          const near = nearbyEntities(entity);
           // Default here as well as in the schema: a non-numeric limit would make
           // slice() return an empty page, and "no facts" is indistinguishable
           // from "this entity has none" to whoever asked.
@@ -729,6 +737,12 @@ export function getToolDefinitions() {
             }));
             const body = { entity, as_of, facts, count: facts.length, total: all.length };
             if (clipped) body.clipped = `${clipped} field(s) exceeded ${FACT_FIELD_MAX_CHARS} chars and were shortened`;
+            if (near.length) {
+              const shownNear = near.slice(0, FACT_NEAR_MAX).map(n => `${n.id} (${n.facts})`).join(', ');
+              const rest = near.length > FACT_NEAR_MAX ? `, and ${near.length - FACT_NEAR_MAX} more` : '';
+              const missing = near.reduce((sum, e) => sum + e.facts, 0);
+              body.other_spellings = `${missing} fact(s) sit under ${near.length} near-identical id(s) and are NOT in this answer: ${shownNear}${rest} — query one by name, or fold it in with "kb entity-merge <from> <to>"`;
+            }
             // Never let a truncated page read as the whole story.
             if (facts.length < all.length) {
               body.truncated = `showing ${facts.length} of ${all.length} — narrow with as_of/direction, or raise limit (max ${FACT_PAGE_MAX}, subject to a response-size cap)`;

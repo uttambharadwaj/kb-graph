@@ -9,8 +9,9 @@ export function initFactSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Alias -> canonical entity id. Extraction mints freeform ids; aliases
-    -- fold renames (old-name -> new-name) and spelling variants into one node.
+    -- Alias -> canonical entity id, for what spelling alone cannot fold:
+    -- renames (old-name -> new-name) and synonyms. Separator and case variants
+    -- need no row here — canonicalEntityId collapses those on the way in.
     CREATE TABLE IF NOT EXISTS entity_aliases (
       alias TEXT PRIMARY KEY,
       canonical TEXT NOT NULL
@@ -41,22 +42,92 @@ export function initFactSchema() {
 // same way, and the format lives here because this is where the column does.
 export const sqlTimestamp = (d = new Date()) => d.toISOString().replace('T', ' ').slice(0, 19);
 
-function entityId(name) {
-  return name.toLowerCase().replace(/\s+/g, '_').replace(/'/g, '');
+// The separators an identifier can be spelled with, all of them carrying the
+// same nothing: "auth-service", "auth_service", "auth service",
+// "gateway.py", "v2/contracts/list". Folding them is what stops a second
+// spelling of one concept minting a sibling entity no query for the first will
+// ever see. Nothing else folds — '#', '+' and non-ASCII carry meaning ("c#" is
+// not "c"), and merging two entities that are genuinely different corrupts the
+// graph in a way leaving one split does not.
+const SEPARATORS = /[\s_./-]+/g;
+
+export function canonicalEntityId(name) {
+  const bare = name.toLowerCase().replace(/'/g, '');
+  const folded = bare.replace(SEPARATORS, '_').replace(/^_+|_+$/g, '');
+  // A name that is nothing but separators ("..", "-") folds to the empty
+  // string, which would put every one of them on a single node. Keep it whole:
+  // an under-merge is recoverable and a wrong merge is not.
+  return folded || bare.trim();
 }
 
 // Resolve an entity id through the alias table (single hop — merges rewrite
-// old facts, so chains never form).
+// old facts, so chains never form). The stored target is re-canonicalized
+// because an alias recorded before the separator fold points at a spelling that
+// is no longer where the facts live.
 function resolveEntity(eid) {
   const row = getDb().prepare('SELECT canonical FROM entity_aliases WHERE alias = ?').get(eid);
-  return row ? row.canonical : eid;
+  return row ? canonicalEntityId(row.canonical) : eid;
 }
 
 // The row identity of a name: spelling collapsed, then merges followed. Every
 // read and write here goes through it, and so must anything outside that groups
 // by subject — a second spelling of this rule is a group that misses a
 // collision, and following only half of it misses the merged half.
-export const entityKey = name => resolveEntity(entityId(name));
+export const entityKey = name => resolveEntity(canonicalEntityId(name));
+
+// One aggressive fold past canonical: punctuation dropped outright, a regular
+// plural ignored. Not safe to merge on — it maps "c#" onto "c" and "profile"
+// onto "profiles", which are sometimes different things — but it is what a
+// caller means by "the same thing", so a query that cannot reach those ids has
+// to name them instead of returning a clean-looking subset. Irregular plurals
+// ("index"/"indexes") go unreported, which is the safe direction for a hint.
+const looseKey = eid => eid.toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/s$/, '');
+
+// The entities a query for `entityName` does not reach but the caller probably
+// meant. Excludes the qualifier ids queryFact's prefix match already covers, and
+// entities holding no facts, which are nothing to miss.
+export function nearbyEntities(entityName) {
+  const db = getDb();
+  const eid = entityKey(entityName);
+  const target = looseKey(eid);
+  if (!target) return [];
+
+  // Every id, because no SQL predicate expresses the loose key and a second
+  // spelling of it in a WHERE clause is the drift this change exists to stop.
+  // Plucked: on a graph of this size the ids alone are a few milliseconds and
+  // the rows around them are not.
+  const detail = db.prepare('SELECT name, (SELECT COUNT(*) FROM facts WHERE subject = e.id OR object = e.id) AS facts FROM entities e WHERE id = ?');
+  const out = [];
+  for (const id of db.prepare('SELECT id FROM entities').pluck().all()) {
+    if (id === eid || id.startsWith(`${eid}_`) || looseKey(id) !== target) continue;
+    const row = detail.get(id);
+    if (row.facts > 0) out.push({ id, name: row.name, facts: row.facts });
+  }
+  return out.sort((a, b) => b.facts - a.facts || a.id.localeCompare(b.id));
+}
+
+// Live rows that name one triple more than once. addFact refuses to write that
+// pair, so only a merge can produce it, and leaving it puts state in the graph
+// no writer could have created. Scoped to one entity where a merge names the
+// node it just collapsed onto; unscoped for a back-fill that moved many.
+// The earliest row survives whole, so its source never parts from its date —
+// NULL sorts first here, matching queryFact's as-of test.
+export function dedupeLiveFacts(entityId = null) {
+  const db = getDb();
+  const scope = entityId ? 'AND (subject = ? OR object = ?)' : '';
+  const rows = db.prepare(
+    `SELECT id, subject, predicate, object FROM facts WHERE valid_to IS NULL ${scope} ORDER BY valid_from`
+  ).all(...(entityId ? [entityId, entityId] : []));
+
+  const drop = db.prepare('DELETE FROM facts WHERE id = ?');
+  const kept = new Set();
+  let collapsed = 0;
+  for (const row of rows) {
+    const key = `${row.subject}\0${row.predicate}\0${row.object}`;
+    if (kept.has(key)) { drop.run(row.id); collapsed += 1; } else kept.add(key);
+  }
+  return collapsed;
+}
 
 // Merge entity `from` into `to`: rewrite all facts, record the alias so
 // future writes and queries using the old name land on the canonical node.
@@ -66,15 +137,19 @@ export function mergeEntity(fromName, toName) {
   const to = entityKey(toName);
   if (from === to) return { merged: false, reason: 'same entity' };
 
-  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(to, toName);
-  const subs = db.prepare('UPDATE facts SET subject = ? WHERE subject = ?').run(to, from).changes;
-  const objs = db.prepare('UPDATE facts SET object = ? WHERE object = ?').run(to, from).changes;
-  db.prepare('INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)').run(from, to);
-  // Repoint any aliases that targeted the old id, then drop its entity row.
-  db.prepare('UPDATE entity_aliases SET canonical = ? WHERE canonical = ?').run(to, from);
-  db.prepare('DELETE FROM entities WHERE id = ?').run(from);
+  // One transaction: a half-applied merge leaves facts pointing at an entity
+  // row that is already gone, and the DB is shared with every live server.
+  return db.transaction(() => {
+    db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(to, toName);
+    const subs = db.prepare('UPDATE facts SET subject = ? WHERE subject = ?').run(to, from).changes;
+    const objs = db.prepare('UPDATE facts SET object = ? WHERE object = ?').run(to, from).changes;
+    db.prepare('INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)').run(from, to);
+    // Repoint any aliases that targeted the old id, then drop its entity row.
+    db.prepare('UPDATE entity_aliases SET canonical = ? WHERE canonical = ?').run(to, from);
+    db.prepare('DELETE FROM entities WHERE id = ?').run(from);
 
-  return { merged: true, from, to, facts_rewritten: subs + objs };
+    return { merged: true, from, to, facts_rewritten: subs + objs, duplicates_collapsed: dedupeLiveFacts(to) };
+  })();
 }
 
 export function addFact(subject, predicate, object, { validFrom, source } = {}) {
@@ -186,9 +261,9 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   // row would be neither current nor historical — it would just vanish.
   // Refuses rather than throws: the caller is consolidate, iterating a batch,
   // where an exception would abandon every fact queued behind this one.
-  // MAX, not an arbitrary row: mergeEntity can collapse two entities into one
-  // triple with several live rows, and the UPDATE below hits all of them. The
-  // latest start is the one that decides whether any interval would invert.
+  // MAX, not an arbitrary row: a graph written before merges collapsed their
+  // duplicates can hold several live rows for one triple, and the UPDATE below
+  // hits all of them. The latest start decides whether any interval inverts.
   const row = db.prepare(
     'SELECT MAX(valid_from) AS valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
   ).get(subId, pred, objId);
