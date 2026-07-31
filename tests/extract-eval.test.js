@@ -10,7 +10,7 @@ import { join } from 'path';
 const tmp = mkdtempSync(join(tmpdir(), 'kb-extract-eval-'));
 process.env.KB_DIR = tmp;
 
-const { extractFacts } = await import('../src/extract.js');
+const { extractFacts, chunkForExtract } = await import('../src/extract.js');
 
 const mentions = (facts, token) =>
   facts.some(f => `${f.subject} ${f.predicate} ${f.object}`.toLowerCase().includes(token));
@@ -128,5 +128,32 @@ head-injection, which was fixed in commit b1d6832.`);
     const stale = facts.filter(f => /0\.7|three.modules/i.test(`${f.subject} ${f.predicate} ${f.object}`));
     assert.deepStrictEqual(stale, [], 'dated the pre-fix configuration today');
     assert.ok(mentions(facts, '22') || mentions(facts, 'dup_threshold'), 'dropped the change itself');
+  });
+
+  // The chunking ticket's own case: a claim and the very next sentence that
+  // qualifies it, split onto either side of a chunk boundary by unrelated
+  // preceding text. Measured on this exact input: 1/1 dropped the qualifier
+  // before neighbours were passed as context (skipped as "pronoun with no
+  // antecedent" — the qualifying sentence never saw what "This" referred to),
+  // 1/1 recovered it after.
+  it('recovers a qualifier split from its claim by a chunk boundary', async () => {
+    const text = 'The team spent the morning triaging billing alerts after a spike in webhook retries. '
+      + 'Most of the retries turned out to be a benign side effect of a provider maintenance window. '
+      + 'Production Metronome configuration points at sandbox Metronome. '
+      + 'This is temporary and tracked by TICKET-42 for revert.';
+    const chunks = chunkForExtract(text);
+    assert.notStrictEqual(
+      chunks.findIndex(c => c.includes('This is temporary')),
+      chunks.findIndex(c => c.includes('Production Metronome configuration')),
+      'fixture no longer splits the claim from its qualifier onto different chunks — re-pad it',
+    );
+
+    const { facts } = await extractFacts(text);
+    const judged = facts.filter(f => /misconfigur|broken|violat|wrong|incorrect|bad_/.test(f.predicate.toLowerCase()));
+    assert.deepStrictEqual(judged, [], 'asserted a defect the source called deliberate');
+    assert.ok(
+      mentions(facts, 'ticket-42') || facts.some(f => /deliberat|temporary|revert/.test(f.predicate.toLowerCase())),
+      'dropped the qualifier that the chunk split put out of view',
+    );
   });
 });
