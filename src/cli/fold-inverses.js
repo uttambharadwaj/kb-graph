@@ -1,24 +1,28 @@
-// One-time (re-runnable) migration for rows written before direction folding —
-// both kinds: a mirrored predicate (blocks / blocked_by) and a work item stored
-// as the subject of implements.
-// consolidate() now stores one direction per relationship, but a row already in
-// the minority direction is invisible to its dedup, which looks at the subject
-// position only. So the next mention of that relationship lands as a second live
-// row — the fold creates the very pair it exists to prevent until this has run.
+// One-time (re-runnable) migration for rows stored under a spelling
+// canonicalisation has since moved: a mirrored predicate (blocks / blocked_by),
+// a work item stored as the subject of implements, a synonym or an inflection
+// (merged_into / merged_to, deploys_to / deployed_to).
+// consolidate() now stores one triple per relationship, but a row on any older
+// spelling is invisible to its dedup, which matches subject and canonical
+// predicate. So the next mention of that relationship lands as a second live
+// row — canonicalisation creates the very pair it exists to prevent until this
+// has run. That makes the migration part of the change, not a follow-up to it.
 import { getDb } from '../db.js';
-import { canonicalTriple, inverseTargetOf, sameEntity } from '../extract.js';
+import { canonicalTriple, sameEntity } from '../extract.js';
 
 // The triple as it will be stored: canonicalTriple folds a minority-direction
 // predicate and resolves an aliased one.
 const canonicalise = row =>
   canonicalTriple({ subject: row.subject, predicate: row.predicate, object: row.object });
 
-// A row is stored in the wrong direction when its predicate is a fold source, or
-// when canonicalisation moves its subject. The second clause is not implied by
-// the first: the role fold re-points a relationship whose predicate is already
-// canonical, so asking the predicate alone would walk straight past it.
-const isMisdirected = (row, canonical) =>
-  !!inverseTargetOf(row.predicate) || canonical.subject !== row.subject;
+// A row is stale when canonicalisation would store it differently — in the other
+// direction, or under another predicate. Asking canonicalTriple rather than the
+// inverse map is what makes the second case visible: an alias or an inflection
+// leaves the subject where it is and only rewrites the predicate, so a check
+// built from inverseTargetOf walks straight past every synonym fold and
+// back-fills none of them.
+const needsFold = (row, canonical) =>
+  canonical.subject !== row.subject || canonical.predicate !== row.predicate;
 
 // Rows sharing a subject and predicate, which is as far as an exact key can go.
 // consolidate matches its subject exactly and its object through sameEntity, so
@@ -68,14 +72,14 @@ export function foldInverses({ apply = false } = {}) {
     };
     for (const row of rows) {
       const canonical = canonicalise(row);
-      if (row.valid_to !== null || isMisdirected(row, canonical)) continue;
+      if (row.valid_to !== null || needsFold(row, canonical)) continue;
       bucketOf(canonical).push({ id: row.id, valid_from: row.valid_from, object: canonical.object });
     }
 
     const plan = [];
     for (const row of rows) {
       const t = canonicalise(row);
-      if (!isMisdirected(row, t)) continue;
+      if (!needsFold(row, t)) continue;
       // Retired rows are history, not competing assertions: they get the
       // direction rewritten but are never merged away, or the record of when
       // the relationship stopped being stated that way goes with them.
@@ -114,7 +118,7 @@ export function foldInverses({ apply = false } = {}) {
 
   const { folded, merged } = run(apply);
   const verb = apply ? ['Folded', 'merged'] : ['Would fold', 'would merge'];
-  console.log(`${verb[0]} ${folded} rows onto the canonical direction; ${verb[1]} ${merged} into a row that already holds the relationship.`);
+  console.log(`${verb[0]} ${folded} rows onto the canonical triple; ${verb[1]} ${merged} into a row that already holds the relationship.`);
   if (!apply) console.log('Dry run. Pass --apply to write.');
   return { folded, merged };
 }

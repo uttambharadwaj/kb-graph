@@ -10,6 +10,28 @@ import { KB_DIR } from './paths.js';
 // The facts table already gives us dedup (addFact) and temporal invalidation, which is
 // exactly mem0's consolidation step — so v1 targets triples, not prose notes.
 
+// The predicate registry, read at the top of the file rather than beside the
+// maps it feeds: the prompt below renders its vocabulary from it, and a module
+// const cannot be used before it is initialised.
+const readJSON = path => {
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (err) {
+    // A missing override file is the normal case; a malformed one would otherwise
+    // disable an install's cardinality config with no signal at all.
+    if (err.code !== 'ENOENT') console.error(`kb_extract: ignoring unreadable ${path}: ${err.message}`);
+    return null;
+  }
+};
+const builtin = readJSON(new URL('./predicates.json', import.meta.url));
+const override = readJSON(join(KB_DIR, 'predicates.json'));
+
+// The vocabulary the prompt asks for. predicates.json owns the names — spelling
+// them again here would let the list the model is given drift from the list the
+// canonicaliser folds onto, which is the fragmentation this whole file exists to
+// stop.
+const PREFERRED = [...(builtin?.preferred || []), ...(override?.preferred || [])];
+
 export const EXTRACT_PROMPT = `You are a Memory Extractor for an engineering knowledge base. Read a work conversation or session transcript and extract durable facts as subject-predicate-object triples for a temporal knowledge graph.
 
 Return ONLY valid JSON (no markdown fencing):
@@ -33,7 +55,7 @@ Rules:
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: points_at, configured_to, depends_on — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixes, status, uses, calls_over_http. Invent one only when none of them says it.
+- Prefer these predicates when one fits, so the same relationship is always the same edge: ${PREFERRED.join(', ')}. Invent one only when none of them says it, and when you do, use the plainest verb for it — a second spelling of a relationship already on this list is a second edge nothing will ever join.
 - A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
 - A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
@@ -192,13 +214,29 @@ export async function extractFacts(text) {
   };
 }
 
-// Mirror facts.js's predicate normalization so contradiction matching lines up,
-// then fold synonyms onto one canonical predicate. kb_fact_query matches on the
-// predicate, so the same relationship arriving as child_of one day and
-// child_ticket_of the next builds synonym silos that every query under-returns
-// from — silently, since the answer still looks well formed.
-const rawPred = p => p.toLowerCase().replace(/\s+/g, '_');
-const normPred = p => PREDICATE_ALIASES[rawPred(p)] || rawPred(p);
+// A superset of facts.js's predicate normalization (lowercase, whitespace to
+// underscore), so a stored row always matches the spelling computed here even
+// though the reverse does not hold — consolidate hands addFact the canonical
+// predicate and hands invalidateFact the raw stored one, which is the only pair
+// of directions that has to line up.
+// The rest is spelling variance that carries no meaning, so folding it needs no
+// list and an unseen phrasing converges like a known one: the extractor writes
+// source_of_truth_for on one call and is_source_of_truth_for on the next.
+// Trailing underscores are already gone when this runs, so it can never empty
+// the predicate — it needs one after the copula.
+const COPULA = /^(?:is|are|was|were|be|been|being)_/;
+const rawPred = p => p.toLowerCase()
+  .replace(/['’]/g, '')
+  .replace(/[\s-]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .replace(COPULA, '');
+
+// Then the two list-driven folds, cheapest first: an exact synonym, else an
+// inflection of a name predicates.json registers.
+const normPred = (p) => {
+  const raw = rawPred(p);
+  return lookup(PREDICATE_ALIASES, raw) ?? lookup(CANONICAL_BY_LEMMA, lemmaKey(raw)) ?? raw;
+};
 const normEntity = s => s.toLowerCase().trim().replace(/\s+/g, ' ');
 
 // The reference an entity string carries, if any: "#3865", a ticket id, a commit
@@ -221,23 +259,6 @@ export function sameEntity(a, b) {
   return !!ref && ref === referenceOf(y) && (x.endsWith(y) || y.endsWith(x));
 }
 
-// Only single-valued predicates auto-retire a prior object. Many-valued ones
-// (owns, blocked_by, depends_on) say nothing about their siblings, and a wrong
-// retirement is silent and unrecoverable where a duplicate is merely visible —
-// so unknown predicates default to many-valued.
-const readJSON = path => {
-  try {
-    return JSON.parse(readFileSync(path, 'utf-8'));
-  } catch (err) {
-    // A missing override file is the normal case; a malformed one would otherwise
-    // disable an install's cardinality config with no signal at all.
-    if (err.code !== 'ENOENT') console.error(`kb_extract: ignoring unreadable ${path}: ${err.message}`);
-    return null;
-  }
-};
-const builtin = readJSON(new URL('./predicates.json', import.meta.url));
-const override = readJSON(join(KB_DIR, 'predicates.json'));
-
 // A configured entity-shape pattern, named so an install that supplies a bad
 // one is told which key was dropped.
 const compilePattern = (key, pattern) => {
@@ -256,15 +277,108 @@ const configuredPattern = key => compilePattern(key, override?.[key])
   ?? compilePattern(key, builtin?.[key])
   ?? /^$/;
 
-// Defined before the first normPred() call below — it reads this map.
-const PREDICATE_ALIASES = Object.fromEntries(
+// Own keys only. These maps are keyed by whatever the extractor emitted, and a
+// plain object answers `toString` and `constructor` with a function — which
+// normPred would then return in place of the predicate.
+const lookup = (map, key) => (Object.hasOwn(map, key) ? map[key] : undefined);
+
+// A fold whose target is itself folded never converges: canonicalTriple would
+// need a second pass to finish, and the migration would rewrite the same rows on
+// every run. Both a cycle (a -> b -> a) and a chain (a -> b -> c) have that
+// shape, so drop the pair and fold neither — no folding is the old behaviour, a
+// half-applied fold is corruption.
+const withoutChains = (kind, entries) => {
+  const sources = new Set(entries.map(([from]) => from));
+  return entries.filter(([from, to]) => {
+    if (!sources.has(to)) return true;
+    console.error(`kb_extract: ignoring ${kind} ${from} -> ${to}: ${to} is itself folded, which would never converge`);
+    return false;
+  });
+};
+
+// This map and CANONICAL_BY_LEMMA below are both defined before the first
+// normPred() call — it reads them in that order.
+const PREDICATE_ALIASES = Object.fromEntries(withoutChains(
+  'alias',
   Object.entries({ ...builtin?.aliases, ...override?.aliases })
     .map(([from, to]) => [rawPred(from), rawPred(to)]),
-);
+));
 
-const SINGLE_VALUED = new Set((builtin?.single_valued || []).map(normPred));
-for (const p of override?.single_valued || []) SINGLE_VALUED.add(normPred(p));
-for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
+// English inflection on the leading verb, which is the only token that carries
+// it: merged_via / merges_via / merge_via are one relationship, and the
+// extractor picks among them per call. Trailing tokens are left alone because
+// they are not verbs and their plurals are meaning — calls_over_https is not
+// calls_over_http.
+function stem(token) {
+  const base = inflectionOf(token);
+  // The suffix rules disagree about the silent e — merges loses only the s while
+  // merged loses the whole ed — so drop a trailing e from every stem and let
+  // them meet. This is a grouping key, never a stored predicate, so merg is as
+  // good a key as merge, and it is what makes a separate -es rule unnecessary:
+  // fixes -> fixe -> fix reaches the same place.
+  return base.replace(/e$/, '');
+}
+function inflectionOf(token) {
+  if (/(?:ss|us|is)$/.test(token)) return token;              // status, focus — not a plural
+  if (/[^aeiou]ies$/.test(token)) return `${token.slice(0, -3)}y`;
+  if (/[a-z]s$/.test(token)) return token.slice(0, -1);
+  if (/[^aeiou]ied$/.test(token)) return `${token.slice(0, -3)}y`;
+  if (/([^aeiou])\1ed$/.test(token)) return token.slice(0, -3);  // shipped -> ship
+  if (/ed$/.test(token)) return token.replace(/e?d$/, '');
+  return token;                                               // -ing is left: missing is not missed
+}
+const lemmaKey = (p) => {
+  const cut = p.indexOf('_');
+  return cut === -1 ? stem(p) : stem(p.slice(0, cut)) + p.slice(cut);
+};
+
+// Only single-valued predicates auto-retire a prior object. Many-valued ones
+// (owns, blocked_by, depends_on) say nothing about their siblings, and a wrong
+// retirement is silent and unrecoverable where a duplicate is merely visible —
+// so unknown predicates default to many-valued.
+// Alias-resolved rather than normPred-resolved because the inflection map below
+// is built from this and cannot resolve its own input. That costs nothing: the
+// two agree, since nothing single-valued is inflectable.
+const SINGLE_VALUED = new Set(
+  [...(builtin?.single_valued || []), ...(override?.single_valued || [])]
+    .map(p => lookup(PREDICATE_ALIASES, rawPred(p)) ?? rawPred(p)),
+);
+for (const p of override?.many_valued || []) {
+  SINGLE_VALUED.delete(lookup(PREDICATE_ALIASES, rawPred(p)) ?? rawPred(p));
+}
+
+// Which canonical spelling an inflected one folds onto. Anchored to the names
+// predicates.json already registers, so morphology can only ever merge two
+// spellings of a predicate this file has taken a position on — an unregistered
+// pair like missing/missed is left alone, where a general-purpose lemmatiser
+// would merge it on a shared stem and lose the distinction.
+// Alias sources are included, mapped to what they resolve to, so one entry
+// covers its own inflections too and normPred still needs a single hop.
+// Single-valued predicates are excluded, as they already are from the inverse
+// map and for the same reason: an inflection of a lifecycle noun is usually a
+// verb that means something else. "tkt-42 states that retries must be bounded"
+// is a document quoting a requirement, and folding `states` onto `state` retires
+// the ticket's real lifecycle value to store it.
+const CANONICAL_BY_LEMMA = Object.create(null);
+for (const name of [
+  ...PREFERRED,
+  ...Object.keys(PREDICATE_ALIASES),
+  ...Object.values({ ...builtin?.aliases, ...override?.aliases }),
+  ...Object.values({ ...builtin?.inverses, ...override?.inverses }),
+  ...(builtin?.work_item_object || []), ...(override?.work_item_object || []),
+].map(rawPred)) {
+  if (SINGLE_VALUED.has(name)) continue;
+  const canonical = lookup(PREDICATE_ALIASES, name) ?? name;
+  const key = lemmaKey(name);
+  const held = lookup(CANONICAL_BY_LEMMA, key);
+  if (held === undefined) CANONICAL_BY_LEMMA[key] = canonical;
+  else if (held !== canonical) {
+    // Two registered names sharing a stem: nothing here can say which an
+    // inflected third spelling meant, so fold neither and leave both exact.
+    console.error(`kb_extract: not folding inflections of "${key}": ${held} and ${canonical} both claim it`);
+    CANONICAL_BY_LEMMA[key] = null;
+  }
+}
 
 // The extractor picks a direction per call, so one relationship arrives as
 // (a, blocks, b) today and (b, blocked_by, a) tomorrow — both live, retiring
@@ -273,19 +387,10 @@ for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 // Overrides merge by source key, so an install choosing the opposite direction
 // of a built-in leaves both — blocks -> blocked_by and blocked_by -> blocks —
 // and canonicalTriple then toggles a spelling instead of converging it, while
-// the migration flips those rows on every run. A target that is also a source
-// is the shape of both that cycle and a chain, so drop the pair and fold
-// neither: no folding is the old behaviour, a toggle is corruption.
-const withoutCycles = (entries) => {
-  const sources = new Set(entries.map(([from]) => from));
-  return entries.filter(([from, to]) => {
-    if (!sources.has(to)) return true;
-    console.error(`kb_extract: ignoring inverse ${from} -> ${to}: ${to} is itself folded, which would never converge`);
-    return false;
-  });
-};
-
-export const PREDICATE_INVERSES = Object.fromEntries(withoutCycles(
+// the migration flips those rows on every run. withoutChains drops that pair,
+// and the chain it also catches, for the same reason.
+export const PREDICATE_INVERSES = Object.fromEntries(withoutChains(
+  'inverse',
   Object.entries({ ...builtin?.inverses, ...override?.inverses })
     // normPred, not rawPred: canonicalTriple looks up an alias-resolved
     // predicate, so a raw key an alias rewrites could never match. It also keeps
@@ -305,7 +410,7 @@ export const PREDICATE_INVERSES = Object.fromEntries(withoutCycles(
 // The direction a stored predicate folds to, or undefined if it is already
 // canonical. Takes the raw spelling: a row written before an alias was
 // registered still carries the old one, and it folds just the same.
-export const inverseTargetOf = predicate => PREDICATE_INVERSES[normPred(predicate)];
+export const inverseTargetOf = predicate => lookup(PREDICATE_INVERSES, normPred(predicate));
 
 // implements, fixes and their siblings are asymmetric in their ROLES rather than
 // their spelling: the work item is what gets built, so it belongs in the object.
@@ -333,7 +438,7 @@ const NAMES_WORK_ITEM = new RegExp(`^(?:${WORK_ITEM_TOKEN})(?![0-9a-z])`, 'i');
 // The triple as it will be stored: canonical predicate, canonical direction.
 export function canonicalTriple(f) {
   const pred = normPred(f.predicate);
-  const inverse = PREDICATE_INVERSES[pred];
+  const inverse = lookup(PREDICATE_INVERSES, pred);
   const t = inverse
     ? { ...f, subject: f.object, predicate: inverse, object: f.subject }
     : { ...f, predicate: pred };
