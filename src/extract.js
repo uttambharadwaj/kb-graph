@@ -55,7 +55,7 @@ Rules:
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: points_at, configured_to, depends_on — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- Prefer these predicates when one fits, so the same relationship is always the same edge: ${PREFERRED.join(', ')}. Invent one only when none of them says it, and when you do, use the plainest verb for it — a second spelling of a relationship already on this list is a second edge nothing will ever join.
+- Prefer these predicates when one fits, so the same relationship is always the same edge: ${PREFERRED.join(', ')}. Invent one only when none of them says it.
 - A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
 - A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
