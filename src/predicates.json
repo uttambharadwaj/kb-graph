@@ -1,5 +1,5 @@
 {
-  "_comment": "Predicate registry. 'single_valued' predicates auto-retire a prior object during kb_extract consolidation, but only when the subject matches 'single_valued_subjects' — cardinality is a property of (subject, predicate), not of the predicate. A ticket has one status; a repo accumulates them. Everything else keeps both objects. The subject pattern requires a separator or # before the trailing digits, so ticket and issue ids (tkt-4821, pr_#412, svc-api#59) match while names that merely end in a digit (web3, oauth2, sqlite3, es2022) do not. 'aliases' fold synonyms onto one canonical predicate so kb_fact_query, which matches on the predicate, does not under-return across synonym silos. 'inverses' fold the mirrored spelling of a relationship onto one direction, swapping subject and object — the extractor picks a direction per call, and two live rows for one relationship retire independently. Each direction here is the one the graph already uses more, and none of them are single-valued, so the fold cannot change what retires what. 'work_item_object' predicates are asymmetric in roles rather than in spelling: the thing being built goes in the object, so a subject matching 'work_item_pattern' opposite an object that does not is a swapped pair, and folds. Only predicates whose subject must be a BUILDER belong here. A ticket cannot build code, so it cannot be the subject of 'implements' — but it can perfectly well target a problem, so 'addresses', 'fixes', 'closes' and 'resolves' take a work item on either side and are not listed. 'work_item_pattern' is an unanchored token: a subject must equal it, an object need only begin with it, since a work item under a label (tkt-19_step_1) still makes the row a relationship between two work items. It excludes a leading pull-request marker because a PR is an implementer, not a work item, and takes a single word before the separator so a compound id ending in a PR number (tkt-19-repo-pr-277) is not read as one. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in, 'aliases' and 'inverses' merge with these, 'work_item_object' adds to this list, and either pattern there replaces the one here.",
+  "_comment": "Predicate registry. 'single_valued' predicates auto-retire a prior object during kb_extract consolidation, but only when the subject matches 'single_valued_subjects' — cardinality is a property of (subject, predicate), not of the predicate. A ticket has one status; a repo accumulates them. Everything else keeps both objects. The subject pattern requires a separator or # before the trailing digits, so ticket and issue ids (tkt-4821, pr_#412, svc-api#59) match while names that merely end in a digit (web3, oauth2, sqlite3, es2022) do not. 'preferred' is the vocabulary the extraction prompt asks for, listed here rather than in the prompt so one file owns the predicate names; it is also the set an inflected spelling folds onto. 'aliases' fold synonyms onto one canonical predicate so kb_fact_query, which matches on the predicate, does not under-return across synonym silos. Spelling variance that carries no meaning is folded without a list entry: hyphens and apostrophes, and a leading copula ('is_source_of_truth_for' -> 'source_of_truth_for'). Inflection folds too, but only onto a name this file already registers ('deploys_to' -> 'deployed_to'), so an unregistered pair like 'missing'/'missed' is never merged on morphology alone. 'inverses' fold the mirrored spelling of a relationship onto one direction, swapping subject and object — the extractor picks a direction per call, and two live rows for one relationship retire independently. Each direction here is the one the graph already uses more, and none of them are single-valued, so the fold cannot change what retires what. 'work_item_object' predicates are asymmetric in roles rather than in spelling: the thing being built goes in the object, so a subject matching 'work_item_pattern' opposite an object that does not is a swapped pair, and folds. Only predicates whose subject must be a BUILDER belong here. A ticket cannot build code, so it cannot be the subject of 'implements' — but it can perfectly well target a problem, so 'addresses', 'fixes', 'closes' and 'resolves' take a work item on either side and are not listed. 'work_item_pattern' is an unanchored token: a subject must equal it, an object need only begin with it, since a work item under a label (tkt-19_step_1) still makes the row a relationship between two work items. It excludes a leading pull-request marker because a PR is an implementer, not a work item, and takes a single word before the separator so a compound id ending in a PR number (tkt-19-repo-pr-277) is not read as one. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in, 'aliases' and 'inverses' merge with these, 'preferred' and 'work_item_object' add to these lists, and either pattern there replaces the one here.",
   "single_valued": [
     "status",
     "state",
@@ -13,6 +13,24 @@
     "implements"
   ],
   "work_item_pattern": "(?!pr[-_ #])[a-z][a-z0-9]*[-_ #]#?\\d+",
+  "preferred": [
+    "owns",
+    "child_of",
+    "blocked_by",
+    "depends_on",
+    "shipped_via",
+    "merged_via",
+    "merged_to",
+    "deployed_to",
+    "approved_by",
+    "reviewed_by",
+    "declared_in",
+    "fixes",
+    "resolves",
+    "status",
+    "uses",
+    "calls_over_http"
+  ],
   "inverses": {
     "owned_by": "owns",
     "blocks": "blocked_by",
@@ -21,6 +39,8 @@
     "required_by": "depends_on",
     "implemented_by": "implements",
     "fixed_in": "fixes",
+    "fixed_by": "fixes",
+    "resolved_by": "resolves",
     "written_by": "authored",
     "approved": "approved_by"
   },
@@ -30,8 +50,11 @@
     "declared_by": "declared_in",
     "defined_in": "declared_in",
     "merged_as": "merged_via",
+    "merged_via_commit": "merged_via",
+    "merged_into": "merged_to",
     "shipped_in": "shipped_via",
     "deployed_on": "deployed_to",
-    "authored_by": "written_by"
+    "authored_by": "written_by",
+    "fixed_with": "fixed_via"
   }
 }

@@ -171,6 +171,21 @@ head-injection, which was fixed in commit b1d6832.`);
     assert.ok(mentions(facts, 'approved'), 'dropped the review state instead of moving it off status');
   });
 
+  // Replaying one identical input three times produced source_of_truth_for
+  // twice and is_source_of_truth_for once — one relationship, two edges, and
+  // neither can retire the other. The copula is not a choice the prompt can take
+  // away, so the guard is on the stored triple: whatever the model types, the
+  // canonical predicate carries no leading copula.
+  it('stores no predicate under a leading copula', async () => {
+    const { facts } = await extractFacts(
+      'The wallet ledger is the source of truth for balances now, replacing the mirror.',
+    );
+    const copular = facts.map(canonicalTriple)
+      .filter(f => /^(is|are|was|were|be)_/.test(f.predicate));
+    assert.deepStrictEqual(copular, [], 'a copula-prefixed predicate reached the graph');
+    assert.ok(mentions(facts, 'ledger'), 'dropped the relationship instead of describing it');
+  });
+
   // Observed in production on the ticket-in-parentheses shape below: the ticket
   // landed in the subject of `implements`, which asserts that a ticket built
   // something and leaves "what implements tkt-99" unanswered. Asserted on the

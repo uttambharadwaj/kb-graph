@@ -9,7 +9,7 @@ import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { writeNote, relatedForDoc } from './write-note.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats } from './facts.js';
-import { kbExtract } from './extract.js';
+import { kbExtract, canonicalTriple } from './extract.js';
 import { getRecentNotes, generateSynthesisPrompt } from './synthesis/weekly-review.js';
 import { processNewClippings } from './classify/processor.js';
 import { reviewDestructiveAction } from './safety/review.js';
@@ -635,7 +635,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_fact_add',
-      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12").',
+      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
       schema: {
         subject: z.string().describe('The entity doing/being something'),
         predicate: z.string().describe('The relationship (e.g. "uses", "depends_on", "decided", "owns")'),
@@ -643,9 +643,15 @@ export function getToolDefinitions() {
         valid_from: z.string().optional().describe('When this became true (YYYY-MM-DD)'),
         source: z.string().optional().describe('Where this fact came from (ticket ID, session, PR)'),
       },
+      // Through canonicalTriple, as kb_extract's writes are. Both tools write the
+      // same table, so a hand-written fixed_in beside an extracted fixes is two
+      // live rows for one relationship that no query joins and no retirement can
+      // supersede — and it re-opens that gap after every migration closes it.
+      // The response reports the triple as stored, not as asked for.
       handler: async ({ subject, predicate, object, valid_from, source }) => {
         try {
-          const result = addFact(subject, predicate, object, { validFrom: valid_from, source });
+          const t = canonicalTriple({ subject, predicate, object });
+          const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -739,9 +745,12 @@ export function getToolDefinitions() {
         object: z.string().describe('Target entity'),
         ended: z.string().optional().describe('When it stopped being true (YYYY-MM-DD, default: today)'),
       },
+      // Canonicalised with kb_fact_add, or the spelling that named a row on the
+      // way in could not name it again on the way out.
       handler: async ({ subject, predicate, object, ended }) => {
         try {
-          const result = invalidateFact(subject, predicate, object, { ended });
+          const t = canonicalTriple({ subject, predicate, object });
+          const result = invalidateFact(t.subject, t.predicate, t.object, { ended });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

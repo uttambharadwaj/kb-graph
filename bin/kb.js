@@ -106,7 +106,7 @@ Commands:
   wakeup-hook        Print compact KB briefing (for SessionStart hooks)
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)
   stale-servers      List running MCP servers that started before the last src/ change
-  fold-inverses      Fold pre-existing facts onto one direction per relationship (--apply to write)
+  fold-inverses      Fold pre-existing facts onto one predicate and direction per relationship (--apply to write)
   bus-send           Send a local message bus message
   bus-read           Read messages using a stored per-reader cursor
   bus-status         Show channel readers, backlog, heartbeats, and latest control

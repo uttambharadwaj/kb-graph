@@ -102,6 +102,32 @@ describe('fold-inverses migration', () => {
     assert.deepStrictEqual(foldInverses({ apply: true }), { folded: 0, merged: 0 });
   });
 
+  // An alias renames without swapping, so a row on the old spelling keeps its
+  // subject and only its predicate is stale. A fold check asking the inverse map
+  // sees nothing to do and back-fills none of them — every synonym registered
+  // since this migration shipped stayed on its old spelling in the graph, which
+  // is where the duplicates the fold exists to prevent come from.
+  it('folds a row whose predicate is aliased but whose direction is right', async () => {
+    const out = await inOverrideInstall(
+      { aliases: { landed_on: 'merged_to' } },
+      `addFact('pr #48', 'landed_on', 'main', { validFrom: '2026-07-01' });
+       foldInverses({ apply: true });
+       report('pr #48');`,
+    );
+    assert.deepStrictEqual(out, [['pr #48', 'merged_to', 'main']]);
+  });
+
+  // The same blind spot reached through morphology rather than a list entry.
+  it('folds a row stored under an inflection of a registered predicate', async () => {
+    const out = await inOverrideInstall(
+      { preferred: ['deployed_to'] },
+      `addFact('web-app', 'deploys_to', 'production', { validFrom: '2026-07-01' });
+       foldInverses({ apply: true });
+       report('web-app');`,
+    );
+    assert.deepStrictEqual(out, [['web-app', 'deployed_to', 'production']]);
+  });
+
   // A row written before an alias was registered carries the raw spelling, so
   // selecting by the alias-resolved predicate alone would walk straight past it.
   it('folds a row stored under an alias of a fold source', async () => {
