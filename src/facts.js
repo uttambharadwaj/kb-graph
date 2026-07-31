@@ -9,8 +9,9 @@ export function initFactSchema() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Alias -> canonical entity id. Extraction mints freeform ids; aliases
-    -- fold renames (old-name -> new-name) and spelling variants into one node.
+    -- Alias -> canonical entity id, for what spelling alone cannot fold:
+    -- renames (old-name -> new-name) and synonyms. Separator and case variants
+    -- need no row here — canonicalEntityId collapses those on the way in.
     CREATE TABLE IF NOT EXISTS entity_aliases (
       alias TEXT PRIMARY KEY,
       canonical TEXT NOT NULL
@@ -41,22 +42,69 @@ export function initFactSchema() {
 // same way, and the format lives here because this is where the column does.
 export const sqlTimestamp = (d = new Date()) => d.toISOString().replace('T', ' ').slice(0, 19);
 
-function entityId(name) {
-  return name.toLowerCase().replace(/\s+/g, '_').replace(/'/g, '');
+// The separators an identifier can be spelled with, all of them carrying the
+// same nothing: "auth-service", "auth_service", "auth service",
+// "gateway.py", "v2/contracts/list". Folding them is what stops a second
+// spelling of one concept minting a sibling entity no query for the first will
+// ever see. Nothing else folds — '#', '+' and non-ASCII carry meaning ("c#" is
+// not "c"), and merging two entities that are genuinely different corrupts the
+// graph in a way leaving one split does not.
+const SEPARATORS = /[\s_./-]+/g;
+
+export function canonicalEntityId(name) {
+  const bare = name.toLowerCase().replace(/'/g, '');
+  const folded = bare.replace(SEPARATORS, '_').replace(/^_+|_+$/g, '');
+  // A name that is nothing but separators ("..", "-") folds to the empty
+  // string, which would put every one of them on a single node. Keep it whole:
+  // an under-merge is recoverable and a wrong merge is not.
+  return folded || bare.trim();
 }
 
 // Resolve an entity id through the alias table (single hop — merges rewrite
-// old facts, so chains never form).
+// old facts, so chains never form). The stored target is re-canonicalized
+// because an alias recorded before the separator fold points at a spelling that
+// is no longer where the facts live.
 function resolveEntity(eid) {
   const row = getDb().prepare('SELECT canonical FROM entity_aliases WHERE alias = ?').get(eid);
-  return row ? row.canonical : eid;
+  return row ? canonicalEntityId(row.canonical) : eid;
 }
 
 // The row identity of a name: spelling collapsed, then merges followed. Every
 // read and write here goes through it, and so must anything outside that groups
 // by subject — a second spelling of this rule is a group that misses a
 // collision, and following only half of it misses the merged half.
-export const entityKey = name => resolveEntity(entityId(name));
+export const entityKey = name => resolveEntity(canonicalEntityId(name));
+
+// One aggressive fold past canonical: punctuation dropped outright, a regular
+// plural ignored. Not safe to merge on — it maps "c#" onto "c" and "profile"
+// onto "profiles", which are sometimes different things — but it is what a
+// caller means by "the same thing", so a query that cannot reach those ids has
+// to name them instead of returning a clean-looking subset. Irregular plurals
+// ("index"/"indexes") go unreported, which is the safe direction for a hint.
+const looseKey = eid => eid.toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/s$/, '');
+
+// The entities a query for `entityName` does not reach but the caller probably
+// meant. Excludes the qualifier ids queryFact's prefix match already covers, and
+// entities holding no facts, which are nothing to miss.
+export function nearbyEntities(entityName) {
+  const db = getDb();
+  const eid = entityKey(entityName);
+  const target = looseKey(eid);
+  if (!target) return [];
+
+  // Every id, because no SQL predicate expresses the loose key and a second
+  // spelling of it in a WHERE clause is the drift this change exists to stop.
+  // Plucked: on a graph of this size the ids alone are a few milliseconds and
+  // the rows around them are not.
+  const detail = db.prepare('SELECT name, (SELECT COUNT(*) FROM facts WHERE subject = e.id OR object = e.id) AS facts FROM entities e WHERE id = ?');
+  const out = [];
+  for (const id of db.prepare('SELECT id FROM entities').pluck().all()) {
+    if (id === eid || id.startsWith(`${eid}_`) || looseKey(id) !== target) continue;
+    const row = detail.get(id);
+    if (row.facts > 0) out.push({ id, name: row.name, facts: row.facts });
+  }
+  return out.sort((a, b) => b.facts - a.facts || a.id.localeCompare(b.id));
+}
 
 // Merge entity `from` into `to`: rewrite all facts, record the alias so
 // future writes and queries using the old name land on the canonical node.

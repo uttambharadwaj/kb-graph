@@ -3,8 +3,8 @@
 > Generated: 2026-07-31
 
 ## Quick Stats
-- **Files:** 136
-- **Total lines:** 18,729
+- **Files:** 138
+- **Total lines:** 19,285
 
 ## Architecture Overview
 ```
@@ -52,7 +52,7 @@ bin/
 | cron-capture.sh | 30 | - | !/bin/bash |
 | generate-codemap.js | 155 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 141 | - | bin/kb.js — CLI entry point |
+| kb.js | 143 | - | bin/kb.js — CLI entry point |
 | post-sync.sh | 31 | - | !/bin/bash |
 | weekly-synthesis.js | 45 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
@@ -66,7 +66,7 @@ bin/
 | claude-cli.js | 88 | modelEnv, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 625 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
 | extract.js | 732 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 254 | initFactSchema, sqlTimestamp, entityKey, mergeEntity, addFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| facts.js | 302 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
@@ -78,7 +78,7 @@ bin/
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
-| tools.js | 816 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tools.js | 830 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-note.js | 128 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
@@ -89,7 +89,7 @@ bin/
 | agentd.js | 417 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
 | cli.js | 703 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusGatewayCli, runBusAgentCli... | - |
-| config.js | 59 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | Read at use time; invalid pattern warns once then falls back to default. |
+| config.js | 61 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | 15 minutes of an unchanging digest. Safe to exit that early because hooks |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
 | db.js | 216 | getBusDb, closeBusDb | - |
 | gateway.js | 273 | registerBusSession, getBusSession, listBusSessions, runBusGatewayOnce, runBusGatewayLoop... | - |
@@ -119,6 +119,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
+| canonicalize-entities.js | 250 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
 | fold-inverses.js | 129 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows stored under a spelling |
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
@@ -208,6 +209,7 @@ bin/
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
+| entity-canonicalization.test.js | 240 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract-context.test.js | 67 | - | - |
 | extract-eval.test.js | 207 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract.test.js | 834 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |

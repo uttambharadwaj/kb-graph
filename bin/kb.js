@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bin/kb.js — CLI entry point
-// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, fold-inverses, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
+// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, fold-inverses, canonicalize-entities, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import 'dotenv/config';
@@ -25,6 +25,7 @@ const commands = {
   'link-backfill': () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),
   'stale-servers': () => import('../src/cli/stale-servers.js').then(m => m.runStaleServersCli()),
   'fold-inverses': () => import('../src/cli/fold-inverses.js').then(m => m.runFoldInversesCli(args)),
+  'canonicalize-entities': () => import('../src/cli/canonicalize-entities.js').then(m => m.runCanonicalizeEntitiesCli(args)),
   harvest: () => import('../src/harvest.js').then(m => m.runHarvestCli(args)),
   'consolidate-state': () => import('../src/state.js').then(m => m.runConsolidateStateCli(args)),
   'entity-merge': () => import('../src/facts.js').then(m => {
@@ -109,6 +110,7 @@ Commands:
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)
   stale-servers      List running MCP servers that started before the last src/ change
   fold-inverses      Fold pre-existing facts onto one predicate and direction per relationship (--apply to write)
+  canonicalize-entities  Merge fact-graph entities that differ only in case or separators (--apply to write, --verbose to list every group)
   bus-send           Send a local message bus message
   bus-read           Read messages using a stored per-reader cursor
   bus-status         Show channel readers, backlog, heartbeats, and latest control
