@@ -16,6 +16,7 @@ import { reviewDestructiveAction } from './safety/review.js';
 import { getBusToolDefinitions } from './bus/tools.js';
 import { tunnel, tagNeighbors } from './tunnels.js';
 import { canonicalTag, getTagAliasMap } from './tags.js';
+import { logRetrieval, resolveSessionId } from './retrieval.js';
 
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
@@ -125,6 +126,12 @@ export function getToolDefinitions() {
       handler: async ({ query, tags, limit, include_superseded }) => {
         try {
           const results = searchDocuments(query, limit, { tags, includeSuperseded: include_superseded });
+          const session = resolveSessionId();
+          if (results.length === 0) {
+            logRetrieval({ surface: 'kb_search', query, session });
+          } else {
+            for (const r of results) logRetrieval({ docId: r.id, surface: 'kb_search', query, session });
+          }
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -190,6 +197,7 @@ export function getToolDefinitions() {
           if (!doc) {
             return { content: [{ type: 'text', text: `Error: Document with ID ${id} not found.` }], isError: true };
           }
+          logRetrieval({ docId: doc.id, surface: 'kb_read', session: resolveSessionId() });
           const related = relatedForDoc(id);
           if (related.length) doc.related = related;
           // Superseded notes stay readable (this is the "how we got here" path)
@@ -561,6 +569,13 @@ export function getToolDefinitions() {
                 briefings.push({ id: f.id, title: f.title, type: f.note_type, tags: f.tags, project: f.project, summary: f.summary, key_topics: f.key_topics });
               }
             }
+          }
+
+          const session = resolveSessionId();
+          if (briefings.length === 0) {
+            logRetrieval({ surface: 'kb_context', query, session });
+          } else {
+            for (const b of briefings) logRetrieval({ docId: b.id, surface: 'kb_context', query, session });
           }
 
           const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful.`;

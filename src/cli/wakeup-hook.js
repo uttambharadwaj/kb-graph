@@ -2,8 +2,23 @@
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
 import { getDb, getHealth } from '../db.js';
+import { logRetrieval, resolveSessionId } from '../retrieval.js';
 
-export function wakeupHook() {
+async function readStdin() {
+  let data = '';
+  for await (const chunk of process.stdin) data += chunk;
+  return data;
+}
+
+export async function wakeupHook() {
+  // Parsed separately from the briefing query below: a malformed/absent stdin
+  // payload should cost us the session id, not the whole briefing.
+  let hookInput = {};
+  try {
+    hookInput = JSON.parse((await readStdin()) || '{}');
+  } catch {
+    // fall through with hookInput = {}
+  }
   try {
     const db = getDb();
     const total = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;
@@ -26,6 +41,11 @@ export function wakeupHook() {
     const states = db.prepare(
       "SELECT vf.title, vf.document_id, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"
     ).all();
+    // Only `states` carries an id into the printed briefing (`#id`) — that's
+    // the only part of this hook an agent can act on with kb_read(id), so
+    // it's the only part worth logging as a retrieval.
+    const session = resolveSessionId(hookInput);
+    for (const s of states) logRetrieval({ docId: s.document_id, surface: 'briefing', session });
 
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,

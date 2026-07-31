@@ -198,6 +198,21 @@ function initSchema(db) {
       facts_added INTEGER,             -- NULL: extraction did not run. 0: it ran and found none.
       notes_added INTEGER DEFAULT 0
     );
+
+    -- Read-path telemetry (see src/retrieval.js). doc_id NULL means a miss —
+    -- a search/context query that matched nothing, which is signal, not noise.
+    CREATE TABLE IF NOT EXISTS retrievals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+      surface TEXT NOT NULL,
+      query TEXT,
+      session TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_retrievals_doc_id ON retrievals(doc_id);
+    CREATE INDEX IF NOT EXISTS idx_retrievals_surface_created ON retrievals(surface, created_at);
+    CREATE INDEX IF NOT EXISTS idx_retrievals_session ON retrievals(session, surface, created_at);
   `);
 
   // Migration: embeddings originally had no unique key, so INSERT OR REPLACE
