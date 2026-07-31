@@ -52,12 +52,18 @@ function resolveEntity(eid) {
   return row ? row.canonical : eid;
 }
 
+// The row identity of a name: spelling collapsed, then merges followed. Every
+// read and write here goes through it, and so must anything outside that groups
+// by subject — a second spelling of this rule is a group that misses a
+// collision, and following only half of it misses the merged half.
+export const entityKey = name => resolveEntity(entityId(name));
+
 // Merge entity `from` into `to`: rewrite all facts, record the alias so
 // future writes and queries using the old name land on the canonical node.
 export function mergeEntity(fromName, toName) {
   const db = getDb();
-  const from = resolveEntity(entityId(fromName));
-  const to = resolveEntity(entityId(toName));
+  const from = entityKey(fromName);
+  const to = entityKey(toName);
   if (from === to) return { merged: false, reason: 'same entity' };
 
   db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(to, toName);
@@ -73,8 +79,8 @@ export function mergeEntity(fromName, toName) {
 
 export function addFact(subject, predicate, object, { validFrom, source } = {}) {
   const db = getDb();
-  const subId = resolveEntity(entityId(subject));
-  const objId = resolveEntity(entityId(object));
+  const subId = entityKey(subject);
+  const objId = entityKey(object);
   const pred = predicate.toLowerCase().replace(/\s+/g, '_');
 
   // Auto-create entities
@@ -105,7 +111,7 @@ function prefixPattern(eid) {
 
 export function queryFact(entityName, { asOf, direction = 'both', exact = false } = {}) {
   const db = getDb();
-  const eid = resolveEntity(entityId(entityName));
+  const eid = entityKey(entityName);
   // exact=true restores strict matching — consolidation uses it so an
   // "auth-service" fact never reads as contradicting an "auth-service_sandbox" one.
   const like = exact ? eid : prefixPattern(eid);
@@ -170,8 +176,8 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
 
 export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const db = getDb();
-  const subId = resolveEntity(entityId(subject));
-  const objId = resolveEntity(entityId(object));
+  const subId = entityKey(subject);
+  const objId = entityKey(object);
   const pred = predicate.toLowerCase().replace(/\s+/g, '_');
   const endDate = ended || new Date().toISOString().split('T')[0];
 
@@ -202,7 +208,7 @@ export function factTimeline(entityName) {
   let sql, params;
 
   if (entityName) {
-    const eid = resolveEntity(entityId(entityName));
+    const eid = entityKey(entityName);
     sql = `
       SELECT f.*, s.name as sub_name, o.name as obj_name
       FROM facts f

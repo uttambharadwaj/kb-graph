@@ -49,6 +49,31 @@ describe('inverse predicate folding', () => {
     );
   });
 
+  // Measured across three runs of one identical input: the same relationship
+  // came back with subject and object swapped between runs, under a different
+  // predicate each time. Direction is not a stable property of a call, so both
+  // spellings have to land on one edge.
+  for (const [emitted, canonical] of [
+    [triple('tkt-99', 'fixed_in', 'pr #48'), triple('pr #48', 'fixes', 'tkt-99')],
+    [triple('pr #48', 'written_by', 'robin'), triple('robin', 'authored', 'pr #48')],
+    [triple('robin', 'approved', 'pr #48'), triple('pr #48', 'approved_by', 'robin')],
+  ]) {
+    it(`folds ${emitted.predicate} onto ${canonical.predicate}`, () => {
+      assert.deepStrictEqual(canonicalTriple(emitted), canonical);
+      // and the direction it is already in survives the round trip
+      assert.deepStrictEqual(canonicalTriple(canonical), canonical);
+    });
+  }
+
+  // authored_by is an alias of written_by, which is a fold source: the lookup
+  // resolves the alias first, so a two-hop spelling still converges.
+  it('folds a spelling that is an alias of a fold source', () => {
+    assert.deepStrictEqual(
+      canonicalTriple(triple('pr #48', 'authored_by', 'robin')),
+      triple('robin', 'authored', 'pr #48'),
+    );
+  });
+
   it('carries fields it does not own through the fold', () => {
     const folded = canonicalTriple({ ...triple('a', 'blocks', 'b'), category: 'status' });
     assert.strictEqual(folded.category, 'status');

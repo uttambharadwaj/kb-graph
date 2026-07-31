@@ -32,6 +32,13 @@ case "$prompt" in
     facts: [{ subject: 'pr #888', predicate: 'merged_as', object: 'commit def5678' }],
     skipped: [],
   })}' ;;
+  *"contradict me"*) echo '${envelope({
+    facts: [
+      { subject: 'pr #999', predicate: 'status', object: 'open' },
+      { subject: 'pr #999', predicate: 'status', object: 'approved' },
+    ],
+    skipped: [],
+  })}' ;;
   *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
@@ -42,7 +49,7 @@ esac
 chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
-const { consolidate, kbExtract, chunkForExtract, extractFacts, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
+const { consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
 const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity } = await import('../src/facts.js');
 
@@ -442,6 +449,23 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(currentObject('pr #888', 'merged_via'), ['commit def5678']);
   });
 
+  // The preview is the last place a self-contradicting batch can be caught: on
+  // the dry-run-then-commit flow the retirements it used to cause landed at
+  // commit time, where nobody was looking.
+  it('previews the conflict a batch is about to contradict itself with', async () => {
+    const res = await kbExtract('contradict me', { source: 'test', observationDate: '2026-07-29', dryRun: true });
+
+    assert.deepStrictEqual(
+      res.conflicts.map(c => [c.subject, c.predicate, c.objects]),
+      [['pr #999', 'status', ['open', 'approved']]],
+    );
+
+    const committed = await kbExtract('contradict me', { source: 'test', observationDate: '2026-07-29' });
+    assert.deepStrictEqual(committed.invalidated, []);
+    assert.deepStrictEqual(currentObject('pr #999', 'status').sort(), ['approved', 'open']);
+    assert.strictEqual(committed.conflicts.length, 1);
+  });
+
   it('splits a comma-joined list of references into one row each', () => {
     const res = consolidate(
       [{ subject: 'wallet rates stack', predicate: 'includes', object: 'pr #3835, pr #3849, and pr #3865' }],
@@ -563,5 +587,203 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.invalidated.length, 0);
     assert.strictEqual(res.added.length, 1);
     assert.deepStrictEqual(currentObject('auth-service sandbox', 'status'), ['smoke-tested']);
+  });
+
+  // Observed in production: one response gave a PR three statuses — open
+  // (lifecycle), approved (review), queued_for_merge (the merge queue) — and
+  // consolidation retired two of them on arrival, so the survivor was whichever
+  // the loop reached last. The batch also contradicted itself in both
+  // directions when a repeated value came back from a second chunk.
+  describe('a batch that contradicts itself', () => {
+    it('keeps all three values and retires none', () => {
+      const res = consolidate([
+        { subject: 'pr #4801', predicate: 'status', object: 'open' },
+        { subject: 'pr #4801', predicate: 'status', object: 'approved' },
+        { subject: 'pr #4801', predicate: 'status', object: 'queued_for_merge' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.strictEqual(res.added.length, 3);
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.deepStrictEqual(
+        currentObject('pr #4801', 'status').sort(),
+        ['approved', 'open', 'queued_for_merge'],
+      );
+      assert.deepStrictEqual(
+        res.conflicts.map(c => [c.subject, c.predicate, c.objects]),
+        [['pr #4801', 'status', ['open', 'approved', 'queued_for_merge']]],
+      );
+    });
+
+    it('does not retire what the graph already held either', () => {
+      // A batch with no agreed value has nothing to supersede the old one with,
+      // so the pre-existing row survives too.
+      addFact('pr #4802', 'status', 'draft', { validFrom: '2026-07-01', source: 'seed' });
+
+      const res = consolidate([
+        { subject: 'pr #4802', predicate: 'status', object: 'approved' },
+        { subject: 'pr #4802', predicate: 'status', object: 'queued_for_merge' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.ok(currentObject('pr #4802', 'status').includes('draft'));
+      assert.strictEqual(res.conflicts.length, 1);
+    });
+
+    it('reads two spellings of one value as one value', () => {
+      // pinned_to is single-valued in this install's override.
+      const res = consolidate([
+        { subject: 'tkt-4831', predicate: 'pinned_to', object: 'web-app pr #48' },
+        { subject: 'tkt-4831', predicate: 'pinned_to', object: 'pr #48' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.conflicts, []);
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.deepStrictEqual(currentObject('tkt-4831', 'pinned_to'), ['web-app pr #48']);
+    });
+
+    it('groups two spellings of one subject as one pair', () => {
+      // The facts table collapses these to one subject, so a group keyed any
+      // other way would miss the collision and let one row retire the other.
+      const res = consolidate([
+        { subject: 'pr #4803', predicate: 'status', object: 'open' },
+        { subject: 'PR_#4803', predicate: 'status', object: 'approved' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.strictEqual(res.conflicts.length, 1);
+    });
+
+    it('reads two objects an entity merge has folded together as one value', () => {
+      // The store holds one row for them, so reporting a conflict would send the
+      // caller after a contradiction that does not exist.
+      addFact('tkt-4850', 'status', 'shipped_v1', { validFrom: '2026-07-01', source: 'seed' });
+      mergeEntity('shipped_v1', 'released_v1');
+
+      const res = consolidate([
+        { subject: 'tkt-4850', predicate: 'status', object: 'shipped_v1' },
+        { subject: 'tkt-4850', predicate: 'status', object: 'released_v1' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.conflicts, []);
+      assert.deepStrictEqual(res.added, []);
+      // and it is reported as the re-spelling it is, not as a byte-identical repeat
+      assert.ok(res.skipped.some(s => s.reason === 'equivalent_spelling_of_existing'),
+        `expected a re-spelling skip, got ${JSON.stringify(res.skipped.map(s => s.reason))}`);
+    });
+
+    it('still loses to a fact recorded after the text it is replaying', () => {
+      // Suppressing the retirement must not also suppress the staleness guard:
+      // old text stays old whether or not the batch carrying it agreed with
+      // itself, or a replay would write two dead values as current.
+      addFact('pr #4804', 'status', 'done', { validFrom: '2026-07-30', source: 'seed' });
+
+      const res = consolidate([
+        { subject: 'pr #4804', predicate: 'status', object: 'open' },
+        { subject: 'pr #4804', predicate: 'status', object: 'approved' },
+      ], { source: 'test', observationDate: '2026-07-01' });
+
+      assert.deepStrictEqual(res.added, []);
+      assert.deepStrictEqual(res.skipped.map(s => s.reason), ['stale_observation', 'stale_observation']);
+      assert.deepStrictEqual(currentObject('pr #4804', 'status'), ['done']);
+    });
+
+    it('groups two names an entity merge has folded together', () => {
+      // entityKey follows the alias table, so a merged pair is one subject here
+      // exactly as it is in the facts table.
+      addFact('tkt-4840', 'status', 'in_review', { validFrom: '2026-07-01', source: 'seed' });
+      mergeEntity('tkt-4840', 'pr #4840');
+
+      const res = consolidate([
+        { subject: 'tkt-4840', predicate: 'status', object: 'open' },
+        { subject: 'pr #4840', predicate: 'status', object: 'approved' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.strictEqual(res.conflicts.length, 1);
+    });
+
+    it('still retires across calls, where the order is real', () => {
+      consolidate([{ subject: 'tkt-4832', predicate: 'status', object: 'in_review' }],
+        { source: 'test', observationDate: '2026-07-29' });
+      const res = consolidate([{ subject: 'tkt-4832', predicate: 'status', object: 'done' }],
+        { source: 'test', observationDate: '2026-07-30' });
+
+      assert.strictEqual(res.invalidated.length, 1);
+      assert.deepStrictEqual(res.conflicts, []);
+      assert.deepStrictEqual(currentObject('tkt-4832', 'status'), ['done']);
+    });
+  });
+
+  // Observed in production: "pr #45 (tkt-99, the config client) merged" put the
+  // ticket in the subject of `implements`. Both entities are real and the
+  // predicate is right, so it reads as a sentence — and it asserts that a ticket
+  // built something while leaving "what implements tkt-99" unanswered.
+  describe('role direction for work-item predicates', () => {
+    const roles = f => [f.subject, f.predicate, f.object];
+
+    it('puts the work item in the object and answers the incoming query', () => {
+      const res = consolidate(
+        [{ subject: 'tkt-4821', predicate: 'implements', object: 'threshold_config_client' }],
+        { source: 'test', observationDate: '2026-07-30' },
+      );
+
+      assert.deepStrictEqual(res.added.map(roles), [['threshold_config_client', 'implements', 'tkt-4821']]);
+      assert.deepStrictEqual(
+        queryFact('tkt-4821', { direction: 'incoming' }).filter(r => r.current).map(r => r.subject),
+        ['threshold_config_client'],
+      );
+    });
+
+    it('leaves a pull request as the implementer', () => {
+      // pr-73 is work-item shaped in every respect but the marker that says a
+      // pull request implements things rather than being one.
+      assert.deepStrictEqual(
+        roles(canonicalTriple({ subject: 'pr-73', predicate: 'implements', object: 'lease_ownership_check' })),
+        ['pr-73', 'implements', 'lease_ownership_check'],
+      );
+    });
+
+    it('leaves a relationship between two work items alone', () => {
+      assert.deepStrictEqual(
+        roles(canonicalTriple({ subject: 'tkt-4821', predicate: 'implements', object: 'tkt-4900' })),
+        ['tkt-4821', 'implements', 'tkt-4900'],
+      );
+    });
+
+    // The rule is about who can BUILD, not about who can be named first. A work
+    // item cannot build code, so it cannot be the subject of implements — but it
+    // targets problems all day, and reading those as reversed turns "this ticket
+    // fixes the version skew" into "the version skew fixes this ticket".
+    for (const predicate of ['fixes', 'addresses', 'closes', 'resolves']) {
+      it(`leaves a work item as the subject of ${predicate}`, () => {
+        assert.deepStrictEqual(
+          roles(canonicalTriple({ subject: 'tkt-4821', predicate, object: 'version_skew' })),
+          ['tkt-4821', predicate, 'version_skew'],
+        );
+      });
+    }
+
+    it('leaves a work item that carries a label after it in the object', () => {
+      // Still a relationship between two work items, so still no way to tell
+      // from the shape which of them implements the other.
+      assert.deepStrictEqual(
+        roles(canonicalTriple({ subject: 'tkt-4821', predicate: 'implements', object: 'tkt-4900_step_1_save_back' })),
+        ['tkt-4821', 'implements', 'tkt-4900_step_1_save_back'],
+      );
+    });
+
+    it('leaves a name that merely ends in digits alone', () => {
+      assert.deepStrictEqual(
+        roles(canonicalTriple({ subject: 'oauth2', predicate: 'implements', object: 'token_refresh' })),
+        ['oauth2', 'implements', 'token_refresh'],
+      );
+    });
+
+    it('resolves the inverse spelling first, then the roles', () => {
+      assert.deepStrictEqual(
+        roles(canonicalTriple({ subject: 'threshold_config_client', predicate: 'implemented_by', object: 'tkt-4822' })),
+        ['threshold_config_client', 'implements', 'tkt-4822'],
+      );
+    });
   });
 });

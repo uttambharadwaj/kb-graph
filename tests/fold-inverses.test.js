@@ -209,6 +209,58 @@ describe('fold-inverses migration', () => {
     assert.strictEqual(live[0].source, 'legacy-src', 'the date and its source must come from the same row');
   });
 
+  // The role fold re-points a relationship whose predicate is already canonical,
+  // so a migration that asks the predicate alone walks straight past these rows —
+  // and consolidate would then write the corrected direction as a second live row.
+  it('rewrites a row stored with the work item as its subject', () => {
+    legacy('tkt-7001', 'implements', 'threshold_config_client', '2026-07-01');
+    foldInverses({ apply: true });
+
+    const live = liveFor('tkt-7001');
+    assert.strictEqual(live.length, 1);
+    assert.deepStrictEqual(
+      [live[0].subject, live[0].predicate, live[0].object],
+      ['threshold_config_client', 'implements', 'tkt-7001'],
+    );
+  });
+
+  it('leaves a pull request row in the direction it was written', () => {
+    legacy('pr-7002', 'implements', 'lease_ownership_check', '2026-07-01');
+    foldInverses({ apply: true });
+
+    const live = liveFor('pr-7002');
+    assert.strictEqual(live.length, 1);
+    assert.deepStrictEqual(
+      [live[0].subject, live[0].predicate, live[0].object],
+      ['pr-7002', 'implements', 'lease_ownership_check'],
+    );
+  });
+
+  it('rewrites the predicate of a row whose two folds cancel out', () => {
+    // implemented_by folds onto implements, which swaps the roles, and the role
+    // rule swaps them back — so the row keeps its subject and changes only its
+    // predicate. Swapping the stored columns blind would undo the first fold.
+    legacy('config_client_y', 'implemented_by', 'tkt-7004', '2026-07-01');
+    foldInverses({ apply: true });
+
+    const live = liveFor('config_client_y');
+    assert.strictEqual(live.length, 1);
+    assert.deepStrictEqual(
+      [live[0].subject, live[0].predicate, live[0].object],
+      ['config_client_y', 'implements', 'tkt-7004'],
+    );
+  });
+
+  it('merges a role-inverted row into the canonical one it duplicates', () => {
+    addFact('config_client_x', 'implements', 'tkt-7003', { validFrom: '2026-06-01', source: 'canonical-src' });
+    legacy('tkt-7003', 'implements', 'config_client_x', '2026-05-01');
+    foldInverses({ apply: true });
+
+    const live = liveFor('tkt-7003');
+    assert.strictEqual(live.length, 1, 'the fold created the duplicate it exists to prevent');
+    assert.strictEqual(live[0].valid_from, '2026-05-01');
+  });
+
   // The migration exists because consolidate's dedup cannot see the old
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.

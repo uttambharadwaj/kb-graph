@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
-import { addFact, queryFact, invalidateFact, sqlTimestamp } from './facts.js';
+import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
 
@@ -33,9 +33,11 @@ Rules:
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: points_at, configured_to, depends_on — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixed_in, status, uses, calls_over_http. Invent one only when none of them says it.
+- Prefer these predicates when one fits, so the same relationship is always the same edge: owns, child_of, blocked_by, depends_on, shipped_via, merged_via, deployed_to, approved_by, reviewed_by, declared_in, fixes, status, uses, calls_over_http. Invent one only when none of them says it.
 - A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
+- A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
+- status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
 - If nothing durable is present, return {"facts": [], "skipped": [...]}.
 
@@ -213,6 +215,24 @@ const readJSON = path => {
 const builtin = readJSON(new URL('./predicates.json', import.meta.url));
 const override = readJSON(join(KB_DIR, 'predicates.json'));
 
+// A configured entity-shape pattern, named so an install that supplies a bad
+// one is told which key was dropped.
+const compilePattern = (key, pattern) => {
+  if (!pattern) return null;
+  try {
+    return new RegExp(pattern, 'i');
+  } catch (err) {
+    console.error(`kb_extract: ignoring invalid ${key} ${JSON.stringify(pattern)}: ${err.message}`);
+    return null;
+  }
+};
+
+// Both patterns fall back to matching nothing, which is the do-no-harm
+// direction for each: no retirement, and no re-pointing of a relationship.
+const configuredPattern = key => compilePattern(key, override?.[key])
+  ?? compilePattern(key, builtin?.[key])
+  ?? /^$/;
+
 // Defined before the first normPred() call below — it reads this map.
 const PREDICATE_ALIASES = Object.fromEntries(
   Object.entries({ ...builtin?.aliases, ...override?.aliases })
@@ -264,13 +284,44 @@ export const PREDICATE_INVERSES = Object.fromEntries(withoutCycles(
 // registered still carries the old one, and it folds just the same.
 export const inverseTargetOf = predicate => PREDICATE_INVERSES[normPred(predicate)];
 
+// implements, fixes and their siblings are asymmetric in their ROLES rather than
+// their spelling: the work item is what gets built, so it belongs in the object.
+// "pr #45 (tkt-99, the config client) merged" hands the extractor a ticket and
+// an artefact side by side with only world knowledge to order them, and the
+// reversed triple still scans as a sentence — which is what carries it past
+// review, while asserting that a ticket built something and leaving "what
+// implements tkt-99" unanswered. Swapping is not a guess about intent: two
+// entities under one asymmetric predicate have exactly one arrangement that is
+// not backwards. Two work items are a real ticket-to-ticket relationship with
+// nothing in the shape to order them, so that case is left alone.
+const WORK_ITEM_OBJECT = new Set(
+  [...(builtin?.work_item_object || []), ...(override?.work_item_object || [])].map(normPred),
+);
+// One configured token shape, anchored two ways. A subject has to BE a work item
+// exactly, since a compound id (tkt-19-repo-pr-277) names a pull request and
+// would otherwise read as one. An object only has to START with one, because a
+// work item carrying a label after it (tkt-19_step_1_save_back) still makes this
+// a relationship between two work items, and those are left alone. Both
+// looseness and strictness point the same way here: away from swapping.
+const WORK_ITEM_TOKEN = configuredPattern('work_item_pattern').source;
+const IS_WORK_ITEM = new RegExp(`^(?:${WORK_ITEM_TOKEN})$`, 'i');
+const NAMES_WORK_ITEM = new RegExp(`^(?:${WORK_ITEM_TOKEN})(?![0-9a-z])`, 'i');
+
 // The triple as it will be stored: canonical predicate, canonical direction.
 export function canonicalTriple(f) {
   const pred = normPred(f.predicate);
   const inverse = PREDICATE_INVERSES[pred];
-  return inverse
+  const t = inverse
     ? { ...f, subject: f.object, predicate: inverse, object: f.subject }
     : { ...f, predicate: pred };
+  // After the inverse fold, not before: the predicate an install spells one way
+  // and the graph another has to reach its canonical name before the role rule
+  // can recognise it.
+  return WORK_ITEM_OBJECT.has(t.predicate)
+    && IS_WORK_ITEM.test(String(t.subject).trim())
+    && !NAMES_WORK_ITEM.test(String(t.object).trim())
+    ? { ...t, subject: t.object, object: t.subject }
+    : t;
 }
 
 // Cardinality belongs to (subject, predicate), not to the predicate. `status` is
@@ -281,18 +332,14 @@ export function canonicalTriple(f) {
 // pr_#412, svc-api#59), never a bare name (web-app, sso_login).
 // Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
 // text; this asks whether the whole subject is one.
-const compilePattern = pattern => {
-  if (!pattern) return null;
-  try {
-    return new RegExp(pattern, 'i');
-  } catch (err) {
-    console.error(`kb_extract: ignoring invalid single_valued_subjects ${JSON.stringify(pattern)}: ${err.message}`);
-    return null;
-  }
-};
-const SINGLE_ENTITY = compilePattern(override?.single_valued_subjects)
-  ?? compilePattern(builtin?.single_valued_subjects)
-  ?? /^$/; // no pattern at all: retire nothing, which is the keep-both-rows direction
+const SINGLE_ENTITY = configuredPattern('single_valued_subjects');
+
+// Whether a new object for this triple retires the old one. Shared, because the
+// intra-call conflict check has to ask the same question consolidate does — two
+// spellings of the rule would let a conflict go undetected and then be retired
+// by the loop anyway, which is the failure this pair exists to stop.
+const retiresOnContradiction = f =>
+  SINGLE_VALUED.has(f.predicate) && SINGLE_ENTITY.test(String(f.subject).trim());
 
 // One row per object. A comma-joined object ("pr #3835, pr #3849, pr #3851") is
 // unqueryable — kb_fact_query("pr #3849") never matches it — so split it into
@@ -305,6 +352,54 @@ export function splitListObject(fact) {
     .filter(Boolean);
   if (parts.length < 2 || !parts.every(referenceOf)) return [fact];
   return parts.map(object => ({ ...fact, object }));
+}
+
+// The store's own identity for a subject, so a group is contested on exactly
+// the terms the facts table would collide on. Both halves matter: "PR #48" and
+// "pr #48" are one subject there, and so are two names an entity merge has
+// since folded together.
+const conflictKey = f => `${entityKey(f.subject)}\0${f.predicate}`;
+
+// One value, however it is spelled: a variant carrying the same reference, or a
+// name an entity merge has since folded onto another. The store keeps one row
+// for either, so a comparison that splits them retires a row in favour of
+// itself and reports a contradiction that does not exist.
+const sameValue = (a, b) => sameEntity(a, b) || entityKey(a) === entityKey(b);
+
+/**
+ * The (subject, predicate) pairs this one batch gives two or more objects for,
+ * where a new object retires the old one.
+ *
+ * Three `status` rows for one PR in a single response are not a transition.
+ * Nothing in the input orders them, so the last one the loop happens to reach
+ * wins and the earlier two get a valid_to stamped the moment they are written —
+ * a retirement that reads afterwards as a state change that never happened, and
+ * the batch contradicts itself in both directions when a chunk repeats a value.
+ * The usual shape behind it is one predicate doing three jobs: `open` is
+ * lifecycle, `approved` is review, `queued_for_merge` is the merge queue.
+ *
+ * With no basis to choose, the group retires nothing and is reported instead. A
+ * duplicate is visible on the next query and repairable; a wrong retirement is
+ * neither.
+ */
+function findSingleValuedConflicts(facts) {
+  const groups = new Map();
+  for (const raw of facts.flatMap(splitListObject)) {
+    if (!raw?.subject || !raw?.predicate || !raw?.object) continue;
+    const f = canonicalTriple(raw);
+    if (!retiresOnContradiction(f)) continue;
+    const key = conflictKey(f);
+    const group = groups.get(key) || { subject: f.subject, predicate: f.predicate, objects: [] };
+    if (!group.objects.some(o => sameValue(o, f.object))) group.objects.push(f.object);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .filter(g => g.objects.length > 1)
+    .map(g => ({
+      ...g,
+      reason: 'single_valued_conflict_within_call',
+      resolution: 'all kept, none retired — one call cannot order them. Split them onto separate predicates, or retire the dead ones with kb_fact_invalidate.',
+    }));
 }
 
 // recorded_at is compared as a raw string, so an ISO instant ("...T12:00:00Z")
@@ -327,12 +422,15 @@ export function normalizeObservedAt(value) {
 //   - identical triple already present  -> skipped (duplicate)
 //   - same object spelled differently   -> skipped (the graph's spelling wins)
 //   - single-valued predicate, different object, currently valid -> retire old, add new
+//   - two objects for one single-valued pair in this same batch -> add both, retire nothing
 //   - otherwise -> add
 // Pure over the facts table (no LLM) — this is the deterministic, testable core.
 export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
   const observedAtTs = normalizeObservedAt(observedAt) || sqlTimestamp();
+  const conflicts = findSingleValuedConflicts(facts);
+  const contested = new Set(conflicts.map(conflictKey));
 
   for (const raw of facts.flatMap(splitListObject)) {
     if (!raw?.subject || !raw?.predicate || !raw?.object) {
@@ -351,12 +449,14 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     const held = queryFact(subject, { direction: 'outgoing', exact: true })
       .filter(r => r.current && normPred(r.predicate) === pred);
 
-    // Retire any currently-valid fact with the same subject+predicate but a different object.
-    // Runs before the spelling check below: a live object this value genuinely
-    // contradicts must still be retired, even when a variant of the value is also
-    // held — kb_fact_add writes without consolidating, so both can coexist.
-    const retires = SINGLE_VALUED.has(pred) && SINGLE_ENTITY.test(String(subject).trim());
-    const current = retires ? held.filter(r => !sameEntity(r.object, object)) : [];
+    // The currently-valid facts with this subject+predicate that this value
+    // contradicts. Computed before the spelling check below: a live object this
+    // value genuinely contradicts must still be found, even when a variant of
+    // the value is also held — kb_fact_add writes without consolidating, so both
+    // can coexist.
+    const contradicted = retiresOnContradiction(f)
+      ? held.filter(r => !sameValue(r.object, object))
+      : [];
 
     // An assertion observed before a fact we already hold is older news, not a
     // contradiction: a caller passing observation_date is replaying text from
@@ -365,7 +465,11 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // and catches the same-day case, 10am text replayed against a 4pm
     // correction. A caller that passes neither is speaking for now and skips
     // both tests, which is right.
-    const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
+    // Read from `contradicted`, not from what will actually be retired: a batch
+    // that disagrees with itself still loses to what the graph learned after it,
+    // and gating this on the retirement decision would write a replay of old
+    // text as current the moment the batch happened to be contested.
+    const newer = contradicted.find(r => (r.valid_from && r.valid_from > validFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({
@@ -378,7 +482,12 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
       continue;
     }
 
-    for (const stale of current) {
+    // A pair this batch cannot agree on has no value to supersede anything with,
+    // so it retires nothing at all — not its siblings here, and not what the
+    // graph already holds.
+    const retiring = contested.has(conflictKey(f)) ? [] : contradicted;
+
+    for (const stale of retiring) {
       // Report the retirement only if it happened. The guard above means
       // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
       // subprocesses share one DB, so another can retire it between this read
@@ -408,7 +517,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // held is predicate-normalised; addFact is not — it looks up the canonical
     // edge only, so a row written under a pre-alias spelling is invisible to it
     // and the same fact lands twice, once per spelling. Catch both here.
-    const existing = held.find(r => sameEntity(r.object, object));
+    const existing = held.find(r => sameValue(r.object, object));
     if (existing) {
       const sameSpelling = normEntity(existing.object) === normEntity(object);
       skipped.push({
@@ -426,7 +535,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     else added.push(res);
   }
 
-  return { added, invalidated, skipped };
+  return { added, invalidated, skipped, conflicts };
 }
 
 // A dry run is only a preview if the commit writes what was previewed. Generation
@@ -477,7 +586,16 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // with the commit for exactly the drift this preview exists to expose.
     const candidates = facts.flatMap(splitListObject)
       .map(f => (f?.subject && f?.predicate && f?.object ? canonicalTriple(f) : f));
-    return { dry_run: true, candidates, skipped: notExtracted, preview_key: key };
+    // Previewed too: the whole point of a self-contradicting batch is that its
+    // retirements land invisibly at commit time, and a preview that showed only
+    // the candidates would be the last place to catch it before they do.
+    return {
+      dry_run: true,
+      candidates,
+      conflicts: findSingleValuedConflicts(facts),
+      skipped: notExtracted,
+      preview_key: key,
+    };
   }
 
   const res = consolidate(facts, { source, observationDate, observedAt });

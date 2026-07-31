@@ -168,7 +168,7 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
 
   const source = `harvest:${basename(path, '.jsonl')}`;
 
-  let facts = 0, chunkErrors = 0, factsUnread = 0;
+  let facts = 0, chunkErrors = 0, factsUnread = 0, contested = 0;
   if (wantFacts) {
     const observationDate = new Date(mtime).toISOString().split('T')[0];
     // The instant, not just the day: a transcript from this morning must not
@@ -184,6 +184,10 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
       try {
         const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
         facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
+        // A pair the chunk gave two values for is left unretired for a human to
+        // settle. This runs unattended, so the count is the only place it
+        // surfaces at all.
+        contested += res.conflicts?.length || 0;
       } catch {
         chunkErrors++; // one bad chunk shouldn't sink the transcript
       }
@@ -232,7 +236,7 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
   // both: the fact pass keeps a strict superset of what the lessons pass keeps,
   // so a session can be fully covered for facts and still have had no lesson
   // drawn from its middle.
-  return { facts, notes: written, chunkErrors, unreadByLessons: middleDropped, unreadByFacts: factsUnread };
+  return { facts, notes: written, chunkErrors, contested, unreadByLessons: middleDropped, unreadByFacts: factsUnread };
 }
 
 // --- orchestrator -----------------------------------------------------------
@@ -277,7 +281,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   const pending = candidates.length;
   const work = selectWork(candidates);
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0,
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0, contested: 0,
     unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls };
   for (const { path, mtime } of work) {
     try {
@@ -310,7 +314,8 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       // Say "facts" only when they were asked for, so a run with the extraction
       // off cannot read as one that looked and found nothing.
       const factPart = wantFacts ? `${r.facts} facts, ` : '';
-      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
+      summary.contested += r.contested;
+      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.contested ? `, ${r.contested} contested pairs` : ''}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);
@@ -323,6 +328,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   // Everything the run passed over, so the totals account for the whole queue.
   if (summary.tooShort) console.log(`${summary.tooShort} sessions too short to harvest`);
   if (summary.partial) console.log(`${summary.partial} sessions were only partly read — see the per-session lines above`);
+  if (summary.contested) console.log(`${summary.contested} pairs were given two values in one call and left unretired — kb_fact_query them and retire the dead ones`);
   if (summary.notReached) console.log(`Backlog: ${summary.notReached} of ${summary.pending} pending sessions not reached this run`);
   if (summary.printModeCalls) console.log(`Skipped ${summary.printModeCalls} print-mode (SDK) transcripts — set KB_HARVEST_SDK_SESSIONS=1 to harvest them`);
 

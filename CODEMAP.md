@@ -1,10 +1,10 @@
 # Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: `node bin/generate-codemap.js`
-> Generated: 2026-07-30
+> Generated: 2026-07-31
 
 ## Quick Stats
 - **Files:** 127
-- **Total lines:** 16,759
+- **Total lines:** 17,260
 
 ## Architecture Overview
 ```
@@ -65,9 +65,9 @@ bin/
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 72 | runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 610 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 486 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 248 | initFactSchema, sqlTimestamp, mergeEntity, addFact, queryFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
-| harvest.js | 366 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
+| extract.js | 604 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| facts.js | 254 | initFactSchema, sqlTimestamp, entityKey, mergeEntity, addFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
 | mcp-supervisor.js | 295 | superviseMcpServer | Taken from the client's own default rather than restated: past its timeout a |
@@ -118,7 +118,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| fold-inverses.js | 112 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows written before inverse folding. |
+| fold-inverses.js | 125 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows written before direction folding — |
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
@@ -207,13 +207,13 @@ bin/
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
 | extract-context.test.js | 67 | - | - |
-| extract-eval.test.js | 133 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
-| extract.test.js | 568 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract-eval.test.js | 192 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
+| extract.test.js | 790 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
-| fold-inverses.test.js | 226 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| fold-inverses.test.js | 278 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | ingest.test.js | 32 | - | Body |
-| inverse-fold.test.js | 176 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| inverse-fold.test.js | 201 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | mcp-supervisor.test.js | 173 | MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
 | register.test.js | 60 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
