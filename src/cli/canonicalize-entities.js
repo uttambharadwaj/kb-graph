@@ -13,9 +13,10 @@
 // whichever name the caller happened to pass rather than the one the facts use,
 // and leave behind the duplicate live triples a merge creates.
 import { getDb } from '../db.js';
-import { canonicalEntityId, entityKey } from '../facts.js';
+import { canonicalEntityId, entityKey, dedupeLiveFacts } from '../facts.js';
 
-// The triple identity a merge can collide on. Only live rows are deduped: a
+// The triple identity a merge can collide on, for predicting what
+// dedupeLiveFacts will collapse. Retired rows are excluded there and here: a
 // retired row is history, and dropping it loses the record of when the
 // relationship stopped being stated that way.
 const tripleKey = f => `${f.subject}\0${f.predicate}\0${f.object}`;
@@ -81,7 +82,6 @@ export function canonicalizeEntities({ apply = false, verbose = false } = {}) {
   const dropEntity = db.prepare('DELETE FROM entities WHERE id = ?');
   const dropAlias = db.prepare('DELETE FROM entity_aliases WHERE alias = ?');
   const putAlias = db.prepare('INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)');
-  const dropFact = db.prepare('DELETE FROM facts WHERE id = ?');
 
   // Every read and every write in one transaction. ~13 MCP subprocesses share
   // this DB, so a plan computed outside it can be written against rows another
@@ -122,7 +122,7 @@ export function canonicalizeEntities({ apply = false, verbose = false } = {}) {
     // After the rewrite, not before: two rows that named one relationship in
     // two spellings are now the same triple, and addFact refuses to create that
     // pair, so leaving it would put state in the graph no writer can produce.
-    const written = dedupeLiveFacts(db, dropFact);
+    const written = dedupeLiveFacts();
     return { merges, aliases, moved, rows, collapsed: written };
   });
 
@@ -159,26 +159,6 @@ function countRewrite(db, merges) {
   return { rows, collapsed };
 }
 
-function dedupeLiveFacts(db, dropFact) {
-  // ORDER BY is load-bearing, not cosmetic. NULL sorts first here, matching
-  // queryFact's as-of test (valid_from IS NULL OR valid_from <= ?), so the
-  // first row of each key is the one that starts earliest — keeping it is what
-  // stops a merge making a fact look younger than the graph knew it to be, and
-  // its source stays with its date because the whole row survives.
-  const rows = db.prepare(
-    'SELECT id, subject, predicate, object FROM facts WHERE valid_to IS NULL ORDER BY valid_from',
-  ).all();
-
-  const kept = new Set();
-  let collapsed = 0;
-  for (const row of rows) {
-    const key = tripleKey(row);
-    if (!kept.has(key)) { kept.add(key); continue; }
-    dropFact.run(row.id);
-    collapsed++;
-  }
-  return collapsed;
-}
 
 function report({ merges, aliases, moved, rows, collapsed }, { apply, verbose }) {
   const collisions = merges.filter(g => g.members.length > 1);

@@ -7,7 +7,7 @@ import { join } from 'path';
 // Point the KB at a throwaway dir BEFORE importing anything that opens the DB.
 process.env.KB_DIR = mkdtempSync(join(tmpdir(), 'kb-canon-'));
 
-const { canonicalEntityId, entityKey, addFact, queryFact, initFactSchema } = await import('../src/facts.js');
+const { canonicalEntityId, entityKey, addFact, queryFact, invalidateFact, mergeEntity, initFactSchema } = await import('../src/facts.js');
 const { canonicalizeEntities, auditCanonicalEntities } = await import('../src/cli/canonicalize-entities.js');
 const { getDb } = await import('../src/db.js');
 const { getToolDefinitions } = await import('../src/tools.js');
@@ -88,6 +88,35 @@ describe('write-then-read round trip', () => {
     assert.deepEqual(objectsOf('job_runner'), ['ecs', 'sqs queue']);
     const ids = getDb().prepare("SELECT id FROM entities WHERE id LIKE '%job%runner%'").all().map(r => r.id);
     assert.deepEqual(ids, ['job_runner']);
+  });
+});
+
+describe('kb entity-merge', () => {
+  // The hand tool the partial-answer message points people at. It rewrites the
+  // facts of the entity it folds, which is exactly how one triple ends up with
+  // two live rows — a state addFact refuses to write.
+  it('collapses the duplicate live rows its own rewrite creates', () => {
+    addFact('alpha thing', 'deploys_to', 'prod-west', { validFrom: '2026-01-01', source: 'earlier' });
+    addFact('beta thing', 'deploys_to', 'prod-west', { validFrom: '2026-02-01', source: 'later' });
+
+    const res = mergeEntity('beta thing', 'alpha thing');
+    assert.equal(res.duplicates_collapsed, 1);
+
+    const live = queryFact('alpha thing', { direction: 'outgoing' }).filter(f => f.current);
+    assert.equal(live.length, 1);
+    assert.equal(live[0].valid_from, '2026-01-01');
+    assert.equal(live[0].source, 'earlier');
+    assert.deepEqual(auditCanonicalEntities().duplicate_live_triples, []);
+  });
+
+  it('leaves a retired row alone when the live one now matches it', () => {
+    addFact('gamma thing', 'status', 'shipped', { validFrom: '2026-01-01' });
+    invalidateFact('gamma thing', 'status', 'shipped', { ended: '2026-02-01' });
+    addFact('delta thing', 'status', 'shipped', { validFrom: '2026-03-01' });
+
+    mergeEntity('delta thing', 'gamma thing');
+    const rows = queryFact('gamma thing', { direction: 'outgoing' });
+    assert.deepEqual(rows.map(r => r.current).sort(), [false, true]);
   });
 });
 

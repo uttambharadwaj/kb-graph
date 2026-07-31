@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 138
-- **Total lines:** 19,285
+- **Total lines:** 19,325
 
 ## Architecture Overview
 ```
@@ -66,7 +66,7 @@ bin/
 | claude-cli.js | 88 | modelEnv, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 625 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
 | extract.js | 732 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 302 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
@@ -119,7 +119,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| canonicalize-entities.js | 250 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
+| canonicalize-entities.js | 230 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
 | fold-inverses.js | 129 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows stored under a spelling |
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
@@ -209,10 +209,10 @@ bin/
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
-| entity-canonicalization.test.js | 240 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| entity-canonicalization.test.js | 269 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract-context.test.js | 67 | - | - |
 | extract-eval.test.js | 207 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
-| extract.test.js | 834 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 838 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 304 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |

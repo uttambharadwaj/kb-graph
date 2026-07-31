@@ -106,6 +106,29 @@ export function nearbyEntities(entityName) {
   return out.sort((a, b) => b.facts - a.facts || a.id.localeCompare(b.id));
 }
 
+// Live rows that name one triple more than once. addFact refuses to write that
+// pair, so only a merge can produce it, and leaving it puts state in the graph
+// no writer could have created. Scoped to one entity where a merge names the
+// node it just collapsed onto; unscoped for a back-fill that moved many.
+// The earliest row survives whole, so its source never parts from its date —
+// NULL sorts first here, matching queryFact's as-of test.
+export function dedupeLiveFacts(entityId = null) {
+  const db = getDb();
+  const scope = entityId ? 'AND (subject = ? OR object = ?)' : '';
+  const rows = db.prepare(
+    `SELECT id, subject, predicate, object FROM facts WHERE valid_to IS NULL ${scope} ORDER BY valid_from`
+  ).all(...(entityId ? [entityId, entityId] : []));
+
+  const drop = db.prepare('DELETE FROM facts WHERE id = ?');
+  const kept = new Set();
+  let collapsed = 0;
+  for (const row of rows) {
+    const key = `${row.subject}\0${row.predicate}\0${row.object}`;
+    if (kept.has(key)) { drop.run(row.id); collapsed += 1; } else kept.add(key);
+  }
+  return collapsed;
+}
+
 // Merge entity `from` into `to`: rewrite all facts, record the alias so
 // future writes and queries using the old name land on the canonical node.
 export function mergeEntity(fromName, toName) {
@@ -114,15 +137,19 @@ export function mergeEntity(fromName, toName) {
   const to = entityKey(toName);
   if (from === to) return { merged: false, reason: 'same entity' };
 
-  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(to, toName);
-  const subs = db.prepare('UPDATE facts SET subject = ? WHERE subject = ?').run(to, from).changes;
-  const objs = db.prepare('UPDATE facts SET object = ? WHERE object = ?').run(to, from).changes;
-  db.prepare('INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)').run(from, to);
-  // Repoint any aliases that targeted the old id, then drop its entity row.
-  db.prepare('UPDATE entity_aliases SET canonical = ? WHERE canonical = ?').run(to, from);
-  db.prepare('DELETE FROM entities WHERE id = ?').run(from);
+  // One transaction: a half-applied merge leaves facts pointing at an entity
+  // row that is already gone, and the DB is shared with every live server.
+  return db.transaction(() => {
+    db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(to, toName);
+    const subs = db.prepare('UPDATE facts SET subject = ? WHERE subject = ?').run(to, from).changes;
+    const objs = db.prepare('UPDATE facts SET object = ? WHERE object = ?').run(to, from).changes;
+    db.prepare('INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)').run(from, to);
+    // Repoint any aliases that targeted the old id, then drop its entity row.
+    db.prepare('UPDATE entity_aliases SET canonical = ? WHERE canonical = ?').run(to, from);
+    db.prepare('DELETE FROM entities WHERE id = ?').run(from);
 
-  return { merged: true, from, to, facts_rewritten: subs + objs };
+    return { merged: true, from, to, facts_rewritten: subs + objs, duplicates_collapsed: dedupeLiveFacts(to) };
+  })();
 }
 
 export function addFact(subject, predicate, object, { validFrom, source } = {}) {
@@ -234,9 +261,9 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   // row would be neither current nor historical — it would just vanish.
   // Refuses rather than throws: the caller is consolidate, iterating a batch,
   // where an exception would abandon every fact queued behind this one.
-  // MAX, not an arbitrary row: mergeEntity can collapse two entities into one
-  // triple with several live rows, and the UPDATE below hits all of them. The
-  // latest start is the one that decides whether any interval would invert.
+  // MAX, not an arbitrary row: a graph written before merges collapsed their
+  // duplicates can hold several live rows for one triple, and the UPDATE below
+  // hits all of them. The latest start decides whether any interval inverts.
   const row = db.prepare(
     'SELECT MAX(valid_from) AS valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
   ).get(subId, pred, objId);
