@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
-import { addFact, queryFact, invalidateFact, sqlTimestamp, entityId } from './facts.js';
+import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
 
@@ -355,9 +355,10 @@ export function splitListObject(fact) {
 }
 
 // The store's own identity for a subject, so a group is contested on exactly
-// the terms the facts table would collide on — "PR #48" and "pr #48" are one
-// subject there and have to be one here.
-const conflictKey = f => `${entityId(f.subject)}\0${f.predicate}`;
+// the terms the facts table would collide on. Both halves matter: "PR #48" and
+// "pr #48" are one subject there, and so are two names an entity merge has
+// since folded together.
+const conflictKey = f => `${entityKey(f.subject)}\0${f.predicate}`;
 
 /**
  * The (subject, predicate) pairs this one batch gives two or more objects for,
@@ -444,15 +445,14 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     const held = queryFact(subject, { direction: 'outgoing', exact: true })
       .filter(r => r.current && normPred(r.predicate) === pred);
 
-    // Retire any currently-valid fact with the same subject+predicate but a different object.
-    // Runs before the spelling check below: a live object this value genuinely
-    // contradicts must still be retired, even when a variant of the value is also
-    // held — kb_fact_add writes without consolidating, so both can coexist.
-    // A pair this batch cannot agree on has no value to supersede anything with,
-    // so it retires nothing at all — not its siblings here, and not what the
-    // graph already holds.
-    const retires = retiresOnContradiction(f) && !contested.has(conflictKey(f));
-    const current = retires ? held.filter(r => !sameEntity(r.object, object)) : [];
+    // The currently-valid facts with this subject+predicate that this value
+    // contradicts. Computed before the spelling check below: a live object this
+    // value genuinely contradicts must still be found, even when a variant of
+    // the value is also held — kb_fact_add writes without consolidating, so both
+    // can coexist.
+    const contradicted = retiresOnContradiction(f)
+      ? held.filter(r => !sameEntity(r.object, object))
+      : [];
 
     // An assertion observed before a fact we already hold is older news, not a
     // contradiction: a caller passing observation_date is replaying text from
@@ -461,7 +461,11 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // and catches the same-day case, 10am text replayed against a 4pm
     // correction. A caller that passes neither is speaking for now and skips
     // both tests, which is right.
-    const newer = current.find(r => (r.valid_from && r.valid_from > validFrom)
+    // Read from `contradicted`, not from what will actually be retired: a batch
+    // that disagrees with itself still loses to what the graph learned after it,
+    // and gating this on the retirement decision would write a replay of old
+    // text as current the moment the batch happened to be contested.
+    const newer = contradicted.find(r => (r.valid_from && r.valid_from > validFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({
@@ -473,6 +477,11 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
       });
       continue;
     }
+
+    // A pair this batch cannot agree on has no value to supersede anything with,
+    // so it retires nothing at all — not its siblings here, and not what the
+    // graph already holds.
+    const current = contested.has(conflictKey(f)) ? [] : contradicted;
 
     for (const stale of current) {
       // Report the retirement only if it happened. The guard above means

@@ -653,6 +653,37 @@ describe('kb_extract consolidation', () => {
       assert.strictEqual(res.conflicts.length, 1);
     });
 
+    it('still loses to a fact recorded after the text it is replaying', () => {
+      // Suppressing the retirement must not also suppress the staleness guard:
+      // old text stays old whether or not the batch carrying it agreed with
+      // itself, or a replay would write two dead values as current.
+      addFact('pr #4804', 'status', 'done', { validFrom: '2026-07-30', source: 'seed' });
+
+      const res = consolidate([
+        { subject: 'pr #4804', predicate: 'status', object: 'open' },
+        { subject: 'pr #4804', predicate: 'status', object: 'approved' },
+      ], { source: 'test', observationDate: '2026-07-01' });
+
+      assert.deepStrictEqual(res.added, []);
+      assert.deepStrictEqual(res.skipped.map(s => s.reason), ['stale_observation', 'stale_observation']);
+      assert.deepStrictEqual(currentObject('pr #4804', 'status'), ['done']);
+    });
+
+    it('groups two names an entity merge has folded together', () => {
+      // entityKey follows the alias table, so a merged pair is one subject here
+      // exactly as it is in the facts table.
+      addFact('tkt-4840', 'status', 'in_review', { validFrom: '2026-07-01', source: 'seed' });
+      mergeEntity('tkt-4840', 'pr #4840');
+
+      const res = consolidate([
+        { subject: 'tkt-4840', predicate: 'status', object: 'open' },
+        { subject: 'pr #4840', predicate: 'status', object: 'approved' },
+      ], { source: 'test', observationDate: '2026-07-30' });
+
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.strictEqual(res.conflicts.length, 1);
+    });
+
     it('still retires across calls, where the order is real', () => {
       consolidate([{ subject: 'tkt-4832', predicate: 'status', object: 'in_review' }],
         { source: 'test', observationDate: '2026-07-29' });
