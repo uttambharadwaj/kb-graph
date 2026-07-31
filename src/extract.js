@@ -481,9 +481,9 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // A pair this batch cannot agree on has no value to supersede anything with,
     // so it retires nothing at all — not its siblings here, and not what the
     // graph already holds.
-    const current = contested.has(conflictKey(f)) ? [] : contradicted;
+    const retiring = contested.has(conflictKey(f)) ? [] : contradicted;
 
-    for (const stale of current) {
+    for (const stale of retiring) {
       // Report the retirement only if it happened. The guard above means
       // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
       // subprocesses share one DB, so another can retire it between this read
