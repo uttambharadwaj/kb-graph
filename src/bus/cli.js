@@ -1,11 +1,13 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { spawn } from 'child_process';
-import { clearBusBinding, readBusBinding, writeBusBinding } from './context.js';
+import { getBusNotifierIdleMs, getBusNotifierIntervalMs } from './config.js';
+import { clearBusBinding, normalizeCwd, readBusBinding, writeBusBinding } from './context.js';
 import {
   clearBusNotifierPid,
   clearBusPending,
   readBusNotifierPid,
   readBusPending,
+  releaseBusNotifierPid,
   writeBusNotifierPid,
   writeBusPending,
 } from './pending.js';
@@ -585,7 +587,7 @@ export async function runBusHookCurrentCli(args) {
 
 export async function runBusNotifierCli(args) {
   const agent = readFlag(args, '--agent');
-  const interval_ms = Number(readFlag(args, '--interval-ms', '1000'));
+  const interval_ms = Number(readFlag(args, '--interval-ms', String(getBusNotifierIntervalMs())));
   const hookInput = readHookInput();
   const cwd = readFlag(args, '--cwd', hookInput.cwd || process.cwd());
   const once = args.includes('--once');
@@ -598,28 +600,7 @@ export async function runBusNotifierCli(args) {
   }
 
   const state = collectCurrentBusDigest({ agent, cwd, pendingOnly: false });
-  const scopeCwd = state.binding?.cwd || cwd;
-
-  if (daemonize) {
-    const existingPid = readBusNotifierPid({ agent, cwd: scopeCwd });
-    if (existingPid && isPidAlive(existingPid)) {
-      printJson({ ok: true, agent, cwd: scopeCwd, pid: existingPid, started: false });
-      return;
-    }
-    clearBusNotifierPid({ agent, cwd: scopeCwd });
-    const childArgs = process.argv[1].endsWith('kb.js')
-      ? [process.argv[1], 'bus-notifier', '--agent', agent, '--cwd', cwd, '--interval-ms', String(interval_ms), '--serve']
-      : [process.argv[1], '--agent', agent, '--cwd', cwd, '--interval-ms', String(interval_ms), '--serve'];
-    const child = spawn(process.execPath, childArgs, {
-      detached: true,
-      stdio: 'ignore',
-      env: process.env,
-    });
-    child.unref();
-    writeBusNotifierPid({ agent, cwd: scopeCwd, pid: child.pid });
-    printJson({ ok: true, agent, cwd: scopeCwd, pid: child.pid, started: true });
-    return;
-  }
+  const scopeCwd = normalizeCwd(state.binding?.cwd || cwd);
 
   const syncPending = () => {
     const current = collectCurrentBusDigest({ agent, cwd, pendingOnly: false });
@@ -652,6 +633,33 @@ export async function runBusNotifierCli(args) {
     };
   };
 
+  if (daemonize) {
+    if (!state.binding) {
+      printJson({ ok: true, agent, cwd: scopeCwd, pid: null, started: false, reason: 'no-binding' });
+      return;
+    }
+    // Hooks run this every prompt, so refreshing here keeps the digest current even when no daemon is resident.
+    syncPending();
+    const existingPid = readBusNotifierPid({ agent, cwd: scopeCwd });
+    if (existingPid && isPidAlive(existingPid)) {
+      printJson({ ok: true, agent, cwd: scopeCwd, pid: existingPid, started: false });
+      return;
+    }
+    clearBusNotifierPid({ agent, cwd: scopeCwd });
+    const childArgs = process.argv[1].endsWith('kb.js')
+      ? [process.argv[1], 'bus-notifier', '--agent', agent, '--cwd', cwd, '--interval-ms', String(interval_ms), '--serve']
+      : [process.argv[1], '--agent', agent, '--cwd', cwd, '--interval-ms', String(interval_ms), '--serve'];
+    const child = spawn(process.execPath, childArgs, {
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    });
+    child.unref();
+    writeBusNotifierPid({ agent, cwd: scopeCwd, pid: child.pid });
+    printJson({ ok: true, agent, cwd: scopeCwd, pid: child.pid, started: true });
+    return;
+  }
+
   if (once) {
     printJson(syncPending());
     return;
@@ -663,14 +671,32 @@ export async function runBusNotifierCli(args) {
   }
 
   writeBusNotifierPid({ agent, cwd: scopeCwd, pid: process.pid });
-  const cleanup = () => clearBusNotifierPid({ agent, cwd: scopeCwd });
+  const cleanup = () => releaseBusNotifierPid({ agent, cwd: scopeCwd, pid: process.pid });
   process.on('exit', cleanup);
   process.on('SIGINT', () => process.exit(0));
   process.on('SIGTERM', () => process.exit(0));
 
-  const sleepMs = Number.isFinite(interval_ms) && interval_ms > 0 ? interval_ms : 1000;
+  const sleepMs = Number.isFinite(interval_ms) && interval_ms > 0 ? interval_ms : getBusNotifierIntervalMs();
+  const idleMs = getBusNotifierIdleMs();
+  let lastDigest = null;
+  let idleSince = Date.now();
+
   while (true) {
-    syncPending();
+    // Exiting is cheap: the hooks re-launch a notifier and refresh the digest on the next prompt.
+    if (!existsSync(scopeCwd)) return;
+    // The PID claim is last-writer-wins, so a superseded notifier steps aside here.
+    if (readBusNotifierPid({ agent, cwd: scopeCwd }) !== process.pid) return;
+
+    const current = syncPending();
+    if (!current.binding || current.binding.cwd !== scopeCwd) return;
+
+    const digest = current.pending_state?.digest ?? '';
+    if (digest !== lastDigest) {
+      lastDigest = digest;
+      idleSince = Date.now();
+    }
+    if (Date.now() - idleSince >= idleMs) return;
+
     await new Promise(resolve => setTimeout(resolve, sleepMs));
   }
 }

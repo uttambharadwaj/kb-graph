@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 136
-- **Total lines:** 18,502
+- **Total lines:** 18,729
 
 ## Architecture Overview
 ```
@@ -74,7 +74,7 @@ bin/
 | mcp.js | 51 | start | Allow direct execution |
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
 | restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
-| retrieval.js | 33 | SURFACES, resolveSessionId, logRetrieval | Read-path telemetry: the write path has always been logged (documents, |
+| retrieval.js | 44 | SURFACE, SURFACES, resolveSessionId, logRetrieval | Read-path telemetry: the write path has always been logged (documents, |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
@@ -88,12 +88,12 @@ bin/
 |------|-------|---------|---------|
 | agentd.js | 417 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
-| cli.js | 677 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusGatewayCli, runBusAgentCli... | - |
-| config.js | 51 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | Read at use time; invalid pattern warns once then falls back to default. |
+| cli.js | 703 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusGatewayCli, runBusAgentCli... | - |
+| config.js | 59 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | Read at use time; invalid pattern warns once then falls back to default. |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
 | db.js | 216 | getBusDb, closeBusDb | - |
 | gateway.js | 273 | registerBusSession, getBusSession, listBusSessions, runBusGatewayOnce, runBusGatewayLoop... | - |
-| pending.js | 76 | getBusPendingPath, readBusPending, writeBusPending, clearBusPending, getBusNotifierPidPath... | - |
+| pending.js | 83 | getBusPendingPath, readBusPending, writeBusPending, clearBusPending, getBusNotifierPidPath... | Only the recorded owner may clear the claim; a superseded notifier must not dere |
 | resources.js | 32 | registerBusResources | - |
 | service.js | 647 | onBusMessage, sendBusMessage, getMessageById, readBusInbox, readBusNotifications... | - |
 | tools.js | 197 | getBusToolDefinitions | - |
@@ -125,7 +125,7 @@ bin/
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
 | prompt-hint.js | 42 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
 | register.js | 17 | register | - |
-| retrieval-report.js | 98 | retrievalReport, runRetrievalReportCli | A doc counts as "ever retrieved" if it appears with a non-null doc_id in |
+| retrieval-report.js | 100 | retrievalReport, runRetrievalReportCli | A doc counts as "ever retrieved" if it appears with a non-null doc_id in |
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
 | search-cli.js | 26 | search | - |
 | setup-hooks.js | 48 | mergeClaudeHooks, installClaudeHooks | src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code setting |
@@ -204,7 +204,7 @@ bin/
 |------|-------|---------|---------|
 | api-key.test.js | 57 | - | tests/api-key.test.js |
 | autobind.test.js | 185 | - | - |
-| bus.test.js | 1102 | - | - |
+| bus.test.js | 1275 | - | - |
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |

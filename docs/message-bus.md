@@ -123,7 +123,7 @@ See [`docs/bus-hooks.md`](./bus-hooks.md) for wiring examples.
 
 ### Notifier daemon + pending-digest (V3+)
 
-A background `bus-notifier --daemonize` process (one per `(agent, cwd)`) polls the workspace binding's subscriptions at `KB_BUS_NOTIFIER_INTERVAL_MS` (default 1000 ms) and maintains a **pending-digest file** that hooks can read instantly:
+A background `bus-notifier --daemonize` process (one per bound workspace) polls the workspace binding's subscriptions at `KB_BUS_NOTIFIER_INTERVAL_MS` (default 1000 ms) and maintains a **pending-digest file** that hooks can read instantly:
 
 - **Pending file:** `~/.claude/bus/pending/<agent>-<cwd-hash>.json` — fresh digest + total_new + channels list
 - **PID file:** `~/.claude/bus/notifiers/<agent>-<cwd-hash>.pid` — used to detect liveness and avoid spawning duplicate daemons
@@ -134,9 +134,9 @@ When the daemon sees no mail for a workspace, it clears the pending file. `--pen
 
 Lifecycle:
 
-- **Startup:** `bus-notifier --daemonize` is wired into `SessionStart` and `UserPromptSubmit` hooks. Idempotent — if a live PID already exists, returns without forking.
+- **Startup:** `bus-notifier --daemonize` is wired into `SessionStart` and `UserPromptSubmit` hooks. It refreshes the pending digest inline, then forks only if the workspace is bound and no live PID is recorded. An unbound workspace gets no daemon (`started: false`, `reason: "no-binding"`).
 - **Liveness:** consumers (e.g. Stop hook) should check `readBusNotifierPid` and re-launch if the PID is stale. Future work (`kb bus-host-hook`) consolidates this check.
-- **Shutdown:** the daemon is detached and `unref`'d; it survives parent session exit. Restart the host or kill the PID to stop it.
+- **Shutdown:** the daemon is detached and `unref`'d, so it outlives the session that forked it, but it is not immortal. It exits when it has seen no new traffic for `KB_BUS_NOTIFIER_IDLE_MS`, when its binding is removed or moves to a nearer directory, when its workspace directory is deleted, or when a newer notifier claims the same PID file. Because the hooks re-launch it every prompt and refresh the digest inline, an exited daemon costs nothing.
 
 Architectural roles (post-notifier):
 
@@ -281,6 +281,7 @@ If your MCP host supports resource subscriptions, you can subscribe to that URI.
 - Retention: last `KB_BUS_RETENTION_MESSAGES` per channel (default `200`)
 - Poll interval for `bus_read(wait=true)`: `KB_BUS_POLL_MS` (default `250`)
 - Notifier interval: `KB_BUS_NOTIFIER_INTERVAL_MS` (default `1000`)
+- Notifier idle deadline: `KB_BUS_NOTIFIER_IDLE_MS` (default `900000`)
 - Pending digest file: `~/.claude/bus/pending/<agent>-<cwd-hash>.json`
 - Notifier PID file: `~/.claude/bus/notifiers/<agent>-<cwd-hash>.pid`
 
