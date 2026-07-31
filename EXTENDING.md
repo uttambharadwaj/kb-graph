@@ -123,6 +123,10 @@ async function extractEpubContent(filePath, filename) {
 4. `embeddings` -- Semantic search vectors
    - `document_id` (FK), `vault_path`, `chunk_index`, `chunk_text`, `embedding` (BLOB), `dimensions`
 
+5. `retrievals` -- Read-path telemetry (see `src/retrieval.js`)
+   - `doc_id` (FK, NULL means a miss), `surface` (`kb_read`/`kb_search`/`kb_context`/`briefing`/`hint`), `query`, `session`, `created_at`
+   - `kb retrieval-report` reports coverage, freshness, hint follow-through, and miss rate over this table
+
 **To add a new query type:**
 - Export a new function from `db.js`
 - Use `getDb()` to get the singleton database connection

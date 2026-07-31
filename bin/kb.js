@@ -19,6 +19,7 @@ const commands = {
   search:   () => import('../src/cli/search-cli.js').then(m => m.search(args.join(' '))),
   status:   () => import('../src/cli/status.js').then(m => m.status()),
   tags:     () => import('../src/cli/tags-cli.js').then(m => m.runTagsCli(args)),
+  'retrieval-report': () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   'wakeup-hook': () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
   'prompt-hint': () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
   'link-backfill': () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),
@@ -103,6 +104,7 @@ Commands:
   search <query>     Search documents
   status             Show stats and server status
   tags               Show tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
+  retrieval-report   Read-path coverage: how much of the KB has ever been retrieved
   wakeup-hook        Print compact KB briefing (for SessionStart hooks)
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)
   stale-servers      List running MCP servers that started before the last src/ change

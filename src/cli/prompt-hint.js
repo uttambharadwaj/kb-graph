@@ -2,6 +2,7 @@
 // there are strong hits, print a one-line hint so the agent knows relevant
 // entries exist. Silent (no stdout) when nothing clears the relevance bar.
 import { searchDocuments } from '../db.js';
+import { logRetrieval, resolveSessionId } from '../retrieval.js';
 
 // bm25 rank is negative-is-better; title matches get -20 and tag matches -10
 // boosts in searchDocuments, so -12 keeps title/tag-grade hits and strong
@@ -18,7 +19,8 @@ async function readStdin() {
 export async function promptHint() {
   try {
     const raw = await readStdin();
-    const prompt = JSON.parse(raw)?.prompt || '';
+    const hookInput = JSON.parse(raw);
+    const prompt = hookInput?.prompt || '';
     // Too short to mean anything, or a slash command with its own routing.
     if (prompt.trim().length < 20 || prompt.trim().startsWith('/')) process.exit(0);
 
@@ -26,6 +28,9 @@ export async function promptHint() {
       .filter(r => r.rank <= RANK_THRESHOLD && r.doc_type !== 'archive')
       .slice(0, MAX_HINTS);
     if (results.length === 0) process.exit(0);
+
+    const session = resolveSessionId(hookInput);
+    for (const r of results) logRetrieval({ docId: r.id, surface: 'hint', query: prompt, session });
 
     const items = results.map(r => `#${r.id} "${r.title}" (${r.doc_type})`).join('; ');
     console.log(`KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch.`);

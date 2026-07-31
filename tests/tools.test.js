@@ -67,3 +67,82 @@ describe('tools', () => {
     assert.strictEqual(parsed.stats, undefined, 'should not be two-tag tunnel mode');
   });
 });
+
+describe('retrieval logging', () => {
+  const handler = (name) => getToolDefinitions().find(t => t.name === name).handler;
+  const missesFor = (db, surface) => db.prepare(
+    'SELECT COUNT(*) c FROM retrievals WHERE surface = ? AND doc_id IS NULL'
+  ).get(surface).c;
+
+  it('kb_read logs a row for the doc it returns', async () => {
+    const db = getDb();
+    const id = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('r', 'x', 'note')`).run().lastInsertRowid;
+    await handler('kb_read')({ id });
+    const row = db.prepare("SELECT * FROM retrievals WHERE surface = 'kb_read' AND doc_id = ?").get(id);
+    assert.ok(row);
+  });
+
+  it('kb_read logs nothing when the id does not exist', async () => {
+    const db = getDb();
+    const before = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'kb_read'").get().c;
+    await handler('kb_read')({ id: 999999 });
+    const after = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'kb_read'").get().c;
+    assert.strictEqual(after, before);
+  });
+
+  it('kb_search logs one row per returned doc id', async () => {
+    const db = getDb();
+    const doc = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('search-hit-alpha', 'x', 'note')`).run();
+    await handler('kb_search')({ query: 'search-hit-alpha', limit: 20, include_superseded: false });
+    const row = db.prepare("SELECT * FROM retrievals WHERE surface = 'kb_search' AND doc_id = ?").get(doc.lastInsertRowid);
+    assert.ok(row);
+    assert.strictEqual(row.query, 'search-hit-alpha');
+  });
+
+  it('kb_search logs a miss row (doc_id NULL) when nothing matches', async () => {
+    const db = getDb();
+    const before = missesFor(db, 'kb_search');
+    await handler('kb_search')({ query: 'zzz-no-such-term-anywhere-zzz', limit: 20, include_superseded: false });
+    assert.strictEqual(missesFor(db, 'kb_search'), before + 1);
+  });
+
+  it('kb_context logs one row per returned doc id', async () => {
+    const db = getDb();
+    const doc = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('context-hit-beta', 'x', 'note')`).run();
+    await handler('kb_context')({ query: 'context-hit-beta', limit: 15 });
+    const row = db.prepare("SELECT * FROM retrievals WHERE surface = 'kb_context' AND doc_id = ?").get(doc.lastInsertRowid);
+    assert.ok(row);
+  });
+
+  it('kb_context logs a miss row when nothing matches', async () => {
+    const db = getDb();
+    const before = missesFor(db, 'kb_context');
+    await handler('kb_context')({ query: 'zzz-no-such-term-anywhere-zzz', limit: 15 });
+    assert.strictEqual(missesFor(db, 'kb_context'), before + 1);
+  });
+
+  it('a broken retrievals table does not break kb_read, kb_search, or kb_context', async () => {
+    const db = getDb();
+    const doc = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('resilient-doc', 'x', 'note')`).run();
+    db.exec('DROP TABLE retrievals');
+    try {
+      const readRes = await handler('kb_read')({ id: doc.lastInsertRowid });
+      assert.ok(!readRes.isError);
+      const searchRes = await handler('kb_search')({ query: 'resilient-doc', limit: 20, include_superseded: false });
+      assert.ok(!searchRes.isError);
+      const contextRes = await handler('kb_context')({ query: 'resilient-doc', limit: 15 });
+      assert.ok(!contextRes.isError);
+    } finally {
+      db.exec(`
+        CREATE TABLE retrievals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          doc_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+          surface TEXT NOT NULL,
+          query TEXT,
+          session TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    }
+  });
+});
