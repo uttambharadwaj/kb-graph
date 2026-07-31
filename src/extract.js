@@ -332,6 +332,21 @@ const lemmaKey = (p) => {
   return cut === -1 ? stem(p) : stem(p.slice(0, cut)) + p.slice(cut);
 };
 
+// Only single-valued predicates auto-retire a prior object. Many-valued ones
+// (owns, blocked_by, depends_on) say nothing about their siblings, and a wrong
+// retirement is silent and unrecoverable where a duplicate is merely visible —
+// so unknown predicates default to many-valued.
+// Alias-resolved rather than normPred-resolved because the inflection map below
+// is built from this and cannot resolve its own input. That costs nothing: the
+// two agree, since nothing single-valued is inflectable.
+const SINGLE_VALUED = new Set(
+  [...(builtin?.single_valued || []), ...(override?.single_valued || [])]
+    .map(p => lookup(PREDICATE_ALIASES, rawPred(p)) ?? rawPred(p)),
+);
+for (const p of override?.many_valued || []) {
+  SINGLE_VALUED.delete(lookup(PREDICATE_ALIASES, rawPred(p)) ?? rawPred(p));
+}
+
 // Which canonical spelling an inflected one folds onto. Anchored to the names
 // predicates.json already registers, so morphology can only ever merge two
 // spellings of a predicate this file has taken a position on — an unregistered
@@ -339,15 +354,20 @@ const lemmaKey = (p) => {
 // would merge it on a shared stem and lose the distinction.
 // Alias sources are included, mapped to what they resolve to, so one entry
 // covers its own inflections too and normPred still needs a single hop.
+// Single-valued predicates are excluded, as they already are from the inverse
+// map and for the same reason: an inflection of a lifecycle noun is usually a
+// verb that means something else. "tkt-42 states that retries must be bounded"
+// is a document quoting a requirement, and folding `states` onto `state` retires
+// the ticket's real lifecycle value to store it.
 const CANONICAL_BY_LEMMA = Object.create(null);
 for (const name of [
   ...PREFERRED,
   ...Object.keys(PREDICATE_ALIASES),
   ...Object.values({ ...builtin?.aliases, ...override?.aliases }),
   ...Object.values({ ...builtin?.inverses, ...override?.inverses }),
-  ...(builtin?.single_valued || []), ...(override?.single_valued || []),
   ...(builtin?.work_item_object || []), ...(override?.work_item_object || []),
 ].map(rawPred)) {
+  if (SINGLE_VALUED.has(name)) continue;
   const canonical = lookup(PREDICATE_ALIASES, name) ?? name;
   const key = lemmaKey(name);
   const held = lookup(CANONICAL_BY_LEMMA, key);
@@ -359,14 +379,6 @@ for (const name of [
     CANONICAL_BY_LEMMA[key] = null;
   }
 }
-
-// Only single-valued predicates auto-retire a prior object. Many-valued ones
-// (owns, blocked_by, depends_on) say nothing about their siblings, and a wrong
-// retirement is silent and unrecoverable where a duplicate is merely visible —
-// so unknown predicates default to many-valued.
-const SINGLE_VALUED = new Set((builtin?.single_valued || []).map(normPred));
-for (const p of override?.single_valued || []) SINGLE_VALUED.add(normPred(p));
-for (const p of override?.many_valued || []) SINGLE_VALUED.delete(normPred(p));
 
 // The extractor picks a direction per call, so one relationship arrives as
 // (a, blocks, b) today and (b, blocked_by, a) tomorrow — both live, retiring

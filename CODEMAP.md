@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 130
-- **Total lines:** 17,876
+- **Total lines:** 17,921
 
 ## Architecture Overview
 ```
@@ -65,7 +65,7 @@ bin/
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 88 | modelEnv, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 610 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
-| extract.js | 720 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 732 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 254 | initFactSchema, sqlTimestamp, entityKey, mergeEntity, addFact... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
@@ -215,7 +215,7 @@ bin/
 | ingest.test.js | 32 | - | Body |
 | inverse-fold.test.js | 201 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | mcp-supervisor.test.js | 173 | MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
-| predicate-vocabulary.test.js | 243 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| predicate-vocabulary.test.js | 276 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 60 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | runtime-node.test.js | 64 | - | - |

@@ -8,7 +8,8 @@ import { join } from 'path';
 // Point the KB at a throwaway dir BEFORE importing anything that opens the DB.
 process.env.KB_DIR = mkdtempSync(join(tmpdir(), 'kb-vocab-'));
 
-const { canonicalTriple, EXTRACT_PROMPT } = await import('../src/extract.js');
+const { canonicalTriple, consolidate, EXTRACT_PROMPT } = await import('../src/extract.js');
+const { queryFact } = await import('../src/facts.js');
 const { getToolDefinitions } = await import('../src/tools.js');
 
 const registry = JSON.parse(readFileSync(new URL('../src/predicates.json', import.meta.url), 'utf8'));
@@ -91,13 +92,6 @@ describe('predicate vocabulary canonicalization', () => {
       ['my-app', 'doesnt_send', 'profile_id'],
     ]);
 
-    // status is the most-written predicate in the registry, and a plural rule
-    // that treats its -us as an inflection stems it to "statu" — where it no
-    // longer matches itself, and every fold that should have reached it misses.
-    convergesOn('a pluralised registered predicate', [
-      ['tkt-99', 'status', 'in_review'],
-      ['tkt-99', 'statuses', 'in_review'],
-    ]);
   });
 
   // The other half of the guarantee. A fold that reaches predicates the registry
@@ -125,6 +119,36 @@ describe('predicate vocabulary canonicalization', () => {
         edge('nightly_job', 'generates', 'state_notes'),
         'nightly_job -[generates]-> state_notes',
       );
+    });
+
+    // The one fold whose error cannot be undone. An inflection of a lifecycle
+    // noun is usually a verb meaning something else — every live `states` row in
+    // a real graph is a document quoting a requirement — and single-valued
+    // predicates retire on contradiction, so folding `states` onto `state` does
+    // not merely mislabel the row, it deletes the ticket's real lifecycle value
+    // to make room for it. The inverse map already refuses these for the same
+    // reason.
+    // Both spellings below name a single-valued predicate. `status` is the case
+    // that keeps the rule honest: it sits in `preferred` as well, so it reaches
+    // the inflection map by a second route and only the exclusion keeps it out.
+    for (const inflection of ['states', 'statuses']) {
+      it(`never folds ${inflection} onto a predicate that retires on contradiction`, () => {
+        assert.strictEqual(
+          edge('tkt-42', inflection, 'retries_must_be_bounded'),
+          `tkt-42 -[${inflection}]-> retries_must_be_bounded`,
+        );
+      });
+    }
+
+    it('does not retire a lifecycle value when a ticket states something', () => {
+      consolidate([{ subject: 'tkt-42', predicate: 'state', object: 'open' }], { observationDate: '2026-07-01' });
+      const res = consolidate(
+        [{ subject: 'tkt-42', predicate: 'states', object: 'retries_must_be_bounded' }],
+        { observationDate: '2026-07-02' },
+      );
+      assert.deepStrictEqual(res.invalidated, [], 'retired the lifecycle state to store a quotation');
+      const live = queryFact('tkt-42', { direction: 'outgoing' }).filter(r => r.current);
+      assert.ok(live.some(r => r.predicate === 'state' && r.object === 'open'), `lost the real state: ${JSON.stringify(live)}`);
     });
   });
 
@@ -224,6 +248,15 @@ describe('predicate vocabulary canonicalization', () => {
           `edge('a', 'benchmarks-against', 'b')`,
         ),
         'a -[benchmarked_against]-> b',
+      );
+    });
+
+    // A registered name ending in a double s: without the plural guard, bypass
+    // stems to bypas while bypasses stems to bypass, and the pair never meets.
+    it('folds an inflection of a name ending in a sibilant', () => {
+      assert.strictEqual(
+        inOverrideInstall({ preferred: ['bypass_on'] }, `edge('a', 'bypasses_on', 'b')`),
+        'a -[bypass_on]-> b',
       );
     });
 
