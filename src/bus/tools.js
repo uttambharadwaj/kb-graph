@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { listBusAgents, registerBusAgent, runBusAgentDaemonOnce } from './agentd.js';
-import { listBusSessions, registerBusSession, runBusGatewayOnce } from './gateway.js';
+import { listBusDeliveries, listBusSessions, registerBusSession } from './sessions.js';
 import { readBusInbox, readBusStatus, sendBusMessage } from './service.js';
 
 function ok(payload) {
@@ -87,13 +87,14 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_session_register',
-      description: 'Register the current parent agent session as a routable recipient for the local bus gateway.',
+      description: 'Register a session as a routable recipient so hook handoffs on this channel are recorded against it. Hook-wired sessions register themselves; use this for a workspace whose hooks are not wired yet.',
       schema: {
         channel: z.string().describe('Workstream channel'),
         reader: z.string().describe('Stable reader identity (e.g. claude:architect, codex:implementer)'),
         agent: z.string().describe('Agent host (claude, codex, gemini, service)'),
         adapter: z.string().optional().default('hook').describe('Delivery adapter. Current safe default is hook; noop is useful for tests.'),
-        cwd: z.string().optional().describe('Workspace root for hook pending files'),
+        // No default: this server's cwd is its own install directory, never the caller's workspace.
+        cwd: z.string().describe('Absolute workspace root of the session being registered'),
         id: z.string().optional().describe('Optional stable session id'),
       },
       handler: async ({ channel, reader, agent, adapter, cwd, id }) => {
@@ -107,7 +108,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_sessions',
-      description: 'List registered bus sessions known to the local bus gateway.',
+      description: 'List sessions registered on the local bus, with the workspace and adapter each one hooks through.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
         reader: z.string().optional().describe('Optional reader filter'),
@@ -122,15 +123,15 @@ export function getBusToolDefinitions() {
     },
 
     {
-      name: 'bus_gateway_once',
-      description: 'Run one local bus-gateway delivery pass. This writes pending hook digests for registered sessions without consuming messages.',
+      name: 'bus_deliveries',
+      description: 'List recorded hook handoffs: which message reached which session, and when. Use to confirm a peer actually received mail rather than assuming silence means unread.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
-        limit: z.number().optional().default(50).describe('Maximum candidate messages per session'),
+        session_id: z.string().optional().describe('Optional session filter'),
       },
-      handler: async ({ channel, limit }) => {
+      handler: async ({ channel, session_id }) => {
         try {
-          return ok(runBusGatewayOnce({ channel, limit }));
+          return ok(listBusDeliveries({ channel, session_id }));
         } catch (error) {
           return fail(error);
         }
@@ -145,7 +146,8 @@ export function getBusToolDefinitions() {
         reader: z.string().describe('Stable worker identity (e.g. codex:implementer, claude:architect)'),
         agent: z.string().describe('Agent host/command family (codex, claude, gemini, service)'),
         adapter: z.string().optional().default('exec').describe('Current supported runner adapter is exec'),
-        cwd: z.string().optional().describe('Working directory for launched worker'),
+        // No default: this server's cwd is its own install directory, never the worker's workspace.
+        cwd: z.string().describe('Absolute working directory for the launched worker'),
         command: z.string().optional().describe('Executable command. Defaults to agent name.'),
         args: z.array(z.string()).optional().describe('Command args. Use {prompt} placeholder for the bootstrap prompt.'),
         prompt_template: z.string().optional().describe('Optional bootstrap prompt template'),

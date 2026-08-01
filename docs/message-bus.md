@@ -6,7 +6,7 @@ The knowledge-base MCP server now includes a **local-only message bus** for agen
 
 - MCP tools: `bus_send`, `bus_read`, `bus_status`
 - MCP resource template: `bus://{channel}`
-- CLI shims: `bus-send`, `bus-read`, `bus-status`, `bus-session`, `bus-gateway`, `bus-agent`, `bus-agentd`, `bus-hook`, `bus-bind` / `bus-unbind`, `bus-hook-current`, `bus-autobind`
+- CLI shims: `bus-send`, `bus-read`, `bus-status`, `bus-session`, `bus-agent`, `bus-agentd`, `bus-hook`, `bus-bind` / `bus-unbind`, `bus-hook-current`, `bus-autobind`
 - Shared append-only SQLite storage at `~/.claude/bus/bus.db`
 - Typed envelope columns on `bus_messages`: `thread`, `reply_to`, `recipient`, `deadline`, `expects_reply` (all first-class `bus_send` params)
 - Presence folded into `bus_readers` (`last_hook_at`, `capabilities_json`) — refreshed on every hook fire
@@ -200,9 +200,16 @@ bus-status ws:ticket-42 --reader claude:architect --reader codex:implementer
 
 `bus-status` reports unread backlog, hook-derived presence (`live`, `stale`, `unknown`), the latest heartbeat/status per participant, and the latest `control` message. This makes "Claude is asleep" vs "Claude has backlog" vs "Claude is actively working" visible.
 
-### Gateway sessions and delivery
+### Sessions and recorded delivery
 
-The bus itself remains durable memory; `bus-gateway` is the local delivery owner. Register each parent session once, then run gateway passes to create hook-pending deliveries for wake-worthy traffic:
+Delivery is owned by the hooks, not by a separate daemon. When a hook fires for a bound workspace it
+does three things in one write transaction: takes the digest of what this reader has not been told,
+writes one `bus_deliveries` row per message covered, and advances `notify_cursor` past them.
+
+A session is identified by `(channel, reader, agent, cwd)` — the workspace's binding cwd, not the
+subdirectory the hook happened to fire from. Hook-wired sessions register themselves on their first
+fire, so `bus_sessions` reflects who is actually listening. Register one by hand only for a workspace
+whose hooks are not wired yet:
 
 ```bash
 bus-session register ws:ticket-42 \
@@ -210,28 +217,27 @@ bus-session register ws:ticket-42 \
   --agent codex \
   --adapter hook \
   --cwd "$PWD"
-
-bus-session register ws:ticket-42 \
-  --reader claude:architect \
-  --agent claude \
-  --adapter hook \
-  --cwd "$PWD"
-
-bus-gateway ws:ticket-42 --once
-# or keep it running locally:
-bus-gateway --channel ws:ticket-42 --serve --interval-ms 1000
 ```
 
-`bus-session register` stores a row in `bus_sessions`. For `adapter=hook`, it also writes the normal workspace binding so existing `bus-hook-current --pending-only` hooks can surface the gateway's pending digest.
+That stores a row in `bus_sessions` and, for `adapter=hook`, writes the workspace binding the hooks
+resolve. Inspect what has actually been handed over with:
 
-`bus-gateway` records attempted delivery in `bus_deliveries` and only routes attention-worthy messages by default:
+```bash
+bus-session deliveries --channel ws:ticket-42
+```
 
-- direct `recipient` messages
-- `question` / `control` / `announce` / `handoff` / `blocked`
-- `expects_reply=true`
-- metadata `needs_attention=true`
+**The guarantee is at-most-once per session.** `UNIQUE(message_id, session_id)` plus the monotonic
+cursor mean a replayed or concurrent hook fire records nothing and shows nothing: however many hooks
+race for one session, exactly one of them gets the digest and one delivery row is written. Two
+different sessions on the same channel each get their own row for the same message.
 
-Heartbeats and ordinary chatter stay in the log but do not wake peers by themselves. Current production-safe adapter is `hook`; `noop` is for tests. PTY/tmux injection is intentionally not implemented here because prompt injection into a live terminal misattributes messages and can interrupt tool calls.
+What is *not* covered: a session that dies between the commit and reading its own hook output loses
+that digest. Bodies are never lost — `bus_read` still returns them, because a handoff advances
+`notify_cursor` only. An explicit `bus_read` is self-service consumption by the agent itself and
+records no delivery row; `bus_deliveries` is the ledger of hook handoffs specifically.
+
+PTY/tmux injection is intentionally not implemented: prompt injection into a live terminal
+misattributes messages and can interrupt tool calls.
 
 ### Executable worker daemon
 
@@ -282,6 +288,7 @@ If your MCP host supports resource subscriptions, you can subscribe to that URI.
 - Poll interval for `bus_read(wait=true)`: `KB_BUS_POLL_MS` (default `250`)
 - Notifier interval: `KB_BUS_NOTIFIER_INTERVAL_MS` (default `1000`)
 - Notifier idle deadline: `KB_BUS_NOTIFIER_IDLE_MS` (default `900000`)
+- Delivery ledger rows are pruned with the messages they point at
 - Pending digest file: `~/.claude/bus/pending/<agent>-<cwd-hash>.json`
 - Notifier PID file: `~/.claude/bus/notifiers/<agent>-<cwd-hash>.pid`
 

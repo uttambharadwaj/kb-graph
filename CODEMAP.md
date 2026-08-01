@@ -1,10 +1,10 @@
 # Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: `node bin/generate-codemap.js`
-> Generated: 2026-07-31
+> Generated: 2026-08-01
 
 ## Quick Stats
-- **Files:** 138
-- **Total lines:** 19,325
+- **Files:** 137
+- **Total lines:** 19,577
 
 ## Architecture Overview
 ```
@@ -40,7 +40,6 @@ bin/
 | bus-agentd.js | 9 | - | !/usr/bin/env node |
 | bus-autobind.js | 59 | - | !/usr/bin/env node |
 | bus-bind.js | 13 | - | !/usr/bin/env node |
-| bus-gateway.js | 9 | - | !/usr/bin/env node |
 | bus-hook-current.js | 13 | - | !/usr/bin/env node |
 | bus-hook.js | 13 | - | !/usr/bin/env node |
 | bus-notifier.js | 13 | - | !/usr/bin/env node |
@@ -52,7 +51,7 @@ bin/
 | cron-capture.sh | 30 | - | !/bin/bash |
 | generate-codemap.js | 155 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 143 | - | bin/kb.js — CLI entry point |
+| kb.js | 141 | - | bin/kb.js — CLI entry point |
 | post-sync.sh | 31 | - | !/bin/bash |
 | weekly-synthesis.js | 45 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
@@ -86,17 +85,17 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| agentd.js | 417 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
+| agentd.js | 411 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
-| cli.js | 703 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusGatewayCli, runBusAgentCli... | - |
+| cli.js | 694 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusAgentCli, runBusAgentdCli... | One handoff site for both hook commands: refresh the session row, then take the  |
 | config.js | 61 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | 15 minutes of an unchanging digest. Safe to exit that early because hooks |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
 | db.js | 216 | getBusDb, closeBusDb | - |
-| gateway.js | 273 | registerBusSession, getBusSession, listBusSessions, runBusGatewayOnce, runBusGatewayLoop... | - |
 | pending.js | 83 | getBusPendingPath, readBusPending, writeBusPending, clearBusPending, getBusNotifierPidPath... | Only the recorded owner may clear the claim; a superseded notifier must not dere |
 | resources.js | 32 | registerBusResources | - |
-| service.js | 647 | onBusMessage, sendBusMessage, getMessageById, readBusInbox, readBusNotifications... | - |
-| tools.js | 197 | getBusToolDefinitions | - |
+| service.js | 696 | messageTargetsReader, onBusMessage, sendBusMessage, getMessageById, readBusInbox... | A message reaches a reader when it is not their own and is either broadcast or a |
+| sessions.js | 229 | makeSessionId, readerHost, registerBusSession, touchBusSession, getBusSession... | Reader ids carry their host as a prefix (claude:architect); autobind writes them |
+| tools.js | 199 | getBusToolDefinitions | - |
 
 ## src/capture/
 
@@ -205,7 +204,7 @@ bin/
 |------|-------|---------|---------|
 | api-key.test.js | 57 | - | tests/api-key.test.js |
 | autobind.test.js | 185 | - | - |
-| bus.test.js | 1275 | - | - |
+| bus.test.js | 1546 | - | - |
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |

@@ -31,13 +31,26 @@ Useful flags:
 - `--limit 5`
 - `--preview-chars 80`
 - `--hook-event UserPromptSubmit`
-- `--dry-run` (do not advance the reader cursor)
+- `--dry-run` (show the digest without recording a handoff or advancing the cursor)
+- `--agent`, `--cwd` (session identity for the recorded handoff)
 
-## Gateway-owned hook delivery
+## Recorded delivery
 
-`bus-session register <channel> --reader <name> --agent <agent> --adapter hook` is the preferred new-session setup. It creates a durable `bus_sessions` row for `bus-gateway` and writes the same workspace binding used by `bus-hook-current`.
+A non-dry-run hook fire is a **handoff**, and it is recorded. In one write transaction the hook reads
+the digest, writes a `bus_deliveries` row for every message that digest covered, and advances
+`notify_cursor` past them. Session identity is `(channel, reader, agent, cwd)`, hashed — the cwd
+being the binding's own directory, so a hook fired from a subdirectory lands on the same session.
 
-`bus-gateway --serve` can then watch wake-worthy messages and write pending digest files before the next hook fires. This still is not a true host-level interrupt; it makes delivery ownership explicit and observable while preserving the hook boundary.
+Hook-wired sessions register themselves on their first fire, which is why `bus_sessions` is a live
+picture of who is listening rather than a registry someone has to maintain. `bus-session register` is
+for a workspace whose hooks are not wired yet; `bus-session deliveries` shows what actually landed.
+
+Concurrency is settled in the database, not by luck: the transaction is `IMMEDIATE`, so parallel
+hooks for one session serialize and exactly one of them gets a non-empty digest. Two sessions on the
+same channel each get their own delivery row for the same message.
+
+`bus_read` is deliberately outside this ledger. It is the agent consuming its own inbox, not a
+handoff to a session, and it advances `last_seen_id` rather than recording a delivery.
 
 For asleep/offline agents, use `bus-agent register ... --adapter exec` plus `bus-agentd --serve`. That path starts a fresh Codex/Claude worker for a directed bus task instead of trying to push text into an arbitrary live terminal.
 
@@ -87,9 +100,9 @@ Peer message bodies are untrusted model output, so hooks inject a **sanitized di
 
 ### Advance semantics
 
-- `bus-hook` without `--dry-run` → advances `notify_cursor` to the latest scanned message ID on the channel, then prints the digest of what's visible to that reader.
+- `bus-hook` without `--dry-run` → records the handoff and advances `notify_cursor` to the latest scanned message ID on the channel, then prints the digest it took. Its session is `(channel, reader, agent, cwd)`, where `--agent` defaults to the reader's host prefix (`codex:implementer` → `codex`) and `--cwd` to the current directory.
 - `bus-hook --dry-run` → prints the digest but does not advance `notify_cursor`. Useful in `SessionStart` when you want the user to see pending messages without consuming them yet.
-- `bus-hook-current` loops over every subscription in the resolved workspace binding, concatenates non-empty digests, and advances each subscription's cursor independently.
+- `bus-hook-current` loops over every subscription in the resolved workspace binding, concatenates non-empty digests, and records and advances each subscription independently.
 - Every hook fire refreshes `last_hook_at` / `capabilities_json` in `bus_readers`, which is also the presence source for digest summaries.
 
 ## Claude Code wiring

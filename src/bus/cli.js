@@ -12,7 +12,6 @@ import {
   writeBusPending,
 } from './pending.js';
 import {
-  advanceBusNotifications,
   formatBusNotificationDigest,
   readBusInbox,
   readBusNotifications,
@@ -20,12 +19,13 @@ import {
   sendBusMessage,
 } from './service.js';
 import {
+  deliverToSession,
   listBusDeliveries,
   listBusSessions,
+  readerHost,
   registerBusSession,
-  runBusGatewayLoop,
-  runBusGatewayOnce,
-} from './gateway.js';
+  touchBusSession,
+} from './sessions.js';
 import {
   listBusAgents,
   listBusRuns,
@@ -160,8 +160,6 @@ function collectCurrentBusDigest({ agent, cwd, pendingOnly = false }) {
   const notifications = binding.subscriptions.map(subscription => readBusNotifications({
     channel: subscription.channel,
     reader: subscription.reader,
-    limit: 5,
-    preview_chars: 80,
   }));
   const digests = notifications
     .map(notification => formatBusNotificationDigest(notification))
@@ -302,27 +300,6 @@ export async function runBusSessionCli(args) {
   process.exit(1);
 }
 
-export async function runBusGatewayCli(args) {
-  const channel = readFlag(args, '--channel');
-  const interval_ms = readFlag(args, '--interval-ms', '1000');
-  const once = args.includes('--once');
-  const serve = args.includes('--serve');
-  const positional = removeFlags(args, ['--channel', '--interval-ms'], ['--once', '--serve']);
-  const targetChannel = channel ?? positional[0];
-
-  if (once) {
-    printJson(runBusGatewayOnce({ channel: targetChannel }));
-    return;
-  }
-
-  if (!serve) {
-    console.error('Usage: bus-gateway [--channel <channel>] --once | --serve [--interval-ms <ms>]');
-    process.exit(1);
-  }
-
-  await runBusGatewayLoop({ channel: targetChannel, interval_ms });
-}
-
 export async function runBusAgentCli(args) {
   const commandName = args[0];
   const rest = args.slice(1);
@@ -447,6 +424,13 @@ export async function runBusReadCli(args) {
   }));
 }
 
+// One handoff site for both hook commands: refresh the session row, then take the digest, record it,
+// and advance the cursor in a single transaction. What comes back is what this fire may show.
+function handOffToSession({ channel, reader, agent, cwd, limit, preview_chars, capabilities_json }) {
+  const session = touchBusSession({ channel, reader, agent, cwd });
+  return deliverToSession({ session, limit, preview_chars, capabilities_json });
+}
+
 export async function runBusHookCli(args) {
   const reader = readFlag(args, '--reader');
   const limit = readFlag(args, '--limit', '5');
@@ -454,26 +438,29 @@ export async function runBusHookCli(args) {
   const format = readFlag(args, '--format', 'hook');
   const hookEventName = readFlag(args, '--hook-event', 'UserPromptSubmit');
   const capabilities_json = readFlag(args, '--capabilities');
+  const agentFlag = readFlag(args, '--agent');
+  const cwd = readFlag(args, '--cwd', process.cwd());
   const dryRun = args.includes('--dry-run');
-  const positional = removeFlags(args, ['--reader', '--limit', '--preview-chars', '--format', '--hook-event', '--capabilities']);
+  const positional = removeFlags(args, ['--reader', '--limit', '--preview-chars', '--format', '--hook-event', '--capabilities', '--agent', '--cwd']);
   const filtered = positional.filter(arg => arg !== '--dry-run');
   const [channel] = filtered;
 
   if (!channel || !reader) {
-    console.error('Usage: bus-hook <channel> --reader <name> [--format hook|json|text] [--limit <n>] [--preview-chars <n>] [--hook-event <name>] [--capabilities <json>] [--dry-run]');
+    console.error('Usage: bus-hook <channel> --reader <name> [--agent <claude|codex>] [--cwd <path>] [--format hook|json|text] [--limit <n>] [--preview-chars <n>] [--hook-event <name>] [--capabilities <json>] [--dry-run]');
     process.exit(1);
   }
 
-  const notifications = readBusNotifications({
-    channel,
-    reader,
-    limit: Number(limit),
-    preview_chars: Number(preview_chars),
-  });
-
-  if (!dryRun) {
-    advanceBusNotifications({ channel, reader, to_id: notifications.advanced_to, capabilities_json });
-  }
+  const preview = { limit: Number(limit), preview_chars: Number(preview_chars) };
+  const notifications = dryRun
+    ? readBusNotifications({ channel, reader, ...preview })
+    : handOffToSession({
+      channel,
+      reader,
+      agent: agentFlag || readerHost(reader),
+      cwd,
+      capabilities_json,
+      ...preview,
+    }).notification;
 
   if (format === 'json') {
     printJson(notifications);
@@ -542,7 +529,8 @@ export async function runBusHookCurrentCli(args) {
     process.exit(1);
   }
 
-  const { binding, notifications, digest, total_new, pending } = collectCurrentBusDigest({ agent, cwd, pendingOnly });
+  const preflight = collectCurrentBusDigest({ agent, cwd, pendingOnly });
+  const { binding, pending } = preflight;
   if (!binding) {
     if (format === 'json') {
       printJson({ agent, cwd, binding: null, total_new: 0 });
@@ -553,17 +541,19 @@ export async function runBusHookCurrentCli(args) {
     return;
   }
 
-  if (!dryRun) {
-    notifications.forEach(notification => {
-      advanceBusNotifications({
-        channel: notification.channel,
-        reader: notification.reader,
-        to_id: notification.advanced_to,
-        capabilities_json,
-      });
-    });
-    clearBusPending({ agent, cwd: binding.cwd });
-  }
+  // The binding's own cwd is the session identity, not the subdirectory this hook happened to fire from.
+  const handoffs = dryRun ? [] : preflight.notifications.map(notification => handOffToSession({
+    channel: notification.channel,
+    reader: notification.reader,
+    agent,
+    cwd: binding.cwd,
+    capabilities_json,
+  }));
+  if (!dryRun) clearBusPending({ agent, cwd: binding.cwd });
+
+  const notifications = dryRun ? preflight.notifications : handoffs.map(handoff => handoff.notification);
+  const digest = notifications.map(formatBusNotificationDigest).filter(Boolean).join('\n\n');
+  const total_new = notifications.reduce((sum, notification) => sum + notification.total_new, 0);
 
   if (format === 'json') {
     printJson({
@@ -571,6 +561,7 @@ export async function runBusHookCurrentCli(args) {
       cwd,
       binding,
       notifications,
+      handoffs: handoffs.map(({ session_id, message_ids, recorded }) => ({ session_id, message_ids, recorded })),
       total_new,
       pending: Boolean(pending),
     });
