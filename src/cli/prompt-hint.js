@@ -27,9 +27,14 @@ export async function promptHint() {
     const results = searchDocuments(prompt, 10)
       .filter(r => r.rank <= RANK_THRESHOLD && r.doc_type !== 'archive')
       .slice(0, MAX_HINTS);
-    if (results.length === 0) process.exit(0);
-
     const session = resolveSessionId(hookInput);
+    // A prompt the KB had nothing for is the measurement, not the absence of one:
+    // logging only the times we fired leaves a hit rate with no denominator.
+    if (results.length === 0) {
+      logRetrieval({ surface: 'hint', query: prompt, session });
+      process.exit(0);
+    }
+
     for (const r of results) logRetrieval({ docId: r.id, surface: 'hint', query: prompt, session });
 
     const items = results.map(r => `#${r.id} "${r.title}" (${r.doc_type})`).join('; ');

@@ -81,4 +81,17 @@ describe('prompt-hint retrieval logging', () => {
     const after = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'hint'").get().c;
     assert.strictEqual(after, before);
   });
+
+  it('logs a miss when a real prompt clears no entry, so the hit rate keeps its denominator', () => {
+    const db = getDb();
+    const prompt = 'zqxjkv unrelatable phrasing that matches no stored entry at all';
+    runHook('prompt-hint', { session_id: 'sess-hint-miss', prompt });
+
+    const row = db.prepare(
+      "SELECT * FROM retrievals WHERE surface = 'hint' AND session = 'sess-hint-miss'"
+    ).get();
+    assert.ok(row, 'expected a miss row for a prompt that surfaced nothing');
+    assert.strictEqual(row.doc_id, null, 'a miss is recorded as a NULL doc_id, not an absent row');
+    assert.strictEqual(row.query, prompt);
+  });
 });
