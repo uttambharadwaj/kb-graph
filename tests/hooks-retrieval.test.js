@@ -11,13 +11,36 @@ import { getDb } from '../src/db.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 
-function runHook(name, hookInput) {
+function runHook(name, hookInput, extraEnv = {}) {
   return execFileSync(process.execPath, [HELPER, name], {
     input: JSON.stringify(hookInput),
-    env: process.env,
+    env: { ...process.env, ...extraEnv },
     encoding: 'utf8',
   });
 }
+
+// Our own `claude -p` subprocesses inherit the user's hooks despite the
+// --settings '{"hooks":{}}' they are spawned with. Without this gate the hooks
+// brief and hint a model that has no tools to act on either, and the read-path
+// meter counts those as sessions — 83 of 83 briefed "sessions" in the first
+// day of telemetry were this.
+describe('batch calls are not sessions', () => {
+  for (const hook of ['wakeup-hook', 'prompt-hint']) {
+    it(`${hook} prints nothing and logs nothing when KB_BATCH is set`, () => {
+      const db = getDb();
+      const before = db.prepare('SELECT COUNT(*) c FROM retrievals').get().c;
+
+      const stdout = runHook(
+        hook,
+        { session_id: `sess-batch-${hook}`, prompt: 'a prompt long enough to clear the hint length gate' },
+        { KB_BATCH: '1' }
+      );
+
+      assert.strictEqual(stdout, '', 'a batch call must receive no injected context');
+      assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM retrievals').get().c, before);
+    });
+  }
+});
 
 describe('wakeup-hook retrieval logging', () => {
   it('logs a briefing row, tagged with the hook session id, for the active-workstream id it prints', () => {

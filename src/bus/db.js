@@ -200,6 +200,9 @@ export function getBusDb() {
     ensureBusStorage();
     db = new Database(nextPath);
     db.pragma('journal_mode = WAL');
+    // Hooks fire concurrently across sessions; without this a second writer
+    // gets SQLITE_BUSY immediately instead of waiting its turn.
+    db.pragma('busy_timeout = 5000');
     initSchema(db);
     dbPath = nextPath;
   }

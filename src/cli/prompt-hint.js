@@ -2,6 +2,7 @@
 // there are strong hits, print a one-line hint so the agent knows relevant
 // entries exist. Silent (no stdout) when nothing clears the relevance bar.
 import { searchDocuments } from '../db.js';
+import { isBatchCall } from '../claude-cli.js';
 import { logRetrieval, resolveSessionId } from '../retrieval.js';
 
 // bm25 rank is negative-is-better; title matches get -20 and tag matches -10
@@ -17,6 +18,9 @@ async function readStdin() {
 }
 
 export async function promptHint() {
+  // Our own model subprocesses are not user prompts. They cannot act on a hint
+  // (no MCP tools) and logging them makes the read-path meter measure ourselves.
+  if (isBatchCall()) process.exit(0);
   try {
     const raw = await readStdin();
     const hookInput = JSON.parse(raw);
