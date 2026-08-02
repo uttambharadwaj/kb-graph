@@ -93,6 +93,11 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_vault_files_hash ON vault_files(content_hash);
     CREATE INDEX IF NOT EXISTS idx_vault_files_type ON vault_files(note_type);
     CREATE INDEX IF NOT EXISTS idx_vault_files_project ON vault_files(project);
+
+    -- Per-term document frequency, read straight off the FTS index. A view over
+    -- data that already exists: no rows are stored and nothing has to be kept in
+    -- sync. Relevance scoring needs to know which words are distinctive.
+    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row');
   `);
 
   // Migration: add summary and key_topics columns if missing
@@ -326,7 +331,7 @@ export function deleteDocument(id) {
 }
 
 // Common English stop words to filter from search queries
-const STOP_WORDS = new Set([
+export const STOP_WORDS = new Set([
   'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
   'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
   'should', 'may', 'might', 'shall', 'can', 'need', 'dare', 'ought',
@@ -730,14 +735,47 @@ export function setMeta(key, value) {
   ).run(key, String(value));
 }
 
+// One query behind every surface that decides whether to print a tier, so the
+// push surfaces cannot disagree about what the store contains.
+export function liveTierCounts() {
+  return getDb().prepare(
+    'SELECT tier, COUNT(*) AS count FROM documents WHERE superseded_at IS NULL GROUP BY tier'
+  ).all();
+}
+
 export function getMeta(key) {
   return getDb().prepare('SELECT value, updated_at FROM meta WHERE key = ?').get(key) || null;
+}
+
+// A backlog is only news when it grows.
+//
+// The summaries warning stood at "202 notes missing summaries" for weeks. It
+// was true every session, so it stopped being read — and an alarm nobody reads
+// no longer works for the urgent case either. A count that has not moved since
+// last session is a standing decision, not a fault; a count that has climbed is
+// a job that has stopped doing its work. Only the second is worth a line.
+//
+// `record` is passed by the session-start surfaces alone. Read-only callers
+// must leave the baseline where it is, or the comparison measures how often the
+// snapshot was taken.
+function backlogWarning({ key, count, floor, message, record }) {
+  const seen = getMeta(key);
+  const previous = seen ? Number(seen.value) : null;
+  if (record) setMeta(key, count);
+  // No baseline yet: adopt this one silently. A fresh install's backlog is its
+  // starting condition, not a regression.
+  if (previous === null || !Number.isFinite(previous)) return null;
+  if (count <= floor || count <= previous) return null;
+  return message(count, previous);
 }
 
 // One health snapshot for wakeup/status: derived-layer coverage plus job
 // heartbeats, with a warning string per stale/failed component. The KB's
 // worst historical failure mode is silent degradation — this is the alarm.
-export function getHealth() {
+//
+// `recordBacklog` marks this call as a session boundary, which is the clock the
+// backlog warnings measure growth against.
+export function getHealth({ recordBacklog = false } = {}) {
   const db = getDb();
   const docs = db.prepare('SELECT COUNT(*) c FROM documents').get().c;
   const embedded = db.prepare('SELECT COUNT(DISTINCT document_id) c FROM embeddings').get().c;
@@ -759,8 +797,20 @@ export function getHealth() {
   const synthesis = getMeta('last_synthesis');
 
   const warnings = [];
-  if (docs - embedded > 25) warnings.push(`${docs - embedded} docs missing embeddings — run 'kb vault reindex'`);
-  if (vaultFiles - summarized > 50) warnings.push(`${vaultFiles - summarized} notes missing summaries — run 'kb summarize'`);
+  // Both remedies are long-running and neither is free, so each says what it
+  // costs and what it touches: nobody should run an unbounded command against
+  // the store that holds everything on the strength of a one-word imperative.
+  const growth = [
+    backlogWarning({
+      key: 'backlog_embeddings', count: docs - embedded, floor: 25, record: recordBacklog,
+      message: (now, was) => `docs missing embeddings grew ${was} → ${now} — 'kb vault reindex' re-embeds locally (no model API) and writes to this graph`,
+    }),
+    backlogWarning({
+      key: 'backlog_summaries', count: vaultFiles - summarized, floor: 50, record: recordBacklog,
+      message: (now, was) => `notes missing summaries grew ${was} → ${now} — 'kb summarize' rewrites note frontmatter in the vault, ~11s and one model call per note (try --limit=N --dry-run first); the graph picks it up on the next reindex`,
+    }),
+  ].filter(Boolean);
+  warnings.push(...growth);
   const reindexAge = ageHours(reindex);
   if (reindexAge === null || reindexAge > 1) warnings.push(`reindex heartbeat ${reindexAge === null ? 'never recorded' : Math.round(reindexAge) + 'h old'} — check com.kb.reindex launchd job`);
   if (harvestAge === null || harvestAge > 48) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);

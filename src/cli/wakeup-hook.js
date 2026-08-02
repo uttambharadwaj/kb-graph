@@ -1,10 +1,10 @@
 // SessionStart hook: print a compact KB briefing to stdout so the harness
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
-import { getDb, getHealth } from '../db.js';
+import { getDb, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
-import { TIER, tierLabel } from '../tiers.js';
+import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 
 async function readStdin() {
   let data = '';
@@ -37,11 +37,13 @@ export async function wakeupHook() {
     const recent = db.prepare(
       "SELECT vf.title, vf.note_type, vf.project, d.tier FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE vf.note_type NOT IN ('archive') AND d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 8"
     ).all();
-    const tiers = db.prepare(
-      'SELECT tier, COUNT(*) c FROM documents WHERE superseded_at IS NULL GROUP BY tier'
-    ).all();
+    // Same gate as the hint: a standing line reading "inferred 2062" every
+    // session, and a mark on every row below it, say nothing while the store
+    // holds one tier. Both appear on their own once a note is promoted.
+    const tiers = liveTierCounts();
+    const showTier = tiersDiscriminate(tiers);
 
-    const health = getHealth();
+    const health = getHealth({ recordBacklog: true });
     const healthLine = health.ok
       ? `health: OK (embeddings ${health.embeddings}, summaries ${health.summaries})`
       : `health: ⚠ ${health.warnings.join(' | ')}`;
@@ -58,13 +60,13 @@ export async function wakeupHook() {
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
       healthLine,
-      `standing: ${tiers.map(t => `${tierLabel(t.tier)} ${t.c}`).join(', ')} — ⚠ ${TIER.INFERRED} notes are unconfirmed model conclusions; confirm one with kb_promote when a session proves it`,
+      ...(showTier ? [`standing: ${tiers.map(t => `${tierLabel(t.tier)} ${t.count}`).join(', ')} — ⚠ ${TIER.INFERRED} notes are unconfirmed model conclusions; confirm one with kb_promote when a session proves it`] : []),
       ...(states.length ? [
         'Active workstreams (kb_read for current state):',
-        ...states.map(s => `- #${s.document_id} ${s.title} (${tierLabel(s.tier)}, as of ${s.updated_at?.slice(0, 10)})`),
+        ...states.map(s => `- #${s.document_id} ${s.title} (${showTier ? `${tierLabel(s.tier)}, ` : ''}as of ${s.updated_at?.slice(0, 10)})`),
       ] : []),
       'Recently updated:',
-      ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}, ${tierLabel(r.tier)})`),
+      ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`),
       'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity). Capture learnings at session end via /debrief.',
     ];
     console.log(lines.join('\n'));

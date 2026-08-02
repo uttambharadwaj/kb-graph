@@ -1,14 +1,14 @@
 import { z } from 'zod';
 import { join } from 'path';
 import { homedir } from 'os';
-import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, supersedeDocument, supersedeCandidates, promoteDocumentTier } from './db.js';
+import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, liveTierCounts, supersedeDocument, supersedeCandidates, promoteDocumentTier } from './db.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { writeNote, setNoteTier, relatedForDoc } from './write-note.js';
-import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner } from './tiers.js';
+import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
 import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
@@ -676,22 +676,21 @@ export function getToolDefinitions() {
             'SELECT vf.title, vf.note_type, vf.tags, vf.project, d.tier FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 10'
           ).all();
 
-          const byTier = db.prepare(
-            'SELECT tier, COUNT(*) as count FROM documents WHERE superseded_at IS NULL GROUP BY tier'
-          ).all();
+          const byTier = liveTierCounts();
+          // Gated identically to the wakeup-hook briefing this mirrors.
+          const showTier = tiersDiscriminate(byTier);
 
           const factCount = db.prepare('SELECT COUNT(*) as count FROM facts WHERE valid_to IS NULL').get()?.count || 0;
 
           const summary = {
             total_documents: stats.count,
             current_facts: factCount,
-            health: getHealth(),
+            health: getHealth({ recordBacklog: true }),
             by_type: byType,
-            by_tier: byTier,
-            tier_meaning: TIER_MEANING,
+            ...(showTier ? { by_tier: byTier, tier_meaning: TIER_MEANING } : {}),
             top_domains: byDomain.slice(0, 10),
-            recent_entries: recent,
-            hint: `Use kb_search(query, tags) for keyword search, kb_search_smart(query) for conceptual queries, kb_context(query) for token-efficient browsing, kb_fact_query(entity) for temporal facts. A ${DEFAULT_TIER} note is a lead, not a finding — kb_promote one when a session confirms it.`,
+            recent_entries: showTier ? recent : recent.map(({ tier, ...rest }) => rest),
+            hint: `Use kb_search(query, tags) for keyword search, kb_search_smart(query) for conceptual queries, kb_context(query) for token-efficient browsing, kb_fact_query(entity) for temporal facts.${showTier ? ` A ${DEFAULT_TIER} note is a lead, not a finding — kb_promote one when a session confirms it.` : ''}`,
           };
           return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
         } catch (err) {
