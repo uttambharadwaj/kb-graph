@@ -194,6 +194,25 @@ describe('migrating forward from an older schema', () => {
     assert.ok(hasColumn(db, 'vault_files', 'key_topics'));
   });
 
+  // The vocab view arrived appended to migration 1's block, where `applied` is
+  // already true on every deployed database — so it would have reached fresh
+  // installs only, and the relevance path that reads it would fail everywhere
+  // else. Its own migration is what makes it reach them.
+  it('reaches a database that predates the full-text vocab view', () => {
+    const db = current(KB_MIGRATIONS);
+    db.exec('DROP TABLE documents_fts_vocab');
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [9]);
+
+    db.prepare("INSERT INTO documents (title, content, doc_type) VALUES ('vault routing', 'credentials per run', 'note')").run();
+    applyMigrations(db, KB_MIGRATIONS);
+
+    assert.ok(hasTable(db, 'documents_fts_vocab'));
+    // Readable, not merely present: the relevance path selects term/doc from it.
+    const rows = db.prepare('SELECT term, doc FROM documents_fts_vocab WHERE term = ?').all('vault');
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].doc, 1);
+  });
+
   it('dedupes embeddings before the unique index it depends on', () => {
     const db = current(KB_MIGRATIONS);
     db.exec('DROP INDEX uq_embeddings_doc_chunk');

@@ -267,6 +267,10 @@ nothing is pending prints `up to date` and writes nothing, so it is safe to keep
 in a deploy script unconditionally. Skipping it when a migration *is* pending
 costs you a startup failure that names the fix, not a half-migrated database.
 
+`kb migrate` covers both databases, and they are located by different variables:
+pointing it somewhere disposable takes `KB_DIR` **and** `KB_BUS_HOME`. `KB_DIR`
+alone still reaches the real message bus.
+
 ---
 
 ## Multi-agent setup

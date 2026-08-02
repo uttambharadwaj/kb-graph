@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,6 +41,11 @@ function run(args) {
       KB_DIR: join(home, 'kb'),
       KB_BUS_HOME: join(home, 'bus'),
       OBSIDIAN_VAULT_PATH: join(home, 'vault'),
+      // `kb register` writes agent configs under homedir(), which no KB_* var
+      // redirects. If the help guard ever regresses, this test must catch it by
+      // failing — not by rewriting the developer's real MCP configuration.
+      HOME: home,
+      USERPROFILE: home,
     },
   });
 }
@@ -95,6 +100,21 @@ describe('--help is inert at every entry point', () => {
       assert.match(result.stdout, /Usage: kb <command>/);
       for (const command of KB_COMMANDS) assert.ok(result.stdout.includes(command), `missing ${command}`);
     }
+  });
+
+  // The row of the audit this test file exists for: `kb register --help` used to
+  // rewrite the real Claude/Codex/Gemini MCP configs, which live under homedir()
+  // and which no KB_* variable redirects. Assert the file, not the exit code.
+  it('kb register --help leaves the agent configs untouched', () => {
+    const config = join(home, '.claude.json');
+    const canonical = JSON.stringify({
+      mcpServers: { 'knowledge-base': { command: 'node', args: ['/canonical/bin/kb.js', 'mcp'] } },
+    });
+    writeFileSync(config, canonical);
+
+    const result = run([join(ROOT, 'bin', 'kb.js'), 'register', '--help']);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.strictEqual(readFileSync(config, 'utf8'), canonical, 'help must not re-register anything');
   });
 
   it('-h is help too, and reaches the command that would otherwise run', () => {
