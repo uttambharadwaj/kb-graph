@@ -10,15 +10,22 @@ async function getEmbedder() {
   pipelinePromise = (async () => {
     const { pipeline: createPipeline } = await import('@huggingface/transformers');
 
-    // Race model load against a 60s timeout
-    const loaded = await Promise.race([
-      createPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Embedding model load timed out after 60s')), 60000)
-      ),
-    ]);
+    // Race model load against a 60s timeout. Promise.race does not cancel the
+    // loser, so the timer must be cleared explicitly — left pending it holds
+    // the event loop open and every short-lived process that embeds anything
+    // sits there for a minute after its work is done.
+    let timeout;
+    try {
+      pipeline = await Promise.race([
+        createPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true }),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Embedding model load timed out after 60s')), 60000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timeout);
+    }
 
-    pipeline = loaded;
     return pipeline;
   })().catch((err) => {
     pipelinePromise = null; // Reset so next call can retry
