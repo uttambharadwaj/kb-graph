@@ -37,7 +37,13 @@ export function getBusNotifierIdleMs() {
   return readInt('KB_BUS_NOTIFIER_IDLE_MS', 900000);
 }
 
-const DEFAULT_TICKET_RE = /pf-(\d+)/i;
+// Any short alphabetic prefix, so this works unconfigured whatever a project
+// calls its tickets. The prefix must start a path segment or a branch component:
+// unanchored, this matches the tail of ordinary names ("kb-bus-test-12ab34" ->
+// "test-12") and binds a channel nobody reads. A name that is genuinely
+// ticket-shaped ("node-22") still matches; set KB_TICKET_REGEX when that matters.
+// Capturing only the digits keeps ticket and channel distinct, as before.
+const DEFAULT_TICKET_RE = /(?<=^|[/_])[a-z]{2,6}-(\d+)/i;
 let ticketRegexWarned = false;
 
 // Read at use time; invalid pattern warns once then falls back to default.
