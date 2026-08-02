@@ -145,6 +145,24 @@ async function extractEpubContent(filePath, filename) {
 - Use prepared statements: `getDb().prepare('SELECT ...').all(params)`
 - WAL mode is enabled by default for concurrent read performance
 
+**To add a table or column:**
+- Append an entry to `MIGRATIONS` in `db.js` (or `src/bus/db.js` for the bus).
+  Never edit an entry that has shipped. Adding an object to an existing entry's
+  `up` reaches new databases only: every deployed one already satisfies that
+  entry's `applied`, so it never re-runs and `kb migrate` reports `up to date`
+  while the object is missing. A change that has to reach deployed databases is
+  always a new entry.
+- Give it the next `version`, a `name` the operator will read in `kb migrate`
+  output, an `up(db)` that performs the change, and an `applied(db)` that answers
+  whether a database already has it (`hasTable` / `hasColumn` / `hasIndex` from
+  `src/schema.js`). `applied` *is* the version number: nothing is stored, so the
+  schema and its version can never disagree.
+- `up` must be safe to re-run — use `IF NOT EXISTS` and `addColumn` — because a
+  migration interrupted partway is re-run from the start.
+- `getDb()` only verifies. Connecting to a database that is behind throws and
+  names `kb migrate`; connecting to one with no schema at all creates it. Nothing
+  else in the codebase may execute DDL.
+
 **FTS5 search configuration:**
 - Stop words are filtered before querying (see `STOP_WORDS` Set)
 - AND-first strategy with OR fallback for recall

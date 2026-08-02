@@ -1,27 +1,14 @@
 import Database from 'better-sqlite3';
 import { ensureBusStorage, getBusDbPath } from './config.js';
+import { addColumn, ensureSchemaReady, hasColumn, hasIndex, hasTable } from '../schema.js';
+
+const READER_V4_COLUMNS = ['notify_cursor', 'last_hook_at', 'capabilities_json'];
 
 let db = null;
 let dbPath = null;
 
-function addColumnIfMissing(database, table, name, ddl) {
-  const columns = database.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some(column => column.name === name)) {
-    database.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl};`);
-  }
-}
-
 function migrateBusReaders(database) {
-  const columns = database.prepare(`PRAGMA table_info(bus_readers)`).all();
-  const columnNames = new Set(columns.map(column => column.name));
-  const needsRebuild =
-    !columnNames.has('notify_cursor')
-    || !columnNames.has('last_hook_at')
-    || !columnNames.has('capabilities_json');
-
-  if (!needsRebuild) return;
-
-  const notifyCursorExpression = columnNames.has('notify_cursor')
+  const notifyCursorExpression = hasColumn(database, 'bus_readers', 'notify_cursor')
     ? `CASE
         WHEN COALESCE(notify_cursor, 0) > COALESCE(last_seen_id, 0) THEN COALESCE(notify_cursor, 0)
         ELSE COALESCE(last_seen_id, 0)
@@ -59,8 +46,11 @@ function migrateBusReaders(database) {
   `);
 }
 
-function initSchema(database) {
-  database.exec(`
+export const MIGRATIONS = [{
+  version: 1,
+  name: 'bus messages, readers, sessions, deliveries, agents, and runs',
+  applied: db => hasTable(db, 'bus_messages') && hasTable(db, 'bus_runs'),
+  up: db => db.exec(`
     CREATE TABLE IF NOT EXISTS bus_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       channel TEXT NOT NULL,
@@ -177,21 +167,35 @@ function initSchema(database) {
 
     CREATE INDEX IF NOT EXISTS idx_bus_runs_channel
       ON bus_runs(channel, id);
-  `);
-
-  addColumnIfMissing(database, 'bus_messages', 'thread', 'thread TEXT');
-  addColumnIfMissing(database, 'bus_messages', 'reply_to', 'reply_to INTEGER');
-  addColumnIfMissing(database, 'bus_messages', 'recipient', 'recipient TEXT');
-  addColumnIfMissing(database, 'bus_messages', 'to_reader', 'to_reader TEXT');
-  addColumnIfMissing(database, 'bus_messages', 'deadline', 'deadline TEXT');
-  addColumnIfMissing(database, 'bus_messages', 'expects_reply', 'expects_reply INTEGER NOT NULL DEFAULT 0');
-  database.exec(`
-    CREATE INDEX IF NOT EXISTS idx_bus_messages_channel_recipient_id
-      ON bus_messages(channel, recipient, id);
-  `);
-  migrateBusReaders(database);
-  database.exec('DROP TABLE IF EXISTS bus_presence;');
-}
+  `),
+}, {
+  version: 2,
+  name: 'message routing, deadlines, and reply expectations',
+  applied: db => hasColumn(db, 'bus_messages', 'expects_reply')
+    && hasIndex(db, 'idx_bus_messages_channel_recipient_id'),
+  up: db => {
+    addColumn(db, 'bus_messages', 'thread', 'TEXT');
+    addColumn(db, 'bus_messages', 'reply_to', 'INTEGER');
+    addColumn(db, 'bus_messages', 'recipient', 'TEXT');
+    addColumn(db, 'bus_messages', 'to_reader', 'TEXT');
+    addColumn(db, 'bus_messages', 'deadline', 'TEXT');
+    addColumn(db, 'bus_messages', 'expects_reply', 'INTEGER NOT NULL DEFAULT 0');
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_bus_messages_channel_recipient_id
+        ON bus_messages(channel, recipient, id);
+    `);
+  },
+}, {
+  version: 3,
+  name: 'reader notify cursors, hook timestamps, and capabilities',
+  applied: db => READER_V4_COLUMNS.every(column => hasColumn(db, 'bus_readers', column)),
+  up: migrateBusReaders,
+}, {
+  version: 4,
+  name: 'drop the retired presence table',
+  applied: db => !hasTable(db, 'bus_presence'),
+  up: db => db.exec('DROP TABLE IF EXISTS bus_presence;'),
+}];
 
 const WAL_SWITCH_ATTEMPTS = 50;
 
@@ -217,12 +221,20 @@ export function getBusDb() {
   if (!db || dbPath !== nextPath) {
     closeBusDb();
     ensureBusStorage();
-    db = new Database(nextPath);
-    ensureWalMode(db);
+    const opened = new Database(nextPath);
+    ensureWalMode(opened);
     // Already the better-sqlite3 default; stated so a future default change cannot quietly
     // drop the wait that concurrent hook writers depend on.
-    db.pragma('busy_timeout = 5000');
-    initSchema(db);
+    opened.pragma('busy_timeout = 5000');
+    try {
+      // Verify only. This schema drops and rebuilds bus_readers, so connecting
+      // from a stale checkout used to be enough to rewrite a live table.
+      ensureSchemaReady(opened, { migrations: MIGRATIONS, label: 'message bus', path: nextPath });
+    } catch (err) {
+      opened.close();
+      throw err;
+    }
+    db = opened;
     dbPath = nextPath;
   }
   return db;
