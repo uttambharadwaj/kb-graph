@@ -3,8 +3,8 @@
 > Generated: 2026-08-02
 
 ## Quick Stats
-- **Files:** 147
-- **Total lines:** 22,034
+- **Files:** 153
+- **Total lines:** 22,964
 
 ## Architecture Overview
 ```
@@ -37,24 +37,24 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| bus-agent.js | 9 | - | !/usr/bin/env node |
-| bus-agentd.js | 9 | - | !/usr/bin/env node |
-| bus-autobind.js | 63 | - | Our own model subprocesses are not sessions and have no workspace to bind. |
-| bus-bind.js | 13 | - | !/usr/bin/env node |
-| bus-hook-current.js | 13 | - | !/usr/bin/env node |
-| bus-hook.js | 13 | - | !/usr/bin/env node |
-| bus-notifier.js | 13 | - | !/usr/bin/env node |
-| bus-read.js | 13 | - | !/usr/bin/env node |
-| bus-send.js | 13 | - | !/usr/bin/env node |
-| bus-session.js | 9 | - | !/usr/bin/env node |
-| bus-status.js | 9 | - | !/usr/bin/env node |
-| bus-unbind.js | 13 | - | !/usr/bin/env node |
+| bus-agent.js | 11 | - | !/usr/bin/env node |
+| bus-agentd.js | 11 | - | !/usr/bin/env node |
+| bus-autobind.js | 71 | - | Our own model subprocesses are not sessions and have no workspace to bind. |
+| bus-bind.js | 11 | - | !/usr/bin/env node |
+| bus-hook-current.js | 11 | - | !/usr/bin/env node |
+| bus-hook.js | 11 | - | !/usr/bin/env node |
+| bus-notifier.js | 11 | - | !/usr/bin/env node |
+| bus-read.js | 11 | - | !/usr/bin/env node |
+| bus-send.js | 11 | - | !/usr/bin/env node |
+| bus-session.js | 11 | - | !/usr/bin/env node |
+| bus-status.js | 11 | - | !/usr/bin/env node |
+| bus-unbind.js | 11 | - | !/usr/bin/env node |
 | cron-capture.sh | 30 | - | !/bin/bash |
-| generate-codemap.js | 165 | - | Generates a token-efficient codebase map for AI agents |
+| generate-codemap.js | 170 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 143 | - | bin/kb.js — CLI entry point |
+| kb.js | 229 | - | bin/kb.js — CLI entry point. |
 | post-sync.sh | 31 | - | !/bin/bash |
-| weekly-synthesis.js | 45 | - | Weekly synthesis job — run via launchd or manually. |
+| weekly-synthesis.js | 57 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
 
 ## src/
@@ -64,10 +64,10 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 830 | insertDocument, updateDocument, deleteDocument, STOP_WORDS, preferConfirmed... | Every insert into documents lands here, which is what makes it the place an |
+| db.js | 858 | MIGRATIONS, insertDocument, updateDocument, deleteDocument, STOP_WORDS... | Bring a database up to the schema this code needs. `kb migrate` and tests are |
 | extract-meter.js | 40 | hashInput, logExtraction | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
 | extract.js | 778 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| facts.js | 292 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 375 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | hint-relevance.js | 146 | tokenize, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
@@ -77,6 +77,7 @@ bin/
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
 | restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
 | retrieval.js | 91 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, resolveSessionId... | Read-path telemetry: the write path has always been logged (documents, |
+| schema.js | 94 | MIGRATE_COMMAND, SchemaOutOfDateError, hasTable, hasIndex, hasColumn... | Every command opens the default database, from whatever checkout it happens to |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
@@ -91,10 +92,10 @@ bin/
 |------|-------|---------|---------|
 | agentd.js | 411 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
-| cli.js | 703 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusAgentCli, runBusAgentdCli... | Our own model subprocesses fire the session hooks despite the --settings guard i |
+| cli.js | 775 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusAgentCli, runBusAgentdCli... | Our own model subprocesses fire the session hooks despite the --settings guard i |
 | config.js | 67 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | 15 minutes of an unchanging digest. Safe to exit that early because hooks |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
-| db.js | 238 | getBusDb, closeBusDb | Journal mode belongs to the file, not the connection, so the switch is worth att |
+| db.js | 250 | MIGRATIONS, getBusDb, closeBusDb | Journal mode belongs to the file, not the connection, so the switch is worth att |
 | pending.js | 83 | getBusPendingPath, readBusPending, writeBusPending, clearBusPending, getBusNotifierPidPath... | Only the recorded owner may clear the claim; a superseded notifier must not dere |
 | resources.js | 32 | registerBusResources | - |
 | service.js | 696 | messageTargetsReader, onBusMessage, sendBusMessage, getMessageById, readBusInbox... | A message reaches a reader when it is not their own and is either broadcast or a |
@@ -123,10 +124,12 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | canonicalize-entities.js | 230 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
+| flags.js | 112 | UsageError, wantsHelp, assertKnownFlags, showHelp, acceptFlags... | `--help` must print help and do nothing else, and a mistyped flag must not be |
 | fold-inverses.js | 129 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows stored under a spelling |
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
+| migrate.js | 47 | runMigrateCli | The only path in the codebase that executes DDL. Everything else verifies. |
 | prompt-hint.js | 56 | promptHint | UserPromptSubmit hook: when the user's prompt is actually about something the |
 | register.js | 17 | register | - |
 | retrieval-report.js | 126 | retrievalReport, runRetrievalReportCli | Surface lists are constants, not input, but binding them keeps the SQL |
@@ -136,7 +139,7 @@ bin/
 | setup-jobs.js | 138 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
 | setup.js | 634 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 131 | sourceMtime, staleServers, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
-| status.js | 38 | status | - |
+| status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
 | tier-cli.js | 29 | runTierCli | `kb tier` — the standing of what is stored, and the backfill that derives it |
@@ -211,13 +214,15 @@ bin/
 | autobind.test.js | 196 | - | - |
 | bus.test.js | 1592 | - | - |
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
+| cli-inert.test.js | 227 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
+| db-connect-guard.test.js | 40 | - | Runs in its own process so KB_DIR can point somewhere disposable before |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
-| entity-canonicalization.test.js | 269 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| entity-canonicalization.test.js | 268 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract-context.test.js | 67 | - | - |
 | extract-eval.test.js | 207 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract-meter.test.js | 148 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract.test.js | 838 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 837 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 304 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |
@@ -235,6 +240,7 @@ bin/
 | retrieval.test.js | 129 | - | - |
 | runtime-node.test.js | 64 | - | - |
 | safety-review.test.js | 89 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
+| schema-migrations.test.js | 228 | - | - |
 | setup-env-preserve.test.js | 9 | - | - |
 | setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
 | setup-jobs.test.js | 87 | - | tests/setup-jobs.test.js |

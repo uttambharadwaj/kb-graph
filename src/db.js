@@ -7,15 +7,25 @@ import {
   assertTier, byScoreThenTier, normalizeRef, RANK_BUCKET, resolveTier, sourceFamily, tierForSource, tierRank,
 } from './tiers.js';
 import { logRetrievalResults } from './retrieval.js';
+import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 
 let db = null;
 
 function getDb() {
   if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('wal_autocheckpoint = 100');  // Checkpoint every 100 pages (~400KB) to prevent WAL bloat
-    initSchema(db);
+    const opened = new Database(DB_PATH);
+    opened.pragma('journal_mode = WAL');
+    opened.pragma('wal_autocheckpoint = 100');  // Checkpoint every 100 pages (~400KB) to prevent WAL bloat
+    try {
+      // Verify only. A connection that failed verification must not become the
+      // module's `db`, or a caller that swallows this error hands the next one a
+      // database this code cannot read.
+      ensureSchemaReady(opened, { migrations: MIGRATIONS, label: 'knowledge base', path: DB_PATH });
+    } catch (err) {
+      opened.close();
+      throw err;
+    }
+    db = opened;
 
     // Periodic WAL checkpoint every 5 minutes to keep WAL file small
     setInterval(() => {
@@ -29,8 +39,11 @@ function getDb() {
   return db;
 }
 
-function initSchema(db) {
-  db.exec(`
+export const MIGRATIONS = [{
+  version: 1,
+  name: 'documents, full-text index, and vault file tracking',
+  applied: db => hasTable(db, 'documents') && hasTable(db, 'vault_files'),
+  up: db => db.exec(`
     CREATE TABLE IF NOT EXISTS documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
@@ -93,54 +106,46 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_vault_files_hash ON vault_files(content_hash);
     CREATE INDEX IF NOT EXISTS idx_vault_files_type ON vault_files(note_type);
     CREATE INDEX IF NOT EXISTS idx_vault_files_project ON vault_files(project);
-
-    -- Per-term document frequency, read straight off the FTS index. A view over
-    -- data that already exists: no rows are stored and nothing has to be kept in
-    -- sync. Relevance scoring needs to know which words are distinctive.
-    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row');
-  `);
-
-  // Migration: add summary and key_topics columns if missing
-  const cols = db.prepare("PRAGMA table_info(vault_files)").all().map(c => c.name);
-  if (!cols.includes('summary')) {
-    db.prepare('ALTER TABLE vault_files ADD COLUMN summary TEXT').run();
-  }
-  if (!cols.includes('key_topics')) {
-    db.prepare('ALTER TABLE vault_files ADD COLUMN key_topics TEXT').run();
-  }
-
-  // Migration: supersession lifecycle columns on documents (idempotent).
+  `),
+}, {
+  version: 2,
+  name: 'vault file summaries',
+  applied: db => hasColumn(db, 'vault_files', 'summary') && hasColumn(db, 'vault_files', 'key_topics'),
+  up: db => {
+    addColumn(db, 'vault_files', 'summary', 'TEXT');
+    addColumn(db, 'vault_files', 'key_topics', 'TEXT');
+  },
+}, {
+  version: 3,
   // superseded_at NULL = live and drives the recall filter; the pointer +
   // reason feed the kb_read banner. Superseded is retired, not deleted.
-  const docCols = db.prepare("PRAGMA table_info(documents)").all().map(c => c.name);
-  if (!docCols.includes('superseded_at')) {
-    db.prepare('ALTER TABLE documents ADD COLUMN superseded_at DATETIME').run();
-  }
-  if (!docCols.includes('superseded_by')) {
-    db.prepare('ALTER TABLE documents ADD COLUMN superseded_by INTEGER').run();
-  }
-  if (!docCols.includes('superseded_reason')) {
-    db.prepare('ALTER TABLE documents ADD COLUMN superseded_reason TEXT').run();
-  }
-
-  // Migration: epistemic tier (see src/tiers.js). NOT NULL with the floor as
-  // its default, so existing rows land on the conservative reading and an
-  // untiered note — the unlabelled state the tier exists to remove — cannot
-  // occur. The CHECK is built from the tier tuple, not a second copy of it.
-  if (!docCols.includes('tier')) {
+  name: 'document supersession lifecycle',
+  applied: db => ['superseded_at', 'superseded_by', 'superseded_reason']
+    .every(column => hasColumn(db, 'documents', column)),
+  up: db => {
+    addColumn(db, 'documents', 'superseded_at', 'DATETIME');
+    addColumn(db, 'documents', 'superseded_by', 'INTEGER');
+    addColumn(db, 'documents', 'superseded_reason', 'TEXT');
+  },
+}, {
+  version: 4,
+  // Epistemic tier (see src/tiers.js). NOT NULL with the floor as its default,
+  // so existing rows land on the conservative reading and an untiered note —
+  // the unlabelled state the tier exists to remove — cannot occur. The CHECK is
+  // built from the tier tuple, not a second copy of it.
+  name: 'epistemic tier on documents',
+  applied: db => ['tier', 'tier_ref', 'tier_at'].every(column => hasColumn(db, 'documents', column)),
+  up: db => {
     const allowed = TIERS.map(t => `'${t}'`).join(', ');
-    db.prepare(
-      `ALTER TABLE documents ADD COLUMN tier TEXT NOT NULL DEFAULT '${DEFAULT_TIER}' CHECK (tier IN (${allowed}))`
-    ).run();
-  }
-  if (!docCols.includes('tier_ref')) {
-    db.prepare('ALTER TABLE documents ADD COLUMN tier_ref TEXT').run();
-  }
-  if (!docCols.includes('tier_at')) {
-    db.prepare('ALTER TABLE documents ADD COLUMN tier_at DATETIME').run();
-  }
-
-  db.exec(`
+    addColumn(db, 'documents', 'tier', `TEXT NOT NULL DEFAULT '${DEFAULT_TIER}' CHECK (tier IN (${allowed}))`);
+    addColumn(db, 'documents', 'tier_ref', 'TEXT');
+    addColumn(db, 'documents', 'tier_at', 'DATETIME');
+  },
+}, {
+  version: 5,
+  name: 'embeddings, document links, and the temporal fact graph',
+  applied: db => hasTable(db, 'embeddings') && hasTable(db, 'tag_aliases'),
+  up: db => db.exec(`
 
     -- Embeddings for semantic search (stored as Float32Array binary blobs)
     CREATE TABLE IF NOT EXISTS embeddings (
@@ -195,7 +200,9 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
     CREATE INDEX IF NOT EXISTS idx_facts_valid ON facts(valid_from, valid_to);
 
-    -- Alias -> canonical entity id (see facts.js)
+    -- Alias -> canonical entity id, for what spelling alone cannot fold:
+    -- renames (old-name -> new-name) and synonyms. Separator and case variants
+    -- need no row here — canonicalEntityId collapses those on the way in.
     CREATE TABLE IF NOT EXISTS entity_aliases (
       alias TEXT PRIMARY KEY,
       canonical TEXT NOT NULL
@@ -206,9 +213,12 @@ function initSchema(db) {
       alias TEXT PRIMARY KEY,
       canonical TEXT NOT NULL
     );
-  `);
-
-  db.exec(`
+  `),
+}, {
+  version: 6,
+  name: 'system state, harvest watermarks, and read-path telemetry',
+  applied: db => hasTable(db, 'meta') && hasTable(db, 'harvest_log') && hasTable(db, 'retrievals'),
+  up: db => db.exec(`
     -- Pipeline heartbeats and other scalar system state (key/value)
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
@@ -240,9 +250,12 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_retrievals_doc_id ON retrievals(doc_id);
     CREATE INDEX IF NOT EXISTS idx_retrievals_surface_created ON retrievals(surface, created_at);
     CREATE INDEX IF NOT EXISTS idx_retrievals_session ON retrievals(session, surface, created_at);
-  `);
-
-  db.exec(`
+  `),
+}, {
+  version: 7,
+  name: 'write-path telemetry for kb_extract',
+  applied: db => hasTable(db, 'extractions'),
+  up: db => db.exec(`
     -- Write-path telemetry for kb_extract (see src/extract-meter.js) --
     -- the retrievals table's twin for the write path. One row per call --
     -- success, dry run, or failure alike -- carrying shape metrics instead
@@ -273,22 +286,37 @@ function initSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_extractions_created_at ON extractions(created_at);
     CREATE INDEX IF NOT EXISTS idx_extractions_hash ON extractions(input_hash);
-  `);
+  `),
+}, {
+  version: 8,
+  // Embeddings originally had no unique key, so INSERT OR REPLACE never
+  // conflicted and every re-embed added a duplicate row. Dedupe (keep newest)
+  // and enforce uniqueness so REPLACE works as intended.
+  name: 'unique embedding per document chunk',
+  applied: db => hasIndex(db, 'uq_embeddings_doc_chunk'),
+  up: db => db.exec(`
+    DELETE FROM embeddings WHERE id NOT IN (
+      SELECT MAX(id) FROM embeddings GROUP BY document_id, chunk_index
+    );
+    CREATE UNIQUE INDEX uq_embeddings_doc_chunk ON embeddings(document_id, chunk_index);
+  `),
+}, {
+  version: 9,
+  // Per-term document frequency, read straight off the FTS index. A view over
+  // data that already exists: no rows are stored and nothing has to be kept in
+  // sync. Relevance scoring needs to know which words are distinctive.
+  name: 'per-term document frequency over the full-text index',
+  applied: db => hasTable(db, 'documents_fts_vocab'),
+  up: db => db.exec(
+    "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row');"
+  ),
+}];
 
-  // Migration: embeddings originally had no unique key, so INSERT OR REPLACE
-  // never conflicted and every re-embed added a duplicate row. Dedupe (keep
-  // newest) and enforce uniqueness so REPLACE works as intended.
-  const hasUnique = db.prepare(
-    "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_embeddings_doc_chunk'"
-  ).get();
-  if (!hasUnique) {
-    db.exec(`
-      DELETE FROM embeddings WHERE id NOT IN (
-        SELECT MAX(id) FROM embeddings GROUP BY document_id, chunk_index
-      );
-      CREATE UNIQUE INDEX uq_embeddings_doc_chunk ON embeddings(document_id, chunk_index);
-    `);
-  }
+// Bring a database up to the schema this code needs. `kb migrate` and tests are
+// the only callers — connecting verifies instead, so that no ordinary command
+// can migrate a database as a side effect of reading it.
+function initSchema(db) {
+  return applyMigrations(db, MIGRATIONS);
 }
 
 export { initSchema, getDb };

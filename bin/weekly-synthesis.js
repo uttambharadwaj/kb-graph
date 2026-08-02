@@ -10,11 +10,17 @@ import {
   getNearDupPairs, writeSynthesisNote,
 } from '../src/synthesis/weekly-review.js';
 import { runClaude } from '../src/claude-cli.js';
+import { gateOrExit } from '../src/cli/flags.js';
+import { SchemaOutOfDateError } from '../src/schema.js';
 import { strongestTunnels } from '../src/tunnels.js';
 import { setMeta, getDb } from '../src/db.js';
 
 import { homedir } from 'os';
 import { join } from 'path';
+
+gateOrExit(process.argv.slice(2), {
+  usage: 'Usage: weekly-synthesis\n\n  Summarize the week\'s notes into a synthesis note in the vault.',
+});
 
 const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
 const notes = getRecentNotes(vaultPath, 7);
@@ -25,7 +31,13 @@ if (notes.length === 0) {
 }
 
 let tunnels = [];
-try { tunnels = strongestTunnels(getDb(), { limit: 10 }); } catch { /* synthesis proceeds without tunnels */ }
+try {
+  tunnels = strongestTunnels(getDb(), { limit: 10 });
+} catch (err) {
+  // Synthesis proceeds without tunnels, but not against a database it cannot read.
+  if (err instanceof SchemaOutOfDateError) throw err;
+  console.error(`[KB] tunnels unavailable for this synthesis: ${err.message}`);
+}
 
 const prompt = generateSynthesisPrompt(notes, { tunnels }) + generateAnalysisRequest(getNearDupPairs());
 

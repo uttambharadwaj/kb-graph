@@ -232,6 +232,7 @@ See [docs/message-bus.md](docs/message-bus.md) for wiring.
 kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
 kb mcp                 MCP stdio server (what your agents connect to)
+kb migrate             Apply pending schema migrations (--dry-run to preview)
 kb register            Register MCP with Claude Code / Codex / Gemini
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
@@ -248,6 +249,23 @@ kb canonicalize-entities  Back-fill entities split across case/separator spellin
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
 ```
+
+Every command answers `--help` by printing usage and doing nothing else, and
+rejects a flag it does not recognize rather than running with defaults.
+
+## Schema changes
+
+`kb migrate` is the only command that changes the knowledge base or message bus
+schema. Everything else verifies on connect and refuses to run when the database
+is behind the code, naming `kb migrate` in the error. A database with no schema
+yet is created on first connect — that has nothing to damage — but an existing
+one is never altered as a side effect of being opened. (`auth.db` is the
+exception: it belongs to better-auth, which manages its own tables.)
+
+Upgrading is therefore: pull, `kb migrate`, restart. Running `kb migrate` when
+nothing is pending prints `up to date` and writes nothing, so it is safe to keep
+in a deploy script unconditionally. Skipping it when a migration *is* pending
+costs you a startup failure that names the fix, not a half-migrated database.
 
 ---
 

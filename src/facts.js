@@ -1,42 +1,5 @@
 import { getDb } from './db.js';
 
-export function initFactSchema() {
-  getDb().exec(`
-    CREATE TABLE IF NOT EXISTS entities (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT DEFAULT 'unknown',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    -- Alias -> canonical entity id, for what spelling alone cannot fold:
-    -- renames (old-name -> new-name) and synonyms. Separator and case variants
-    -- need no row here — canonicalEntityId collapses those on the way in.
-    CREATE TABLE IF NOT EXISTS entity_aliases (
-      alias TEXT PRIMARY KEY,
-      canonical TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS facts (
-      id TEXT PRIMARY KEY,
-      subject TEXT NOT NULL,
-      predicate TEXT NOT NULL,
-      object TEXT NOT NULL,
-      valid_from TEXT,
-      valid_to TEXT,
-      source TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (subject) REFERENCES entities(id),
-      FOREIGN KEY (object) REFERENCES entities(id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
-    CREATE INDEX IF NOT EXISTS idx_facts_object ON facts(object);
-    CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate);
-    CREATE INDEX IF NOT EXISTS idx_facts_valid ON facts(valid_from, valid_to);
-  `);
-}
-
 // created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC
 // 'YYYY-MM-DD HH:MM:SS'. Anything compared against it has to be formatted the
 // same way, and the format lives here because this is where the column does.

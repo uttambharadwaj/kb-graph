@@ -5,6 +5,11 @@
 
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join, relative, extname } from 'path';
+import { gateOrExit } from '../src/cli/flags.js';
+
+gateOrExit(process.argv.slice(2), {
+  usage: 'Usage: generate-codemap [project-root]\n\n  Writes CODEMAP.md into the project root (default: the current directory).',
+});
 
 const PROJECT_ROOT = process.argv[2] || process.cwd();
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'data', 'coverage', '.claude', 'dist', 'build', 'config', '__pycache__', 'venv', '.venv']);
