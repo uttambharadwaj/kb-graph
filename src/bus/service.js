@@ -4,6 +4,20 @@ import { getBusPollMs, getBusResourceLimit, getBusRetentionMessages } from './co
 const PRESENCE_STALE_MS = 5 * 60 * 1000;
 const busListeners = new Set();
 
+// A message reaches a reader when it is not their own and is either broadcast or addressed to them.
+// Every site that decides "does this reader see this message" must bind (reader, reader) to it —
+// a second spelling of this predicate is a delivery that records against the wrong set.
+const READER_TARGET_SQL = `sender != ?
+      AND (COALESCE(recipient, to_reader) IS NULL OR COALESCE(recipient, to_reader) IN (?, '*'))`;
+
+// The same rule for callers that already hold a mapped message; kept adjacent so the two spellings
+// cannot drift apart.
+export function messageTargetsReader(message, reader) {
+  if (message.sender === reader) return false;
+  const recipient = message.recipient ?? message.to_reader ?? null;
+  return !recipient || recipient === '*' || recipient === reader;
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -253,16 +267,28 @@ export function sendBusMessage({
 function pruneChannel(channel) {
   const keep = getBusRetentionMessages();
   const db = getBusDb();
-  db.prepare(`
-    DELETE FROM bus_messages
+  const survivors = `
+    SELECT id FROM bus_messages
     WHERE channel = ?
-      AND id NOT IN (
-        SELECT id FROM bus_messages
+    ORDER BY id DESC
+    LIMIT ?
+  `;
+  // Delivery and run rows are per-message; dropping the message must drop its ledger entries too.
+  db.transaction(() => {
+    for (const table of ['bus_deliveries', 'bus_runs']) {
+      const messageColumn = table === 'bus_runs' ? 'trigger_message_id' : 'message_id';
+      db.prepare(`
+        DELETE FROM ${table}
         WHERE channel = ?
-        ORDER BY id DESC
-        LIMIT ?
-      )
-  `).run(channel, channel, keep);
+          AND ${messageColumn} NOT IN (${survivors})
+      `).run(channel, channel, keep);
+    }
+    db.prepare(`
+      DELETE FROM bus_messages
+      WHERE channel = ?
+        AND id NOT IN (${survivors})
+    `).run(channel, channel, keep);
+  }).immediate();
 }
 
 export function getMessageById(id) {
@@ -361,21 +387,15 @@ function readNotificationRows(channel, reader, since, limit) {
     SELECT id, channel, sender, kind, body, metadata_json, thread, reply_to, recipient, to_reader, deadline, expects_reply, created_at
     FROM bus_messages
     WHERE channel = ?
-      AND sender != ?
       AND id > ?
-      AND (COALESCE(recipient, to_reader) IS NULL OR COALESCE(recipient, to_reader) = ? OR COALESCE(recipient, to_reader) = '*')
+      AND ${READER_TARGET_SQL}
     ORDER BY id ASC
     LIMIT ?
-  `).all(channel, reader, since, reader, limit);
+  `).all(channel, since, reader, reader, limit);
 
   const stats = db.prepare(`
     SELECT
-      SUM(CASE
-        WHEN sender != ?
-         AND (COALESCE(recipient, to_reader) IS NULL OR COALESCE(recipient, to_reader) = ? OR COALESCE(recipient, to_reader) = '*')
-        THEN 1
-        ELSE 0
-      END) AS total_new,
+      SUM(CASE WHEN ${READER_TARGET_SQL} THEN 1 ELSE 0 END) AS total_new,
       MAX(id) AS latest_id
     FROM bus_messages
     WHERE channel = ? AND id > ?
@@ -434,6 +454,22 @@ export function readBusNotifications({ channel, reader, limit = 5, preview_chars
   };
 }
 
+let capabilitiesWarned = false;
+
+// Capabilities are optional decoration on a hook fire; malformed JSON must not cost the reader its mail.
+function normalizeCapabilities(capabilities_json) {
+  if (!capabilities_json) return null;
+  try {
+    return JSON.stringify(JSON.parse(capabilities_json));
+  } catch (err) {
+    if (!capabilitiesWarned) {
+      console.error(`kb: ignoring invalid bus capabilities JSON (${err.message})`);
+      capabilitiesWarned = true;
+    }
+    return null;
+  }
+}
+
 export function advanceBusNotifications({ channel, reader, to_id, capabilities_json = null }) {
   const cleanChannel = requireText(channel, 'channel');
   const cleanReader = requireText(reader, 'reader');
@@ -442,7 +478,7 @@ export function advanceBusNotifications({ channel, reader, to_id, capabilities_j
     last_seen_id: readReaderState(cleanReader, cleanChannel).last_seen_id,
     notify_cursor: cursor,
     last_hook_at: new Date().toISOString(),
-    capabilities_json: capabilities_json ? JSON.stringify(JSON.parse(capabilities_json)) : null,
+    capabilities_json: normalizeCapabilities(capabilities_json),
   });
 
   const state = readReaderState(cleanReader, cleanChannel);
@@ -535,11 +571,24 @@ function countUnreadNotifications(channel, reader, cursor) {
     SELECT COUNT(*) AS count
     FROM bus_messages
     WHERE channel = ?
-      AND sender != ?
       AND id > ?
-      AND (COALESCE(recipient, to_reader) IS NULL OR COALESCE(recipient, to_reader) = ? OR COALESCE(recipient, to_reader) = '*')
-  `).get(channel, reader, normalizeSince(cursor), reader);
+      AND ${READER_TARGET_SQL}
+  `).get(channel, normalizeSince(cursor), reader, reader);
   return Number(row?.count ?? 0);
+}
+
+// The messages a hook digest covered: everything targeted at the reader that the cursor is about to skip.
+export function readDeliverableMessageIds({ channel, reader, after_id, through_id }) {
+  return getBusDb().prepare(`
+    SELECT id
+    FROM bus_messages
+    WHERE channel = ?
+      AND id > ?
+      AND id <= ?
+      AND ${READER_TARGET_SQL}
+    ORDER BY id ASC
+  `).all(channel, normalizeSince(after_id), normalizeSince(through_id), reader, reader)
+    .map(row => row.id);
 }
 
 export function readBusStatus({ channel, readers = [] } = {}) {

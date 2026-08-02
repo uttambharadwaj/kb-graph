@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bin/kb.js — CLI entry point
-// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, fold-inverses, canonicalize-entities, bus-send, bus-read, bus-status, bus-session, bus-gateway, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
+// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, fold-inverses, canonicalize-entities, bus-send, bus-read, bus-status, bus-session, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import 'dotenv/config';
@@ -36,7 +36,6 @@ const commands = {
   'bus-read': () => import('../src/bus/cli.js').then(m => m.runBusReadCli(args)),
   'bus-status': () => import('../src/bus/cli.js').then(m => m.runBusStatusCli(args)),
   'bus-session': () => import('../src/bus/cli.js').then(m => m.runBusSessionCli(args)),
-  'bus-gateway': () => import('../src/bus/cli.js').then(m => m.runBusGatewayCli(args)),
   'bus-agent': () => import('../src/bus/cli.js').then(m => m.runBusAgentCli(args)),
   'bus-agentd': () => import('../src/bus/cli.js').then(m => m.runBusAgentdCli(args)),
   'bus-hook': () => import('../src/bus/cli.js').then(m => m.runBusHookCli(args)),
@@ -114,8 +113,7 @@ Commands:
   bus-send           Send a local message bus message
   bus-read           Read messages using a stored per-reader cursor
   bus-status         Show channel readers, backlog, heartbeats, and latest control
-  bus-session        Register/list routable bus sessions
-  bus-gateway        Deliver important bus messages to registered sessions
+  bus-session        Register/list bus sessions and recorded hook handoffs
   bus-agent          Register/list executable bus workers
   bus-agentd         Launch executable workers for bus tasks
   bus-hook           Emit hook-friendly digests for unread bus messages

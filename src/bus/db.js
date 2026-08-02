@@ -193,15 +193,34 @@ function initSchema(database) {
   database.exec('DROP TABLE IF EXISTS bus_presence;');
 }
 
+const WAL_SWITCH_ATTEMPTS = 50;
+
+// Journal mode belongs to the file, not the connection, so the switch is worth attempting only
+// once. Setting it takes an exclusive lock and — unlike ordinary statements — returns SQLITE_BUSY
+// at once instead of waiting out busy_timeout, so a cold-start stampede of hooks loses one.
+// Reading first narrows that to genuine first creation; the retry covers the stampede itself.
+function ensureWalMode(database) {
+  for (let attempt = 0; attempt < WAL_SWITCH_ATTEMPTS; attempt += 1) {
+    if (database.pragma('journal_mode', { simple: true }) === 'wal') return;
+    try {
+      database.pragma('journal_mode = WAL');
+      return;
+    } catch (error) {
+      if (error.code !== 'SQLITE_BUSY') throw error;
+    }
+  }
+  throw new Error('bus database stayed locked while switching to WAL');
+}
+
 export function getBusDb() {
   const nextPath = getBusDbPath();
   if (!db || dbPath !== nextPath) {
     closeBusDb();
     ensureBusStorage();
     db = new Database(nextPath);
-    db.pragma('journal_mode = WAL');
-    // Hooks fire concurrently across sessions; without this a second writer
-    // gets SQLITE_BUSY immediately instead of waiting its turn.
+    ensureWalMode(db);
+    // Already the better-sqlite3 default; stated so a future default change cannot quietly
+    // drop the wait that concurrent hook writers depend on.
     db.pragma('busy_timeout = 5000');
     initSchema(db);
     dbPath = nextPath;

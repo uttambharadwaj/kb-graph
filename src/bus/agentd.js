@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { getBusDb } from './db.js';
 import { getBusPollMs } from './config.js';
 import { normalizeCwd } from './context.js';
-import { getMessageById } from './service.js';
+import { getMessageById, messageTargetsReader } from './service.js';
 
 const RUN_KINDS = new Set(['task', 'question', 'control', 'announce', 'handoff', 'blocked']);
 const OUTPUT_LIMIT = 20000;
@@ -126,12 +126,6 @@ function renderArgs(args, prompt) {
     : [prompt];
 }
 
-function messageTargetsAgent(message, agent) {
-  if (message.sender === agent.reader) return false;
-  const recipient = message.recipient ?? message.to_reader ?? null;
-  return !recipient || recipient === '*' || recipient === agent.reader;
-}
-
 function messageNeedsAgent(message) {
   if (RUN_KINDS.has(message.kind)) return true;
   if (message.expects_reply) return true;
@@ -178,7 +172,7 @@ function pendingMessagesForAgent(agent, limit) {
 
   return rows
     .map(row => getMessageById(row.id))
-    .filter(message => message && messageTargetsAgent(message, agent) && messageNeedsAgent(message));
+    .filter(message => message && messageTargetsReader(message, agent.reader) && messageNeedsAgent(message));
 }
 
 function insertRun(agent, message, commandText) {
@@ -271,7 +265,7 @@ export function registerBusAgent({
   reader,
   agent,
   adapter = 'exec',
-  cwd = process.cwd(),
+  cwd,
   command,
   args = [],
   args_json,
