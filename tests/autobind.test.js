@@ -46,6 +46,17 @@ describe('autobind', () => {
     assert.strictEqual(resolved.subscriptions[0].channel, 'ws:pf-1999');
   });
 
+  // The shipped default takes any short alphabetic prefix, so a fresh clone
+  // autobinds whatever a project calls its tickets without configuration.
+  it('binds an unfamiliar ticket prefix on the default pattern', () => {
+    makeBusHome();
+    const { full } = makeWorkspace('worktrees/zct-4211-unfamiliar/src');
+
+    const result = autobind({ agent: 'claude', cwd: full });
+    assert.strictEqual(result.bound, true);
+    assert.strictEqual(result.channel, 'ws:zct-4211');
+  });
+
   it('uses CLAUDE_BUS_ROLE env var for reader when set', () => {
     makeBusHome();
     process.env.CLAUDE_BUS_ROLE = 'architect';

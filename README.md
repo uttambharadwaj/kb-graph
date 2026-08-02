@@ -271,7 +271,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | `KB_HARVEST_SDK_SESSIONS` | No | off | `1`/`true`/`yes` harvests print-mode (SDK) transcripts too. Off because the harvest's own `claude -p` calls look like sessions — 98% of candidates on a busy install. Turn on if you drive Claude Code headlessly and want that work captured |
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
-| `KB_TICKET_REGEX` | No | `pf-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name |
+| `KB_TICKET_REGEX` | No | `(?<=^\|[/_])[a-z]{2,6}-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name. The default deliberately accepts any short prefix so autobind works unconfigured; it will also match same-shaped directory names like `node-22`, so set this to something exact if that bothers you |
 
 ## Running as a service
 
