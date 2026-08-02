@@ -21,17 +21,17 @@ export function hashInput(text) {
 // retrieval.js's logRetrieval.
 export function logExtraction({
   inputHash, inputChars, chunkChars, emittedCount, skippedCount,
-  chunkFailures, dryRun, failed, durationMs, source = null,
+  chunkFailures, dryRun, failed, fromPreview, durationMs, source = null,
 }) {
   try {
     getDb().prepare(`
       INSERT INTO extractions
-        (input_hash, input_chars, chunk_count, chunk_chars, emitted_count, skipped_count, chunk_failures, dry_run, failed, duration_ms, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (input_hash, input_chars, chunk_count, chunk_chars, emitted_count, skipped_count, chunk_failures, dry_run, failed, from_preview, duration_ms, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       inputHash, inputChars, chunkChars.length, JSON.stringify(chunkChars),
       emittedCount, skippedCount, chunkFailures, dryRun ? 1 : 0, failed ? 1 : 0,
-      durationMs, source,
+      fromPreview ? 1 : 0, durationMs, source,
     );
   } catch (err) {
     console.error(`[KB] extraction log failed (input_hash=${inputHash}): ${err.message}`);

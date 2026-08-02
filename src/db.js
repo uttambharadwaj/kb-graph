@@ -244,7 +244,10 @@ function initSchema(db) {
     -- against its call weeks later without the original session. chunk_chars
     -- is a JSON array of per-chunk character counts; chunk_failures counts
     -- chunks that were retried and still lost their facts, which can be > 0
-    -- on a call whose overall result otherwise looks like success.
+    -- on a call whose overall result otherwise looks like success. from_preview
+    -- marks a commit that replayed a prior dry run instead of extracting fresh
+    -- -- it never re-sent any chunks, so its near-zero duration_ms is expected,
+    -- not an anomaly.
     CREATE TABLE IF NOT EXISTS extractions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       input_hash TEXT NOT NULL,
@@ -256,6 +259,7 @@ function initSchema(db) {
       chunk_failures INTEGER NOT NULL DEFAULT 0,
       dry_run INTEGER NOT NULL DEFAULT 0,
       failed INTEGER NOT NULL DEFAULT 0,
+      from_preview INTEGER NOT NULL DEFAULT 0,
       duration_ms INTEGER NOT NULL,
       source TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

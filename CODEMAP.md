@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 142
-- **Total lines:** 20,901
+- **Total lines:** 20,936
 
 ## Architecture Overview
 ```
@@ -64,9 +64,9 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 768 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
+| db.js | 772 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
 | extract-meter.js | 40 | hashInput, logExtraction | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
-| extract.js | 768 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 778 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | harvest.js | 375 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
@@ -215,7 +215,7 @@ bin/
 | entity-canonicalization.test.js | 269 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract-context.test.js | 67 | - | - |
 | extract-eval.test.js | 207 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
-| extract-meter.test.js | 127 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract-meter.test.js | 148 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract.test.js | 838 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 304 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |

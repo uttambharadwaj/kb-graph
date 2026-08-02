@@ -202,6 +202,9 @@ export async function extractFacts(text) {
 
   return {
     facts: results.flatMap(r => (Array.isArray(r?.facts) ? r.facts : [])),
+    // Per-chunk character counts, for kbExtract's meter (extract-meter.js) to
+    // log verbatim — the shape actually sent, not a second computation of it.
+    chunkChars: chunks.map(c => c.length),
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
     // this accounting exists to expose, so say the accounting is missing.
@@ -713,17 +716,24 @@ function recallPreview(key) {
 export async function kbExtract(text, { source, observationDate, observedAt, dryRun = false } = {}) {
   const started = Date.now();
   let inputHash = null, inputChars = 0, chunkChars = [];
-  let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false;
+  let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false, fromPreview = false;
   try {
     inputHash = hashInput(text);
     inputChars = text.length;
-    // Independent of extractFacts's own chunking: chunkForExtract is pure and
-    // this is metering, not a second source of truth for what got sent.
-    chunkChars = chunkForExtract(text.slice(0, MAX_EXTRACT_CHARS)).map(c => c.length);
 
     const key = previewKey(text, source, observationDate);
     const previewed = dryRun ? null : recallPreview(key);
-    const { facts, skipped } = previewed || await extractFacts(text);
+    // One binding for both the row and the return value below — the two must
+    // never disagree about whether this call replayed a preview.
+    fromPreview = !!previewed;
+    const { facts, skipped, chunkChars: shape } = previewed || await extractFacts(text);
+    // The shape actually sent — a fresh call's own extractFacts call, or (on a
+    // replay) the shape the ORIGINAL dry run sent, carried forward by
+    // rememberPreview below. Never recomputed independently: a second
+    // chunkForExtract call over the same text agrees today because the
+    // function is pure, but would silently drift the moment extractFacts
+    // changes how it slices or splits.
+    chunkChars = shape;
     emittedCount = facts.length;
     skippedCount = skipped.length;
     // A chunk that died and stayed dead after CHUNK_ATTEMPTS retries — visible
@@ -735,7 +745,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     const notExtracted = skipped.map(s => ({ ...s, reason: s?.reason || 'not_extracted' }));
 
     if (dryRun) {
-      rememberPreview(key, { facts, skipped });
+      rememberPreview(key, { facts, skipped, chunkChars: shape });
       // Candidates are shown post-split, post-alias and post-direction, since that is the triple
       // consolidation will write — previewing the raw predicate would disagree
       // with the commit for exactly the drift this preview exists to expose.
@@ -754,14 +764,14 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     }
 
     const res = consolidate(facts, { source, observationDate, observedAt });
-    return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
+    return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: fromPreview };
   } catch (err) {
     failed = true;
     throw err;
   } finally {
     logExtraction({
       inputHash, inputChars, chunkChars, emittedCount, skippedCount, chunkFailures,
-      dryRun, failed, durationMs: Date.now() - started, source: source ?? null,
+      dryRun, failed, fromPreview, durationMs: Date.now() - started, source: source ?? null,
     });
   }
 }

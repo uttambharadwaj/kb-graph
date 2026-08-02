@@ -131,8 +131,9 @@ async function extractEpubContent(filePath, filename) {
    - `kb retrieval-report` reports coverage, freshness, hint follow-through, and miss rate over this table
 
 6. `extractions` -- Write-path telemetry for `kb_extract` (see `src/extract-meter.js`)
-   - `input_hash` (sha256 of the input text, never the text itself), `input_chars`, `chunk_count`, `chunk_chars` (JSON array of per-chunk character counts), `emitted_count`, `skipped_count`, `chunk_failures`, `dry_run`, `failed`, `duration_ms`, `source`, `created_at`
+   - `input_hash` (sha256 of the input text, never the text itself), `input_chars`, `chunk_count`, `chunk_chars` (JSON array of per-chunk character counts), `emitted_count`, `skipped_count`, `chunk_failures`, `dry_run`, `failed`, `from_preview`, `duration_ms`, `source`, `created_at`
    - One row per `kb_extract` call, including dry runs and calls that throw -- logged from a `finally` in `kbExtract` so a call can never go unmetered
+   - `from_preview` marks a commit that replayed a dry-run preview instead of extracting fresh -- no chunks were re-sent, so its near-zero `duration_ms` is expected rather than an anomaly
 
 **To add a new query type:**
 - Export a new function from `db.js`

@@ -61,6 +61,7 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(row.chunk_failures, 0);
     assert.strictEqual(row.dry_run, 0);
     assert.strictEqual(row.failed, 0);
+    assert.strictEqual(row.from_preview, 0);
     assert.strictEqual(row.source, 'meter-test');
     assert.ok(row.duration_ms >= 0);
     assert.ok(row.created_at);
@@ -122,5 +123,25 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(row.chunk_failures, 1, 'the dead chunk must be visible in the record');
     assert.strictEqual(row.failed, 0, 'the call itself did not throw');
     assert.strictEqual(row.emitted_count, 1, 'only the surviving chunk emitted a fact');
+  });
+
+  // A commit that replays a dry-run preview never calls extractFacts again —
+  // no chunks sent, near-zero duration. Without from_preview that reads as an
+  // anomaly (facts appeared out of a call that did no visible work); with it,
+  // it reads as the cache hit it is. Both directions in one test so neither
+  // value can be hardcoded and pass.
+  it('marks a replayed commit as from_preview and a fresh call as not', async () => {
+    const previewText = 'a preview-then-commit flow, replayed rather than re-extracted.';
+    await kbExtract(previewText, { source: 'meter-test', dryRun: true });
+    await kbExtract(previewText, { source: 'meter-test' }); // commits by replaying the preview above
+
+    const replayRow = rowFor(previewText); // latest row for this hash: the commit, not the dry run
+    assert.strictEqual(replayRow.dry_run, 0);
+    assert.strictEqual(replayRow.from_preview, 1, 'a commit that reused a preview must record it');
+
+    const freshText = 'a totally unrelated call with no preview to reuse at all.';
+    await kbExtract(freshText, { source: 'meter-test' });
+    const freshRow = rowFor(freshText);
+    assert.strictEqual(freshRow.from_preview, 0, 'a call that extracted fresh must not claim it replayed one');
   });
 });
