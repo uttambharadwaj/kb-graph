@@ -11,6 +11,7 @@ import { kbExtract, MAX_EXTRACT_CHARS } from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
+import { HARVEST_SOURCE_PREFIX } from './tiers.js';
 
 // Derived, not copied: a chunk wider than kb_extract's window would be
 // truncated there, and this caller reads only added/candidates so the
@@ -166,7 +167,9 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
   const text = extractTranscriptText(readFileSync(path, 'utf-8'));
   if (text.length < MIN_TEXT_CHARS) return { skipped: 'too_short', facts: 0, notes: 0 };
 
-  const source = `harvest:${basename(path, '.jsonl')}`;
+  // The prefix is what caps every note this pass writes at the lowest tier —
+  // see src/tiers.js, which owns it.
+  const source = `${HARVEST_SOURCE_PREFIX}${basename(path, '.jsonl')}`;
 
   let facts = 0, chunkErrors = 0, factsUnread = 0, contested = 0;
   if (wantFacts) {

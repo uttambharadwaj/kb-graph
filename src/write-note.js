@@ -1,12 +1,14 @@
 // Shared note-writing path: dedup, frontmatter, related-links, index.
 // Used by the kb_write MCP tool and the harvest pipeline so every note —
 // human-triggered or automatic — enters the KB the same way, connected.
-import { writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
+import matter from 'gray-matter';
 import { similarDocs, duplicatesIn, DUP_THRESHOLD } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { getVaultFile, getDb } from './db.js';
 import { splitTags } from './tags.js';
+import { assertTier } from './tiers.js';
 
 // Re-exported, not redeclared: kb_check_duplicate answers with this same value,
 // and a second copy is the drift that made the pre-check disagree with the write.
@@ -56,7 +58,21 @@ export function relatedForDoc(docId, { limit = 5 } = {}) {
   `).all(docId, docId, limit);
 }
 
-export async function writeNote(vaultPath, { title, content, type = 'capture', tags, project, source, excludeId }) {
+// Restate a note's tier in its own frontmatter. The vault file is the source of
+// truth: a tier written only to the DB is undone by the next reindex.
+export function setNoteTier(vaultPath, relPath, { tier, ref }) {
+  const fullPath = join(vaultPath, relPath);
+  const { data: fm, content: body } = matter(readFileSync(fullPath, 'utf-8'));
+  const updated = { ...fm, tier, tier_ref: ref };
+  if (!ref) delete updated.tier_ref;
+  writeFileSync(fullPath, matter.stringify(body, updated));
+}
+
+export async function writeNote(vaultPath, { title, content, type = 'capture', tags, project, source, tier, tier_ref, excludeId }) {
+  // Refused loudly, before anything is written: a caller told its note was
+  // saved has no reason to check what tier it actually landed on.
+  const graded = assertTier({ tier, ref: tier_ref, provenance: source });
+
   // One embedding pass drives both dedup and related-links. If the semantic
   // layer is down, say so — a silent skip reads as "no duplicates found".
   let similar = [];
@@ -100,6 +116,9 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   ];
   if (project) fm.push(`project: ${project.trim().toLowerCase()}`);
   if (source) fm.push(`source: ${JSON.stringify(source)}`);
+  // Always stated, never implied: an untiered note reads as an unlabelled one.
+  fm.push(`tier: ${graded.tier}`);
+  if (graded.ref) fm.push(`tier_ref: ${JSON.stringify(graded.ref)}`);
   fm.push('status: active');
   fm.push('---');
 
@@ -121,6 +140,7 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
     skipped: false,
     path: relPath,
     docId,
+    tier: graded.tier,
     related: related.map(r => ({ id: r.document_id, title: r.title, score: Math.round(r.score * 100) / 100 })),
     status: indexStatus + warning,
   };

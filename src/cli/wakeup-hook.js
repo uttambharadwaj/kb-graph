@@ -4,6 +4,7 @@
 import { getDb, getHealth } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { logRetrieval, resolveSessionId } from '../retrieval.js';
+import { TIER, tierLabel } from '../tiers.js';
 
 async function readStdin() {
   let data = '';
@@ -34,7 +35,10 @@ export async function wakeupHook() {
     // filter drops only notes whose document is superseded (superseded_at is
     // NULL for both live and unlinked rows).
     const recent = db.prepare(
-      "SELECT vf.title, vf.note_type, vf.project FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE vf.note_type NOT IN ('archive') AND d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 8"
+      "SELECT vf.title, vf.note_type, vf.project, d.tier FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE vf.note_type NOT IN ('archive') AND d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 8"
+    ).all();
+    const tiers = db.prepare(
+      'SELECT tier, COUNT(*) c FROM documents WHERE superseded_at IS NULL GROUP BY tier'
     ).all();
 
     const health = getHealth();
@@ -43,7 +47,7 @@ export async function wakeupHook() {
       : `health: ⚠ ${health.warnings.join(' | ')}`;
 
     const states = db.prepare(
-      "SELECT vf.title, vf.document_id, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"
+      "SELECT vf.title, vf.document_id, d.tier, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"
     ).all();
     // Only `states` carries an id into the printed briefing (`#id`) — that's
     // the only part of this hook an agent can act on with kb_read(id), so
@@ -54,12 +58,13 @@ export async function wakeupHook() {
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
       healthLine,
+      `standing: ${tiers.map(t => `${tierLabel(t.tier)} ${t.c}`).join(', ')} — ⚠ ${TIER.INFERRED} notes are unconfirmed model conclusions; confirm one with kb_promote when a session proves it`,
       ...(states.length ? [
         'Active workstreams (kb_read for current state):',
-        ...states.map(s => `- #${s.document_id} ${s.title} (as of ${s.updated_at?.slice(0, 10)})`),
+        ...states.map(s => `- #${s.document_id} ${s.title} (${tierLabel(s.tier)}, as of ${s.updated_at?.slice(0, 10)})`),
       ] : []),
       'Recently updated:',
-      ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type})`),
+      ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}, ${tierLabel(r.tier)})`),
       'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity). Capture learnings at session end via /debrief.',
     ];
     console.log(lines.join('\n'));

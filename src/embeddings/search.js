@@ -1,5 +1,6 @@
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
+import { tierRank } from '../tiers.js';
 
 // The score at or above which a note is a duplicate rather than a relative.
 // Lives here because both the write path and kb_check_duplicate must use this
@@ -33,7 +34,7 @@ export async function semanticSearch(query, { limit = 10, project, type, include
 
   let sql = `
     SELECT e.document_id, e.vault_path, e.chunk_text, e.embedding,
-           d.title, d.doc_type, d.tags
+           d.title, d.doc_type, d.tags, d.tier
     FROM embeddings e
     JOIN documents d ON d.id = e.document_id
   `;
@@ -63,6 +64,7 @@ export async function semanticSearch(query, { limit = 10, project, type, include
       title: row.title,
       type: row.doc_type,
       tags: row.tags,
+      tier: row.tier,
       chunk_preview: row.chunk_text?.slice(0, 200),
       score,
     };
@@ -143,12 +145,13 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
     }
   }
 
-  // Items found by both methods rank highest
+  // Items found by both methods rank highest; what was confirmed breaks a tie,
+  // the same preference kb_search applies.
   const merged = Array.from(seen.values());
   merged.sort((a, b) => {
     if (a.source === 'both' && b.source !== 'both') return -1;
     if (b.source === 'both' && a.source !== 'both') return 1;
-    return (b.semantic_score || 0) - (a.semantic_score || 0);
+    return ((b.semantic_score || 0) - (a.semantic_score || 0)) || (tierRank(b.tier) - tierRank(a.tier));
   });
 
   return merged.slice(0, limit);

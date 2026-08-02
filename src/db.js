@@ -2,6 +2,10 @@ import Database from 'better-sqlite3';
 import { statSync } from 'fs';
 import { DB_PATH } from './paths.js';
 import { normalizeTagString } from './tags.js';
+import {
+  TIERS, DEFAULT_TIER, REF_MAX_CHARS,
+  assertTier, normalizeRef, resolveTier, sourceFamily, tierForSource, tierRank,
+} from './tiers.js';
 
 let db = null;
 
@@ -111,6 +115,23 @@ function initSchema(db) {
   }
   if (!docCols.includes('superseded_reason')) {
     db.prepare('ALTER TABLE documents ADD COLUMN superseded_reason TEXT').run();
+  }
+
+  // Migration: epistemic tier (see src/tiers.js). NOT NULL with the floor as
+  // its default, so existing rows land on the conservative reading and an
+  // untiered note — the unlabelled state the tier exists to remove — cannot
+  // occur. The CHECK is built from the tier tuple, not a second copy of it.
+  if (!docCols.includes('tier')) {
+    const allowed = TIERS.map(t => `'${t}'`).join(', ');
+    db.prepare(
+      `ALTER TABLE documents ADD COLUMN tier TEXT NOT NULL DEFAULT '${DEFAULT_TIER}' CHECK (tier IN (${allowed}))`
+    ).run();
+  }
+  if (!docCols.includes('tier_ref')) {
+    db.prepare('ALTER TABLE documents ADD COLUMN tier_ref TEXT').run();
+  }
+  if (!docCols.includes('tier_at')) {
+    db.prepare('ALTER TABLE documents ADD COLUMN tier_at DATETIME').run();
   }
 
   db.exec(`
@@ -233,13 +254,16 @@ function initSchema(db) {
 
 export { initSchema, getDb };
 
-export function insertDocument({ title, content, source, doc_type, tags, file_path, file_size }) {
+// Every insert into documents lands here, which is what makes it the place an
+// unsupported tier claim gets clamped rather than trusted.
+export function insertDocument({ title, content, source, doc_type, tags, file_path, file_size, tier, tier_ref }) {
   const normTags = normalizeTagString(tags);
+  const graded = resolveTier({ tier, ref: tier_ref });
   const stmt = getDb().prepare(`
-    INSERT INTO documents (title, content, source, doc_type, tags, file_path, file_size)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO documents (title, content, source, doc_type, tags, file_path, file_size, tier, tier_ref, tier_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `);
-  const result = stmt.run(title, content, source || null, doc_type, normTags, file_path || null, file_size || 0);
+  const result = stmt.run(title, content, source || null, doc_type, normTags, file_path || null, file_size || 0, graded.tier, graded.ref);
   return {
     id: result.lastInsertRowid,
     title,
@@ -249,6 +273,8 @@ export function insertDocument({ title, content, source, doc_type, tags, file_pa
     tags: normTags,
     file_path: file_path || null,
     file_size: file_size || 0,
+    tier: graded.tier,
+    tier_ref: graded.ref,
   };
 }
 
@@ -282,6 +308,20 @@ const STOP_WORDS = new Set([
   'it', 'its', 'they', 'them', 'their', 'about', 'up',
 ]);
 
+// bm25 scores two hits that share the same term statistics identically, and
+// the term boosts below move rows in steps of 10 and 20. A window an order of
+// magnitude smaller than the weakest of those only ever reorders hits FTS
+// already rates as the same, which is where "prefer what was confirmed"
+// belongs. Bucketing rather than comparing pairwise keeps the sort transitive.
+const TIER_TIE_WINDOW = 1;
+
+function preferConfirmed(results) {
+  return results.sort((a, b) => {
+    const bucket = Math.round(a.rank / TIER_TIE_WINDOW) - Math.round(b.rank / TIER_TIE_WINDOW);
+    return bucket || tierRank(b.tier) - tierRank(a.tier) || a.rank - b.rank;
+  });
+}
+
 export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false } = {}) {
   // Build optional tag filter clause
   const tagFilter = tags ? 'AND d.tags LIKE ?' : '';
@@ -306,7 +346,7 @@ export function searchDocuments(query, limit = 20, { tags, includeSuperseded = f
     const stmt = getDb().prepare(`
       SELECT d.id, d.title,
         snippet(documents_fts, 1, '<mark>', '</mark>', '...', 30) as snippet,
-        d.doc_type, d.tags, d.file_size, d.created_at,
+        d.doc_type, d.tags, d.tier, d.tier_ref, d.file_size, d.created_at,
         bm25(documents_fts, 10.0, 1.0, 5.0) as rank
       FROM documents_fts f
       JOIN documents d ON d.id = f.rowid
@@ -317,7 +357,7 @@ export function searchDocuments(query, limit = 20, { tags, includeSuperseded = f
       LIMIT ?
     `);
     const params = tagParam ? [sanitized, tagParam, limit] : [sanitized, limit];
-    return stmt.all(...params);
+    return preferConfirmed(stmt.all(...params));
   }
 
   // Build FTS5 query: AND-first for precision, OR fallback for recall
@@ -328,7 +368,7 @@ export function searchDocuments(query, limit = 20, { tags, includeSuperseded = f
   const stmt = getDb().prepare(`
     SELECT d.id, d.title,
       snippet(documents_fts, 1, '<mark>', '</mark>', '...', 30) as snippet,
-      d.doc_type, d.tags, d.file_size, d.created_at,
+      d.doc_type, d.tags, d.tier, d.tier_ref, d.file_size, d.created_at,
       bm25(documents_fts, 10.0, 1.0, 5.0) as rank
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
@@ -360,14 +400,13 @@ export function searchDocuments(query, limit = 20, { tags, includeSuperseded = f
       // rank is negative (lower = better in bm25), so subtract boost to improve ranking
       r.rank = r.rank - termBoost;
     }
-    results.sort((a, b) => a.rank - b.rank);
   }
 
-  return results;
+  return preferConfirmed(results);
 }
 
 export function listDocuments({ type, tag, limit = 50, offset = 0, includeSuperseded = false } = {}) {
-  let sql = 'SELECT id, title, doc_type, tags, file_size, source, created_at, updated_at FROM documents';
+  let sql = 'SELECT id, title, doc_type, tags, tier, tier_ref, file_size, source, created_at, updated_at FROM documents';
   const conditions = [];
   const params = [];
 
@@ -509,6 +548,49 @@ export function supersedeCandidates({ since = null, limit = 20 } = {}) {
   return candidates;
 }
 
+// Derive tiers for rows that predate the column, from provenance alone.
+//
+// Raises only. A note above its family's floor got there by a deliberate act —
+// an explicit write or a kb_promote — and a re-run must not undo that, which is
+// what makes this safe to run repeatedly.
+export function backfillTiers({ apply = false } = {}) {
+  const db = getDb();
+  // The tier follows the note's OWN provenance, which for a vault note is its
+  // frontmatter `source:` on vault_files. documents.source holds the indexer's
+  // `vault:<path>` and says nothing about where the knowledge came from.
+  const rows = db.prepare(`
+    SELECT d.id, d.tier,
+           CASE WHEN vf.document_id IS NULL THEN d.source ELSE vf.source END AS provenance
+    FROM documents d LEFT JOIN vault_files vf ON vf.document_id = d.id
+  `).all();
+
+  const families = new Map();
+  const updates = [];
+  for (const row of rows) {
+    const family = sourceFamily(row.provenance);
+    const target = tierForSource(row.provenance);
+    const seen = families.get(family) || { family, tier: target, count: 0, raised: 0 };
+    seen.count++;
+    if (tierRank(target) > tierRank(row.tier)) {
+      seen.raised++;
+      updates.push([target, row.id]);
+    }
+    families.set(family, seen);
+  }
+
+  if (apply && updates.length) {
+    const stmt = db.prepare('UPDATE documents SET tier = ?, tier_at = CURRENT_TIMESTAMP WHERE id = ?');
+    db.transaction(() => { for (const u of updates) stmt.run(...u); })();
+  }
+
+  return {
+    total: rows.length,
+    raised: updates.length,
+    applied: apply,
+    families: [...families.values()].sort((a, b) => b.count - a.count),
+  };
+}
+
 export function getStats() {
   const count = getDb().prepare('SELECT COUNT(*) as count FROM documents').get().count;
   const totalSize = getDb().prepare('SELECT COALESCE(SUM(file_size), 0) as total FROM documents').get().total;
@@ -525,11 +607,45 @@ export function getDocumentCount() {
   return getDb().prepare('SELECT COUNT(*) as count FROM documents').get().count;
 }
 
-export function updateDocumentFull(id, { title, content, tags, doc_type, source, file_path, file_size }) {
+// The reindex path: the vault file is the source of truth, so the tier it
+// declares wins on every pass. tier_at only moves when the tier itself does —
+// in an UPDATE the right-hand sides still see the pre-update row.
+export function updateDocumentFull(id, { title, content, tags, doc_type, source, file_path, file_size, tier, tier_ref }) {
+  const graded = resolveTier({ tier, ref: tier_ref });
   const stmt = getDb().prepare(`
-    UPDATE documents SET title = ?, content = ?, tags = ?, doc_type = ?, source = ?, file_path = ?, file_size = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    UPDATE documents SET title = ?, content = ?, tags = ?, doc_type = ?, source = ?, file_path = ?, file_size = ?,
+      tier_at = CASE WHEN tier IS ? THEN tier_at ELSE CURRENT_TIMESTAMP END,
+      tier = ?, tier_ref = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
   `);
-  return stmt.run(title, content, tags, doc_type, source, file_path, file_size, id);
+  return stmt.run(title, content, tags, doc_type, source, file_path, file_size, graded.tier, graded.tier, graded.ref, id);
+}
+
+// Raise a note's tier because a later session confirmed it, recording what did
+// the confirming. Promotion only ever moves up: a caller asking for the tier a
+// note already holds, or a lower one, is told no rather than silently ignored.
+//
+// Deliberately does NOT apply the unattended-source ceiling. That ceiling is
+// about what a sweep may assert about its own output; a note it wrote is the
+// most likely thing a later session confirms, and 36% of the store came in
+// that way. What promotion still requires is the reference.
+export function promoteDocumentTier(id, { tier, confirmedBy }) {
+  const doc = getDocument(id);
+  if (!doc) return null;
+
+  const evidence = normalizeRef(confirmedBy);
+  if (!evidence) {
+    throw new Error(`A promotion must record what confirmed the note, in at most ${REF_MAX_CHARS} characters.`);
+  }
+  const graded = assertTier({ tier, ref: evidence });
+  if (tierRank(graded.tier) <= tierRank(doc.tier)) {
+    throw new Error(`#${id} is already ${doc.tier}; kb_promote only raises a tier.`);
+  }
+
+  getDb().prepare(
+    'UPDATE documents SET tier = ?, tier_ref = ?, tier_at = CURRENT_TIMESTAMP WHERE id = ?'
+  ).run(graded.tier, graded.ref, id);
+  return getDocument(id);
 }
 
 export function getVaultFile(vaultPath) {

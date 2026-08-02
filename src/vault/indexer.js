@@ -213,28 +213,32 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
   const existing = getVaultFile(relPath);
   let docId;
 
+  const fields = {
+    title: parsed.title,
+    content: parsed.body,
+    tags: normalizeTagString(parsed.tags.join(',')),
+    doc_type: parsed.type,
+    source: `vault:${relPath}`,
+    file_path: filePath,
+    file_size: statSync(filePath).size,
+    tier: parsed.tier,
+    tier_ref: parsed.tier_ref,
+  };
+
   if (existing && existing.document_id) {
-    updateDocumentFull(existing.document_id, {
-      title: parsed.title,
-      content: parsed.body,
-      tags: normalizeTagString(parsed.tags.join(',')),
-      doc_type: parsed.type,
-      source: `vault:${relPath}`,
-      file_path: filePath,
-      file_size: statSync(filePath).size,
-    });
+    updateDocumentFull(existing.document_id, fields);
     docId = existing.document_id;
   } else {
-    const doc = insertDocument({
-      title: parsed.title,
-      content: parsed.body,
-      source: `vault:${relPath}`,
-      doc_type: parsed.type,
-      tags: normalizeTagString(parsed.tags.join(',')),
-      file_path: filePath,
-      file_size: statSync(filePath).size,
-    });
-    docId = doc.id;
+    docId = insertDocument(fields).id;
+  }
+  // Frontmatter is hand-editable, so a claim it makes can fail the tier rules.
+  // The DB clamps rather than throwing — one bad file must not sink a whole
+  // reindex — so say what was lowered instead of lowering it silently.
+  if (parsed.tier) {
+    const stored = getDb().prepare('SELECT tier FROM documents WHERE id = ?').get(docId)?.tier;
+    if (stored !== parsed.tier) {
+      errors.push(`${relPath}: frontmatter claims tier "${parsed.tier}" — stored as "${stored}"`);
+    }
   }
 
   upsertVaultFile({

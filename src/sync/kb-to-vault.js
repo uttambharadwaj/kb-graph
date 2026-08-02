@@ -7,6 +7,7 @@
 
 import { getDb, getAllVaultPaths } from '../db.js';
 import { indexVault } from '../vault/indexer.js';
+import { coerceTier } from '../tiers.js';
 import { mkdirSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 
@@ -145,6 +146,11 @@ function buildFrontmatter(doc, noteType) {
   if (doc.source) {
     lines.push(`source: "${doc.source.replace(/"/g, '\\"')}"`);
   }
+
+  // Carried out with the note: the exported file becomes the source of truth
+  // for it, so a tier left off here is demoted on the next reindex.
+  lines.push(`tier: ${coerceTier(doc.tier)}`);
+  if (doc.tier_ref) lines.push(`tier_ref: ${JSON.stringify(doc.tier_ref)}`);
 
   lines.push(`kb_id: ${doc.id}`);
   lines.push('---');
