@@ -15,7 +15,7 @@ export function getBusToolDefinitions() {
   return [
     {
       name: 'bus_send',
-      description: 'Send an append-only markdown message to a local cross-agent channel. Use this for Codex↔Claude↔Gemini handoffs, status updates, and task completion reports.',
+      description: 'Send a message to an agent running in a DIFFERENT tool or terminal — a Codex session, a Gemini session, another window — over a shared channel. Reach for this the moment work spans two harnesses and your own has no way to see the other agent: handing a task over, reporting a step done, asking a question that blocks you, announcing a decision that changes what a peer is building. Inside one harness, use that harness\'s own messaging; this bus exists for the boundary it cannot cross. Messages are append-only and persist, so a peer that starts later still receives them.',
       schema: {
         channel: z.string().describe('Free-form channel ID (e.g. ticket:TICKET-42, session:1234, swarm:frontend)'),
         sender: z.string().describe('Sender label (e.g. codex, claude, gemini, deploy-watcher)'),
@@ -51,7 +51,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_status',
-      description: 'Inspect a local bus channel: readers, unread backlog, latest heartbeat/status per participant, and latest control message. Use when diagnosing silent peers or coordination drift.',
+      description: 'Inspect a channel as a whole: who reads it, how much backlog each reader carries, the latest heartbeat or status from each participant, and the latest control message. Reach for this when a peer in another tool has gone quiet and you need to tell "has not read it yet" from "read it and did not answer" — the two call for different next steps, and guessing wrong means either nagging a working peer or waiting on a dead one.',
       schema: {
         channel: z.string().describe('Channel ID'),
         readers: z.array(z.string()).optional().default([]).describe('Optional reader identities to include even if they have not read or hooked yet'),
@@ -67,7 +67,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_read',
-      description: 'Read new messages for a named reader using a stored per-reader cursor. This is the recommended agent-facing read API: non-blocking by default, optional wait when explicitly requested.',
+      description: 'Collect your own mail on a cross-tool channel, from a stored per-reader cursor so you never re-read what you have already seen. Reach for this whenever you are one of several agents on a shared channel: when you pick the work back up, after finishing a step, and before starting anything a peer in another harness may already be doing. This is the agent-facing read API — prefer it over bus_status for your own messages. Non-blocking by default; pass wait only when you are deliberately parked on a peer\'s reply.',
       schema: {
         channel: z.string().describe('Channel ID'),
         reader: z.string().describe('Stable reader identity (e.g. claude:architect, codex:implementer)'),
@@ -87,7 +87,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_session_register',
-      description: 'Register a session as a routable recipient so hook handoffs on this channel are recorded against it. Hook-wired sessions register themselves; use this for a workspace whose hooks are not wired yet.',
+      description: 'Register a session as a routable recipient, so handoffs on this channel are delivered into it. Reach for this when bus_sessions does not list you on a channel you are meant to be working: an unregistered session sends mail perfectly well and silently receives none, which reads from the inside as a channel where nobody is talking. Hook-wired sessions register themselves; this is for a workspace whose hooks are not wired yet.',
       schema: {
         channel: z.string().describe('Workstream channel'),
         reader: z.string().describe('Stable reader identity (e.g. claude:architect, codex:implementer)'),
@@ -108,7 +108,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_sessions',
-      description: 'List sessions registered on the local bus, with the workspace and adapter each one hooks through.',
+      description: 'List the sessions registered as recipients, with the workspace and delivery adapter each hooks through. Reach for this before sending directed mail, to learn who is actually reachable on a channel and in which working directory — a message to an unregistered reader is stored and readable, but nothing pushes it into a session, so it waits until that reader thinks to pull.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
         reader: z.string().optional().describe('Optional reader filter'),
@@ -124,7 +124,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_deliveries',
-      description: 'List recorded hook handoffs: which message reached which session, and when. Use to confirm a peer actually received mail rather than assuming silence means unread.',
+      description: 'Show which message reached which session, and when. Reach for this when a peer says it never saw your handoff, or before you conclude that silence means the message was ignored — an undelivered message is a wiring problem and an unanswered one is not, and only this distinguishes them.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
         session_id: z.string().optional().describe('Optional session filter'),
@@ -140,7 +140,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_agent_register',
-      description: 'Register a local executable worker that the bus agent daemon may launch for directed tasks.',
+      description: 'Register a local executable the bus daemon may launch to service directed tasks on a channel. Reach for this when work should be picked up while no session is open to receive it — an unattended worker, as opposed to a peer you are in conversation with. A registered session receives mail; a registered agent gets started by it.',
       schema: {
         channel: z.string().describe('Workstream channel'),
         reader: z.string().describe('Stable worker identity (e.g. codex:implementer, claude:architect)'),
@@ -164,7 +164,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_agents',
-      description: 'List local executable workers registered for the bus agent daemon.',
+      description: 'List the executable workers registered for the bus daemon, per channel. Reach for this before registering another one, to see whether a channel already has a worker that would race yours for the same task.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
         reader: z.string().optional().describe('Optional reader filter'),
@@ -180,7 +180,7 @@ export function getBusToolDefinitions() {
 
     {
       name: 'bus_agentd_once',
-      description: 'Run one local agent-daemon pass. This launches registered exec workers for wake-worthy bus tasks.',
+      description: 'Run a single daemon pass, launching registered workers for the tasks waiting on a channel. Reach for this to drain a queue on demand rather than wait for the scheduled pass, or with dry_run to see which messages count as wake-worthy and which worker each would start. dry_run launches nothing; without it, this starts real processes.',
       schema: {
         channel: z.string().optional().describe('Optional channel filter'),
         limit: z.number().optional().default(50).describe('Maximum candidate messages per agent'),

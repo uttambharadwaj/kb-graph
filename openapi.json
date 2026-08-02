@@ -139,7 +139,7 @@
       "get": {
         "operationId": "search",
         "summary": "Full-text search",
-        "description": "Search the knowledge base using PostgreSQL full-text search. Use this to find documents, notes, tutorials, bookmarks, or any indexed content. The query supports natural language. Use the type parameter to narrow results to a specific document category. Results are ranked by relevance.",
+        "description": "Search the knowledge base using SQLite FTS5 full-text search, ranked by BM25. Reach for this when you know roughly what you are looking for; use /search/smart instead when the query is conceptual and the exact wording is unlikely to appear in the text. Use the type parameter to narrow results to a specific document category.",
         "parameters": [
           {
             "name": "q",
@@ -433,7 +433,7 @@
       "post": {
         "operationId": "captureSession",
         "summary": "Record a debugging session",
-        "description": "Capture and store a debugging session for future reference. Use this to record what happened during a troubleshooting session: the problem, steps taken, commands run, and resolution. Stored as a structured debug-session document for later retrieval.",
+        "description": "Record a debugging or implementation session at the end of it: the goal, what failed, what worked, the root cause and the lessons. Prefer this over /ingest whenever you are sending terminal output — command text, logs and error dumps are scanned for API keys, tokens, JWTs and connection strings and redacted before the note is written, which /ingest does not do.",
         "requestBody": {
           "required": true,
           "content": {
@@ -471,7 +471,7 @@
       "post": {
         "operationId": "captureFix",
         "summary": "Record a bug fix pattern",
-        "description": "Store a bug fix as a reusable pattern. Use this when you fix a bug that could recur, to capture the root cause, fix approach, and prevention strategy. These patterns are indexed as fix-pattern documents and help avoid repeating the same mistakes.",
+        "description": "Record a bug fix once you have verified it fixed: the symptom you were chasing, the cause you found, and the change that resolved it. Symptom and cause are stored as separate fields, which is what lets a later search for the symptom land on the cause. Pasted commands are redacted for secrets.",
         "requestBody": {
           "required": true,
           "content": {
@@ -510,8 +510,8 @@
     "/api/v1/capture/web": {
       "post": {
         "operationId": "captureWeb",
-        "summary": "Capture and store a web article",
-        "description": "Fetch and ingest a web article or page into the knowledge base by URL. The content will be extracted, cleaned, and stored as a web-article document for future search and retrieval. Use this to save useful blog posts, documentation pages, or any online resource.",
+        "summary": "File a page you have already fetched",
+        "description": "File a page you have already fetched as a source note, with its URL recorded as provenance. This endpoint does NOT fetch the URL: title, url and content are all required, and the request is rejected with 400 without them. Reach for it as soon as a fetch returns something worth citing later, rather than losing it when the content scrolls out of context.",
         "requestBody": {
           "required": true,
           "content": {

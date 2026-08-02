@@ -1,8 +1,13 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { getToolDefinitions, getHttpToolDefinitions } from '../src/tools.js';
 import { getDb } from '../src/db.js';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('tools', () => {
   it('exports an array of tool definitions', () => {
@@ -65,6 +70,30 @@ describe('tools', () => {
     const parsed = JSON.parse(res.content[0].text);
     assert.ok(parsed.neighbors, 'should return single-tag neighbors mode');
     assert.strictEqual(parsed.stats, undefined, 'should not be two-tag tunnel mode');
+  });
+});
+
+// A tool nothing points at is one no agent has a reason to call, which is
+// indistinguishable at the census from a tool nobody wants. Both doc tables had
+// silently fallen behind the registry — README by two tools, llms.txt by ten.
+describe('every registered tool is reachable from the docs', () => {
+  const names = () => getToolDefinitions().map(t => t.name);
+
+  for (const file of ['README.md', 'llms.txt']) {
+    it(`${file} lists every tool`, () => {
+      const doc = readFileSync(join(ROOT, file), 'utf-8');
+      const missing = names().filter(n => !doc.includes(n));
+      assert.deepStrictEqual(missing, [], `${file} does not mention: ${missing.join(', ')}`);
+    });
+  }
+
+  // Not a style rule: the short descriptions are the ones that say only what the
+  // tool is, and an agent cannot infer a trigger from that.
+  it('no description is too short to name a triggering situation', () => {
+    const terse = getToolDefinitions()
+      .filter(t => t.description.length < 80)
+      .map(t => t.name);
+    assert.deepStrictEqual(terse, [], `describe when to reach for: ${terse.join(', ')}`);
   });
 });
 

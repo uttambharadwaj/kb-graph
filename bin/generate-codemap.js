@@ -73,6 +73,15 @@ for (const file of files) {
   });
 }
 
+// Counted, not written down: every hand-maintained tool count in this repo had
+// drifted by the time anyone checked one against the registry. Read as text
+// rather than imported — importing the registry would pull the database and the
+// embedding model into a script whose whole job is to read files.
+const toolCount = ['src/tools.js', 'src/bus/tools.js']
+  .reduce((n, f) => n + (readFileSync(join(PROJECT_ROOT, f), 'utf-8').match(/^\s*name: '(kb|bus)_/gm) || []).length, 0);
+// A pattern that stops matching would otherwise publish "0 tools" as fact.
+if (toolCount === 0) throw new Error('found no tool definitions — the name: pattern in generate-codemap.js is stale');
+
 // Generate markdown
 let md = `# Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: \`node bin/generate-codemap.js\`
@@ -85,7 +94,7 @@ let md = `# Codebase Map
 ## Architecture Overview
 \`\`\`
 src/
-  mcp.js          ← MCP server (16 tools: search, write, capture, classify, safety)
+  mcp.js          ← MCP server (${toolCount} tools: search, write, capture, classify, safety, bus)
   db.js            ← SQLite + FTS5 (documents, vault_files, embeddings tables)
   tiers.js         ← Epistemic tiers: the vocabulary, the verified-needs-a-reference rule, surface formatting
   server.js        ← Express dashboard server

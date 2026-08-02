@@ -521,7 +521,9 @@ When writing a new MCP tool for this system, follow these conventions:
 
 1. **Naming:** Prefix with `kb_`. Use snake_case. Examples: `kb_search`, `kb_capture_fix`.
 
-2. **Description:** Write for agents, not humans. Be specific about when to use the tool and what it returns. Include token-efficiency guidance if relevant.
+2. **Description:** Write for agents, not humans. Lead with the *situation* that should make an agent reach for this tool, stated in terms it can observe from where it sits — not with what the tool is. "Run this after syncing new content" names an event no agent ever sees; "when a search turns up notes with no type or tags" names one it does. If the tool competes with a more prominent sibling, say what it does that the sibling does not, and be concrete about it: an agent will not pick the narrow tool over `kb_write` on a hunch. Then say what it returns, and include token-efficiency guidance if relevant.
+
+   A tool no document names is a tool no agent has a trigger to call, which looks exactly like a tool nobody wants. Add every new tool to the `README.md` and `llms.txt` tables — `tests/tools.test.js` fails if you do not.
 
 3. **Schema:** Use Zod types. Add `.describe()` to every parameter. Use `.optional().default()` for parameters with sensible defaults.
 

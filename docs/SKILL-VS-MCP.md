@@ -4,13 +4,13 @@ This project ships two ways to use it. They solve different problems and work be
 
 ## The MCP Server (Tools)
 
-**What it is:** A set of 16 tools your AI agent can call on-demand to search, read, write, and manage your knowledge base.
+**What it is:** A set of 35 tools your AI agent can call on-demand to search, read, write, and manage your knowledge base. Twenty-six are also exposed over HTTP; nine that drive models or spawn processes are stdio-only.
 
 **How it works:** Your agent decides when to call a tool. It sends a request ("search for X"), gets back results, and uses them. No tokens are spent until a tool is called.
 
 **Install:** `kb register` adds it to Claude Code, Codex, and Gemini. You can limit targets with `kb register --agents=claude,codex`.
 
-**Token cost:** ~500 tokens for tool definitions (always in context) + whatever results come back per call.
+**Token cost:** ~3.5k tokens for tool definitions (always in context) + whatever results come back per call. Most of that is the descriptions, and it is spent deliberately: an agent picks a tool from its description and nothing else, so a description that names the triggering situation is what makes the tool reachable at all.
 
 **Good for:** The actual work — searching, reading docs, capturing sessions, ingesting content. This is the engine.
 
@@ -28,7 +28,7 @@ This project ships two ways to use it. They solve different problems and work be
 
 ## Why Both?
 
-Without the skill, your agent has 16 tools but no strategy for when to use them. It might:
+Without the skill, your agent has 35 tools but no strategy for when to use them. It might:
 - Skip searching and miss relevant context
 - Read full documents when summaries would suffice (wasting 90% more tokens)
 - Forget to capture findings after a session
@@ -41,7 +41,7 @@ Without the MCP server, your agent has instructions but no tools. It knows it SH
 
 | | MCP Server | Skill |
 |---|---|---|
-| **What** | 16 tools (search, read, write, capture...) | Instructions for using those tools efficiently |
+| **What** | 35 tools (search, read, write, capture...) | Instructions for using those tools efficiently |
 | **When loaded** | Always (tool definitions in context) | On-demand (when invoked or relevant) |
 | **Token cost** | ~500 base + per-call results | ~1500 when active, 0 when not |
 | **Required?** | Yes — this IS the KB | No, but strongly recommended |
@@ -60,7 +60,7 @@ kb setup
 kb register   # Registers MCP tools with Claude Code, Codex, and Gemini
 ```
 
-Your agent now has all 16 KB tools.
+Your agent now has all 35 KB tools.
 
 ### MCP Server + Skill (Recommended)
 

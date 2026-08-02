@@ -91,7 +91,6 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
 ## Design principles
 
 - **Files first.** Every note is plain markdown with frontmatter in a directory you own. Obsidian renders it beautifully but is optional. When search ranking fails, `grep` is the fallback — an agent can always inspect the raw store.
-- **A guess does not get to sound like a finding.** Every note carries a tier: `verified` (a fix landed or a test proves it — refused without a commit, PR or test reference), `observed` (an agent watched it happen), or `inferred` (an unconfirmed model conclusion). The nightly transcript sweep may only write `inferred`. The tier is printed on every surface a note is read from — hints, briefings, `kb_read`, search — and a confirmed note outranks an unconfirmed one at equal relevance. `kb_promote` is how a note earns its way up, and it records what did the confirming.
 - **No LLM in the read path.** Retrieval is SQLite FTS5 (BM25) + local embeddings (all-MiniLM-L6-v2, runs on your machine) fused at query time. LLM calls are spent at write time — classification, extraction, synthesis — where latency doesn't hurt.
 - **Self-tending, and honest about it.** Embeddings, harvest, consolidation, and synthesis run on schedules. The briefing carries a health heartbeat; if a loop stops running, you see ⚠ at your next session start instead of discovering silent rot months later.
 - **No external services.** SQLite, local embeddings, your filesystem. Nothing leaves your machine unless you expose the REST API yourself.
@@ -174,7 +173,7 @@ kb status                            # stats and server status
 
 ## MCP tools
 
-All 24 core tools are available over stdio and HTTP:
+All 26 core tools are available over stdio and HTTP. The description says when to reach for each one, because an agent picks a tool from that line and nothing else:
 
 | Tool | Description |
 |------|-------------|
@@ -187,23 +186,39 @@ All 24 core tools are available over stdio and HTTP:
 | `kb_write` | Write a note to the vault |
 | `kb_ingest` | Ingest raw text |
 | `kb_check_duplicate` | Similarity check before writing — prevents near-duplicate notes |
-| `kb_classify` | Auto-classify unprocessed notes (type, tags, summary) |
+| `kb_supersede` | Retire a note that has been meaningfully replaced (still readable, out of recall) |
+| `kb_supersede_candidates` | Notes the fact graph says may be stale — suggestions only, when a briefing contradicts what you see |
+| `kb_classify` | Type, tag and summarise notes sitting unclassified in `inbox/` and `Clippings/` |
 | `kb_extract` | Extract structured facts/lessons from raw text or transcripts |
-| `kb_promote` | Raise a note's tier because a later session confirmed it, recording what did |
-| `kb_synthesize` | Cross-source synthesis of recent knowledge |
+| `kb_promote` | Raise a note's tier when a later session confirms it, recording what did the confirming |
+| `kb_synthesize` | A review brief over recent notes — for the "what have we learned lately" pass, not a lookup |
 | `kb_fact_add` | Add an entity fact (subject/predicate/object + validity) |
 | `kb_fact_query` | Query facts about an entity |
 | `kb_fact_timeline` | How an entity's facts evolved over time |
 | `kb_fact_invalidate` | Supersede a fact, preserving history |
-| `kb_capture_session` | Record a coding/debugging session |
-| `kb_capture_fix` | Record a bug fix: symptom, cause, resolution |
-| `kb_capture_web` | Capture a web article |
-| `kb_capture_youtube` | Capture a YouTube transcript |
+| `kb_capture_session` | Record a coding/debugging session (redacts secrets from pasted output; `kb_write` does not) |
+| `kb_capture_fix` | Record a bug fix: symptom, cause, resolution — searching the symptom later finds the cause |
+| `kb_capture_web` | File a page you fetched, with its URL as provenance |
+| `kb_capture_youtube` | File a transcript you already have (does not fetch the video) |
 | `kb_wakeup` | The session briefing (what the SessionStart hook calls) |
 | `kb_vault_status` | Vault indexing stats |
 | `kb_safety_check` | Review a destructive action against KB history |
 
-An experimental local message bus for cross-agent coordination (`bus_send`, `bus_read`, `bus_status`, and friends) ships alongside — see [docs/message-bus.md](docs/message-bus.md).
+A local message bus ships alongside, for the one thing a harness cannot do for itself: talk to an agent running in a *different* tool. In-harness agent teams and subagent messaging coordinate agents inside one process tree; when a Claude session and a Codex session are working the same branch, neither can see the other, and this is the channel between them.
+
+| Tool | When to reach for it |
+|------|----------------------|
+| `bus_send` | Hand off, report a step done, ask a blocking question, announce a decision — across tools |
+| `bus_read` | Collect your own mail from a stored cursor; the agent-facing read API |
+| `bus_status` | A peer went quiet — tell "has not read it" from "read it and did not reply" |
+| `bus_sessions` | Who is actually reachable on a channel, and in which workspace |
+| `bus_session_register` | You are not listed on a channel you should be working — mail sends, none arrives |
+| `bus_deliveries` | Which message reached which session; a wiring problem vs. an ignored message |
+| `bus_agent_register` | Work should be picked up when no session is open to receive it |
+| `bus_agents` | Whether a channel already has a worker that would race yours |
+| `bus_agentd_once` | Drain the queue now instead of waiting for the scheduled pass (`dry_run` launches nothing) |
+
+See [docs/message-bus.md](docs/message-bus.md) for wiring.
 
 ## CLI commands
 
@@ -212,7 +227,6 @@ kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
 kb mcp                 MCP stdio server (what your agents connect to)
 kb register            Register MCP with Claude Code / Codex / Gemini
-kb tier                Notes by epistemic tier; backfills tiers from provenance (--apply to write)
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included)

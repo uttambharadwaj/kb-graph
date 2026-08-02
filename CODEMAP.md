@@ -4,12 +4,12 @@
 
 ## Quick Stats
 - **Files:** 142
-- **Total lines:** 20,936
+- **Total lines:** 20,990
 
 ## Architecture Overview
 ```
 src/
-  mcp.js          ← MCP server (16 tools: search, write, capture, classify, safety)
+  mcp.js          ← MCP server (35 tools: search, write, capture, classify, safety, bus)
   db.js            ← SQLite + FTS5 (documents, vault_files, embeddings tables)
   tiers.js         ← Epistemic tiers: the vocabulary, the verified-needs-a-reference rule, surface formatting
   server.js        ← Express dashboard server
@@ -50,7 +50,7 @@ bin/
 | bus-status.js | 9 | - | !/usr/bin/env node |
 | bus-unbind.js | 13 | - | !/usr/bin/env node |
 | cron-capture.sh | 30 | - | !/bin/bash |
-| generate-codemap.js | 156 | - | Generates a token-efficient codebase map for AI agents |
+| generate-codemap.js | 165 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
 | kb.js | 143 | - | bin/kb.js — CLI entry point |
 | post-sync.sh | 31 | - | !/bin/bash |
@@ -80,7 +80,7 @@ bin/
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
 | tiers.js | 200 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
-| tools.js | 860 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tools.js | 876 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-note.js | 148 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
@@ -241,7 +241,7 @@ bin/
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 49 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
 | tiers.test.js | 496 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
-| tools.test.js | 149 | - | - |
+| tools.test.js | 178 | - | A tool nothing points at is one no agent has a reason to call, which is |
 | tunnels.test.js | 132 | - | - |
 | upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |
 | v1.test.js | 189 | - | tests/v1.test.js |
