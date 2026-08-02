@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 142
-- **Total lines:** 20,990
+- **Total lines:** 21,061
 
 ## Architecture Overview
 ```
@@ -64,7 +64,7 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 772 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
+| db.js | 764 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
 | extract-meter.js | 40 | hashInput, logExtraction | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
 | extract.js | 778 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
@@ -79,7 +79,7 @@ bin/
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
-| tiers.js | 200 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
+| tiers.js | 220 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
 | tools.js | 876 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-note.js | 148 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
@@ -147,7 +147,7 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | embed.js | 57 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 175 | byScoreThenTier, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Cosine similarity, where higher is better and the whole scale is 0-1, so a |
+| search.js | 174 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
 
 ## src/middleware/
 
@@ -240,7 +240,7 @@ bin/
 | synthesis-prompt.test.js | 28 | - | - |
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 49 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
-| tiers.test.js | 496 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
+| tiers.test.js | 556 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
 | tools.test.js | 178 | - | A tool nothing points at is one no agent has a reason to call, which is |
 | tunnels.test.js | 132 | - | - |
 | upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |
