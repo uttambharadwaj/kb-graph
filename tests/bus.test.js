@@ -345,6 +345,21 @@ describe('message bus service', () => {
     assert.strictEqual(after.notify_cursor, 0);
   });
 
+  it('survives a cold-start stampede of writers on a brand-new database', async () => {
+    const home = makeBusHome();
+    closeBusDb();
+    rmSync(join(home, 'bus.db'), { force: true });
+
+    // Creating the file is where the journal-mode switch races; every later open just reads it.
+    // A single run reproduces the old failure only sometimes, so treat this as a smoke test.
+    const sends = await Promise.all(Array.from({ length: 8 }, (_, i) => execFileAsync('node', [
+      'bin/bus-send.js', 'ws:stampede', `writer ${i}`, '--sender', `codex:worker-${i}`,
+    ], { cwd: process.cwd(), env: { ...process.env, KB_BUS_HOME: home } })));
+
+    assert.strictEqual(sends.length, 8);
+    assert.strictEqual(readBusChannel('ws:stampede', 20).count, 8);
+  });
+
   it('retains only the latest N messages per channel', () => {
     makeBusHome();
     process.env.KB_BUS_RETENTION_MESSAGES = '2';
@@ -1489,6 +1504,37 @@ describe('cross-session mailbox handoff', () => {
     );
     assert.match(digestOf(ungated.stdout), /no notifier ran/);
     assert.strictEqual(listBusDeliveries({ channel: 'ws:task-4249' }).length, 1);
+  });
+
+  it('refuses to consume or fork inside one of our own model subprocesses', async () => {
+    const home = makeBusHome();
+    const workspace = makeWorkspace(home, 'task-4255');
+    await run('bin/bus-autobind.js', ['--agent', 'claude'], { home, cwd: workspace, hookCwd: workspace });
+    await run('bin/bus-send.js', ['ws:task-4255', 'a batch call must not eat this', '--sender', 'codex:implementer'], { home });
+
+    const env = { KB_BATCH: '1' };
+    const hookCurrent = await run('bin/bus-hook-current.js', ['--agent', 'claude'], { home, cwd: workspace, hookCwd: workspace, env });
+    const hook = await run('bin/bus-hook.js', ['ws:task-4255', '--reader', 'claude:operator'], { home, cwd: workspace, env });
+    const notifier = await run('bin/bus-notifier.js', ['--agent', 'claude', '--cwd', workspace, '--daemonize'], { home, env });
+
+    assert.strictEqual(hookCurrent.stdout, '');
+    assert.strictEqual(hook.stdout, '');
+    assert.strictEqual(notifier.stdout, '');
+    assert.deepStrictEqual(listBusDeliveries({ channel: 'ws:task-4255' }), []);
+    assert.deepStrictEqual(listBusSessions({ channel: 'ws:task-4255' }), []);
+    assert.strictEqual(readBusNotifications({ channel: 'ws:task-4255', reader: 'claude:operator' }).total_new, 1);
+    assert.strictEqual(readBusPending({ agent: 'claude', cwd: workspace }), null);
+
+    const leaked = readBusNotifierPid({ agent: 'claude', cwd: workspace });
+    if (leaked) {
+      try { process.kill(leaked, 'SIGKILL'); } catch { /* already gone */ }
+    }
+    assert.strictEqual(leaked, null, 'a batch call must not fork a notifier');
+
+    // Same fire outside a batch call still delivers, so none of the above passed for another reason.
+    const real = await run('bin/bus-hook-current.js', ['--agent', 'claude'], { home, cwd: workspace, hookCwd: workspace });
+    assert.match(digestOf(real.stdout), /a batch call must not eat this/);
+    assert.strictEqual(listBusDeliveries({ channel: 'ws:task-4255' }).length, 1);
   });
 
   it('leaves the cursor and the ledger untouched on a dry run', async () => {

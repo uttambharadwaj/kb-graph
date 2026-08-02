@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from 'fs';
 import { spawn } from 'child_process';
+// Our own model subprocesses fire the session hooks despite the --settings guard in claude-cli.js.
+// They are not sessions: a handoff there records mail as delivered into a headless extraction's
+// stdout, and a notifier there forks a daemon per call. Both consume, so both refuse to run.
+// The guard sits in the CLI functions rather than the bin shims because the wired hooks reach them
+// through kb.js, and the Stop hook reaches bus-hook-current through the shim — one site covers all.
+import { isBatchCall } from '../claude-cli.js';
 import { getBusNotifierIdleMs, getBusNotifierIntervalMs } from './config.js';
 import { clearBusBinding, normalizeCwd, readBusBinding, writeBusBinding } from './context.js';
 import {
@@ -432,6 +438,7 @@ function handOffToSession({ channel, reader, agent, cwd, limit, preview_chars, c
 }
 
 export async function runBusHookCli(args) {
+  if (isBatchCall()) return;
   const reader = readFlag(args, '--reader');
   const limit = readFlag(args, '--limit', '5');
   const preview_chars = readFlag(args, '--preview-chars', '80');
@@ -515,6 +522,7 @@ export async function runBusUnbindCli(args) {
 }
 
 export async function runBusHookCurrentCli(args) {
+  if (isBatchCall()) return;
   const agent = readFlag(args, '--agent');
   const format = readFlag(args, '--format', 'hook');
   const hookEventName = readFlag(args, '--hook-event', 'UserPromptSubmit');
@@ -577,6 +585,7 @@ export async function runBusHookCurrentCli(args) {
 }
 
 export async function runBusNotifierCli(args) {
+  if (isBatchCall()) return;
   const agent = readFlag(args, '--agent');
   const interval_ms = Number(readFlag(args, '--interval-ms', String(getBusNotifierIntervalMs())));
   const hookInput = readHookInput();

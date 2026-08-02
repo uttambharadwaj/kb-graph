@@ -1,10 +1,10 @@
 # Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: `node bin/generate-codemap.js`
-> Generated: 2026-08-01
+> Generated: 2026-08-02
 
 ## Quick Stats
 - **Files:** 137
-- **Total lines:** 19,577
+- **Total lines:** 19,731
 
 ## Architecture Overview
 ```
@@ -38,7 +38,7 @@ bin/
 |------|-------|---------|---------|
 | bus-agent.js | 9 | - | !/usr/bin/env node |
 | bus-agentd.js | 9 | - | !/usr/bin/env node |
-| bus-autobind.js | 59 | - | !/usr/bin/env node |
+| bus-autobind.js | 63 | - | Our own model subprocesses are not sessions and have no workspace to bind. |
 | bus-bind.js | 13 | - | !/usr/bin/env node |
 | bus-hook-current.js | 13 | - | !/usr/bin/env node |
 | bus-hook.js | 13 | - | !/usr/bin/env node |
@@ -62,7 +62,7 @@ bin/
 |------|-------|---------|---------|
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
-| claude-cli.js | 88 | modelEnv, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | db.js | 625 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
 | extract.js | 732 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
@@ -87,10 +87,10 @@ bin/
 |------|-------|---------|---------|
 | agentd.js | 411 | registerBusAgent, getBusAgent, listBusAgents, getBusRun, listBusRuns... | - |
 | autobind.js | 89 | findTicketInPath, findTicketInGitBranch, autobind | - |
-| cli.js | 694 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusAgentCli, runBusAgentdCli... | One handoff site for both hook commands: refresh the session row, then take the  |
-| config.js | 61 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | 15 minutes of an unchanging digest. Safe to exit that early because hooks |
+| cli.js | 703 | runBusSendCli, runBusStatusCli, runBusSessionCli, runBusAgentCli, runBusAgentdCli... | Our own model subprocesses fire the session hooks despite the --settings guard i |
+| config.js | 67 | getBusHome, getBusDbPath, getBusRetentionMessages, getBusPollMs, getBusResourceLimit... | 15 minutes of an unchanging digest. Safe to exit that early because hooks |
 | context.js | 151 | normalizeCwd, writeBusBinding, readBusBinding, clearBusBinding | - |
-| db.js | 216 | getBusDb, closeBusDb | - |
+| db.js | 238 | getBusDb, closeBusDb | Journal mode belongs to the file, not the connection, so the switch is worth att |
 | pending.js | 83 | getBusPendingPath, readBusPending, writeBusPending, clearBusPending, getBusNotifierPidPath... | Only the recorded owner may clear the claim; a superseded notifier must not dere |
 | resources.js | 32 | registerBusResources | - |
 | service.js | 696 | messageTargetsReader, onBusMessage, sendBusMessage, getMessageById, readBusInbox... | A message reaches a reader when it is not their own and is either broadcast or a |
@@ -123,7 +123,7 @@ bin/
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
-| prompt-hint.js | 42 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
+| prompt-hint.js | 51 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
 | register.js | 17 | register | - |
 | retrieval-report.js | 100 | retrievalReport, runRetrievalReportCli | A doc counts as "ever retrieved" if it appears with a non-null doc_id in |
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
@@ -136,7 +136,7 @@ bin/
 | stop.js | 25 | stop | - |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
 | vault-cli.js | 20 | vaultReindex | - |
-| wakeup-hook.js | 67 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
+| wakeup-hook.js | 71 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
 
 ## src/embeddings/
 
@@ -203,8 +203,8 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | api-key.test.js | 57 | - | tests/api-key.test.js |
-| autobind.test.js | 185 | - | - |
-| bus.test.js | 1546 | - | - |
+| autobind.test.js | 196 | - | - |
+| bus.test.js | 1592 | - | - |
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
@@ -215,7 +215,7 @@ bin/
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 304 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | harvest.test.js | 329 | - | A claude that answers instantly, so the harvest runs end to end without the |
-| hooks-retrieval.test.js | 85 | - | Exercises wakeup-hook.js and prompt-hint.js as real subprocesses (they |
+| hooks-retrieval.test.js | 121 | - | Exercises wakeup-hook.js and prompt-hint.js as real subprocesses (they |
 | ingest.test.js | 32 | - | Body |
 | inverse-fold.test.js | 201 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | mcp-supervisor.test.js | 173 | MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
