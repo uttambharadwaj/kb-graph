@@ -111,12 +111,23 @@ This is NOT fine-tuning. The model doesn't change. The context it receives impro
 | "How did we do X?" | `kb_search` | Find specific past work |
 | "What do we know about X?" | `kb_search_smart` | Conceptual/fuzzy match |
 | Need full implementation details | `kb_read` | After context identified the doc |
-| Finished debugging | `kb_capture_session` | Record what happened |
-| Fixed a bug | `kb_capture_fix` | Record symptom/cause/fix |
+| Finished debugging | `kb_capture_session` | Record what happened — and redact secrets from the output you paste |
+| Fixed a bug | `kb_capture_fix` | Symptom and cause as separate fields, so searching the symptom finds the cause |
 | Made a decision | `kb_write` type=decision | Record the decision and why |
 | Found useful research | `kb_write` type=research | Save for future reference |
-| Want cross-cutting insights | `kb_synthesize` | Connect dots across sources |
-| New content needs tagging | `kb_classify` | Auto-classify unprocessed notes |
+| Fetched a page you will cite later | `kb_capture_web` | Keeps the URL as provenance; `kb_write` does not |
+| Handed a transcript you do not want to re-fetch | `kb_capture_youtube` | Files it as a source keyed to the video |
+| A later session confirmed an earlier note | `kb_promote` | Raise its tier and record what confirmed it |
+| A briefing contradicts what you just saw | `kb_supersede_candidates` | Lists what the fact graph thinks went stale; changes nothing |
+| "What have we learned lately?" across projects | `kb_synthesize` | A review brief to answer — not a lookup, and not a finished synthesis |
+| Search turns up notes with no type or tags | `kb_classify` | Unclassified notes have no summary, so they rank badly and `kb_context` shows nothing |
+| Coordinating with an agent in a *different* tool | `bus_send` / `bus_read` | Your harness cannot see a Codex or Gemini session; the bus can |
+
+## Reaching for the less obvious tools
+
+Most of these go unused not because they are unwanted but because nothing ever
+triggers them. A tool you have never called is not thereby a tool you do not
+need — check this table before concluding the KB cannot do something.
 
 ## What NOT to Do
 

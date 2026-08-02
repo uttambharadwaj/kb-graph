@@ -11,11 +11,11 @@ import { writeNote, setNoteTier, relatedForDoc } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
-import { getRecentNotes, generateSynthesisPrompt } from './synthesis/weekly-review.js';
+import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
 import { processNewClippings } from './classify/processor.js';
 import { reviewDestructiveAction } from './safety/review.js';
 import { getBusToolDefinitions } from './bus/tools.js';
-import { tunnel, tagNeighbors } from './tunnels.js';
+import { tunnel, tagNeighbors, strongestTunnels } from './tunnels.js';
 import { canonicalTag, getTagAliasMap } from './tags.js';
 import { logRetrieval, resolveSessionId } from './retrieval.js';
 
@@ -191,7 +191,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_read',
-      description: 'Read the full content of a specific document by its ID.',
+      description: 'Read a document in full, by ID — after kb_context or kb_search has told you which ID is worth the tokens. The response carries a `related` neighborhood, so this is also how you walk from one note to the ones it sits beside without running another search.',
       schema: {
         id: z.number().describe('Document ID'),
       },
@@ -331,7 +331,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_supersede_candidates',
-      description: 'Propose notes that may be stale, from retired facts in the temporal graph. SUGGESTIONS ONLY — this never marks anything superseded. Each candidate is a live note whose content asserts a value a later fact retired, alongside a newer note asserting the current value. Review, then confirm real ones with kb_supersede. Conservative by design (prefers misses over false retires).',
+      description: 'Propose notes that may be stale, from retired facts in the temporal graph. Reach for this when a briefing or a search result contradicts something you have just observed to be true, after a session that retired several facts, or as a periodic sweep of a knowledge base you have started to distrust. SUGGESTIONS ONLY — this never marks anything superseded, so it is safe to run at any time. Each candidate is a live note whose content asserts a value a later fact retired, alongside a newer note asserting the current value. Review, then confirm real ones with kb_supersede. Conservative by design (prefers misses over false retires), so an empty result is not proof the base is current.',
       schema: {
         since: z.string().optional().describe('Only consider facts retired on/after this ISO date (YYYY-MM-DD)'),
         limit: z.number().int().optional().default(20).describe('Max candidates to return'),
@@ -351,7 +351,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_vault_status',
-      description: 'Show vault indexing status — how many notes are indexed, by type and project.',
+      description: 'Show vault indexing status — how many notes are indexed, broken down by type and project. Reach for this when a search comes back empty for something you are confident was captured: if the project or type you expected holds no notes at all, the problem is the index rather than the query, and the answer is a reindex rather than a reword.',
       schema: {},
       handler: async () => {
         try {
@@ -372,7 +372,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_capture_youtube',
-      description: 'Capture a YouTube video transcript into the knowledge base. Creates a structured note with metadata.',
+      description: 'File a YouTube transcript you already have in hand — a talk, an interview, a conference session — as a source note keyed to the video URL. Reach for this the moment a transcript arrives in the conversation and is long enough that you would not want to fetch it twice. It does not fetch the video: pass the transcript text.',
       schema: {
         title: z.string().describe('Video title'),
         url: z.string().describe('YouTube URL'),
@@ -394,7 +394,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_capture_web',
-      description: 'Capture a web article or URL into the knowledge base. Use this whenever you find useful information during research.',
+      description: 'File a page you fetched as a source note under sources/web, with its URL recorded. Reach for this as soon as a fetch returns something you will want to cite or re-read, before it scrolls out of context. Prefer it over kb_write for material you did not write: the URL is kept in frontmatter, so a later reader can check the claim against the original rather than take the note\'s word for it. kb_write is for your own conclusions.',
       schema: {
         title: z.string().describe('Article/page title'),
         url: z.string().describe('Source URL'),
@@ -420,7 +420,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_capture_session',
-      description: 'Record a terminal/coding session summary — what you tried, what worked, what failed, and lessons learned. IMPORTANT: Call this at the end of every significant debugging or implementation session.',
+      description: 'Record a terminal/coding session summary — what you tried, what worked, what failed, and lessons learned. IMPORTANT: Call this at the end of every significant debugging or implementation session. Prefer it over kb_write whenever you are pasting terminal output: command text, logs and error dumps go through secret redaction here (API keys, tokens, JWTs, connection strings), and kb_write has no such pass.',
       schema: {
         goal: z.string().describe('What was the session trying to accomplish'),
         commands_failed: z.string().optional().describe('Commands that failed (markdown list)'),
@@ -445,7 +445,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_capture_fix',
-      description: 'Record a bug fix with symptom, cause, and resolution. Creates a searchable fix note for future reference.',
+      description: 'Record a bug fix once you have verified it fixed — the symptom you were chasing, the cause you found, the change that resolved it. Reach for this over kb_write for anything you debugged: symptom and cause are separate fields, which is what lets a later session search the symptom and land on the cause, and pasted commands and logs go through secret redaction that kb_write does not perform.',
       schema: {
         title: z.string().describe('Short title for the fix'),
         symptom: z.string().optional().describe('What the symptom/error was'),
@@ -520,7 +520,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_synthesize',
-      description: 'Generate a synthesis of recent knowledge. Connects dots across sources to find themes, opportunities, and improvements.',
+      description: 'Assemble a review brief over the last N days of notes: grouped by project, with the strongest cross-domain tunnels, the near-duplicate pairs, and the questions to answer against them (recurring themes, contradictions, merge candidates, stale entries, gaps). Reach for this at a week boundary, before planning a next block of work, or whenever the question is "what have we learned lately" across projects rather than a lookup of one thing — kb_search is for the lookup. It returns the brief for YOU to answer, not a finished synthesis: read it, write the answer, save that with kb_write (type: research).',
       schema: {
         days: z.number().optional().default(7).describe('How many days back to look'),
       },
@@ -529,7 +529,23 @@ export function getToolDefinitions() {
           const vaultPath = getVaultPath();
           const notes = getRecentNotes(vaultPath, days);
           if (notes.length === 0) return { content: [{ type: 'text', text: 'No recent notes to synthesize.' }] };
-          const prompt = generateSynthesisPrompt(notes);
+          // The same brief the weekly job composes. Without the analysis half a
+          // caller gets a list of notes and no statement of what to do with it,
+          // which is indistinguishable from a tool that did nothing useful.
+          // Both enrichments degrade the same way: an empty section reads as
+          // "nothing to report", so losing one must not cost the whole brief,
+          // and a silent loss must still be visible in the server log.
+          const optional = (what, fn) => {
+            try {
+              return fn();
+            } catch (err) {
+              console.error(`kb_synthesize: omitting ${what} (${err.message})`);
+              return [];
+            }
+          };
+          const tunnels = optional('cross-domain tunnels', () => strongestTunnels(getDb(), { limit: 10 }));
+          const nearDups = optional('near-duplicate pairs', () => getNearDupPairs());
+          const prompt = generateSynthesisPrompt(notes, { tunnels }) + generateAnalysisRequest(nearDups);
           return { content: [{ type: 'text', text: prompt }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -539,7 +555,7 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_classify',
-      description: 'Auto-classify new clippings and inbox notes using AI. Reads unprocessed notes, classifies them (type, tags, project, summary), and updates their frontmatter. Run this after syncing new content.',
+      description: 'Type, tag and summarise the notes sitting in the intake folders (inbox/ and Clippings/) without a classification yet — what a web clipper, a vault sync, or a kb_ingest/kb_write capture left there. Reach for this when a search turns up notes with no type or no tags: an unclassified note has no summary, so kb_context has nothing to show for it and it ranks poorly. It reads only those two folders, so notes filed elsewhere (sources/, builds/) are out of its reach. Safe to call speculatively — it reports "No new clippings to classify" and touches nothing when the intake folders are clean. Pass dry_run to see the classifications before they are written.',
       schema: {
         dry_run: z.boolean().optional().default(false).describe('Preview classifications without writing changes'),
       },
