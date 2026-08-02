@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { getStats, getDocumentCount } from '../db.js';
 import { PID_PATH } from '../paths.js';
+import { SchemaOutOfDateError } from '../schema.js';
 
 export function status() {
   // Check server status
@@ -25,7 +26,10 @@ export function status() {
     console.log(`Documents: ${stats.count}`);
     console.log(`Total Size: ${formatSize(stats.totalSize || 0)}`);
     console.log(`DB Size: ${formatSize(stats.dbFileSize || 0)}`);
-  } catch {
+  } catch (err) {
+    // "Not initialized" is the wrong story for a database that exists and is
+    // merely behind — that one needs its own message, not this one.
+    if (err instanceof SchemaOutOfDateError) throw err;
     console.log('Database: not initialized');
   }
 }

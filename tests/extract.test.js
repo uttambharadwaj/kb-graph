@@ -71,7 +71,7 @@ process.env.CLAUDE_PATH = fakeClaude;
 
 const { consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
-const { initFactSchema, addFact, queryFact, invalidateFact, mergeEntity, entityKey } = await import('../src/facts.js');
+const { addFact, queryFact, invalidateFact, mergeEntity, entityKey } = await import('../src/facts.js');
 const { getDb } = await import('../src/db.js');
 
 const currentObject = (subject, predicate) =>
@@ -80,7 +80,6 @@ const currentObject = (subject, predicate) =>
     .map(r => r.object);
 
 describe('kb_extract consolidation', () => {
-  before(() => initFactSchema());
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('adds new facts and keeps the corrected one over a retracted alternative', () => {

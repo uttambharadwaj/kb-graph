@@ -7,12 +7,11 @@ import { join } from 'path';
 // Point the KB at a throwaway dir BEFORE importing anything that opens the DB.
 process.env.KB_DIR = mkdtempSync(join(tmpdir(), 'kb-canon-'));
 
-const { canonicalEntityId, entityKey, addFact, queryFact, invalidateFact, mergeEntity, initFactSchema } = await import('../src/facts.js');
+const { canonicalEntityId, entityKey, addFact, queryFact, invalidateFact, mergeEntity } = await import('../src/facts.js');
 const { canonicalizeEntities, auditCanonicalEntities } = await import('../src/cli/canonicalize-entities.js');
 const { getDb } = await import('../src/db.js');
 const { getToolDefinitions } = await import('../src/tools.js');
 
-initFactSchema();
 
 // Rows as they look when they were written before the separator fold shipped:
 // straight into the tables, under whatever spelling the extractor produced.

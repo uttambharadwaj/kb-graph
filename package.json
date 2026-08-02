@@ -13,7 +13,6 @@
     "bus-read": "./bin/bus-read.js",
     "bus-status": "./bin/bus-status.js",
     "bus-session": "./bin/bus-session.js",
-    "bus-gateway": "./bin/bus-gateway.js",
     "bus-agent": "./bin/bus-agent.js",
     "bus-agentd": "./bin/bus-agentd.js",
     "bus-hook": "./bin/bus-hook.js",

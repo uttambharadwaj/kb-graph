@@ -2,8 +2,14 @@
 
 import { readFileSync } from 'fs';
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
+import { acceptFlags, runEntryPoint, UsageError } from '../src/cli/flags.js';
 import { isBatchCall } from '../src/claude-cli.js';
 import 'dotenv/config';
+
+const SPEC = {
+  usage: 'Usage: bus-autobind --agent <claude|codex> [--hook-event <name>]',
+  value: ['--agent', '--hook-event'],
+};
 
 // Our own model subprocesses are not sessions and have no workspace to bind.
 if (isBatchCall()) process.exit(0);
@@ -36,27 +42,29 @@ function readFlag(args, name, fallback) {
 }
 
 const args = process.argv.slice(2);
-const agent = readFlag(args, '--agent');
-if (!agent) {
-  console.error('Usage: bus-autobind --agent <claude|codex>');
-  process.exit(1);
-}
 
-const hookInput = readHookInput();
-const cwd = hookInput.cwd || process.cwd();
+await runEntryPoint(async () => {
+  if (!acceptFlags(args, SPEC)) return;
 
-const { autobind } = await import('../src/bus/autobind.js');
-const result = autobind({ agent, cwd });
+  const agent = readFlag(args, '--agent');
+  if (!agent) throw new UsageError('bus-autobind needs --agent', SPEC.usage);
 
-const hookEventName =
-  readFlag(args, '--hook-event')
-  || hookInput.hook_event_name
-  || hookInput.hookEventName
-  || hookInput.hookSpecificOutput?.hookEventName;
+  const hookInput = readHookInput();
+  const cwd = hookInput.cwd || process.cwd();
 
-if (hookEventName || Object.keys(hookInput).length > 0) {
-  // Hook mode is side-effect only. Stay quiet so Codex/Claude only need to
-  // validate hook JSON from the actual notification hook, not autobind.
-} else {
-  console.log(JSON.stringify(result, null, 2));
-}
+  const { autobind } = await import('../src/bus/autobind.js');
+  const result = autobind({ agent, cwd });
+
+  const hookEventName =
+    readFlag(args, '--hook-event')
+    || hookInput.hook_event_name
+    || hookInput.hookEventName
+    || hookInput.hookSpecificOutput?.hookEventName;
+
+  if (hookEventName || Object.keys(hookInput).length > 0) {
+    // Hook mode is side-effect only. Stay quiet so Codex/Claude only need to
+    // validate hook JSON from the actual notification hook, not autobind.
+  } else {
+    console.log(JSON.stringify(result, null, 2));
+  }
+});

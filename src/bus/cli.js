@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 // The guard sits in the CLI functions rather than the bin shims because the wired hooks reach them
 // through kb.js, and the Stop hook reaches bus-hook-current through the shim — one site covers all.
 import { isBatchCall } from '../claude-cli.js';
+import { acceptFlags, assertKnownFlags, showHelp, UsageError } from '../cli/flags.js';
 import { getBusNotifierIdleMs, getBusNotifierIntervalMs } from './config.js';
 import { clearBusBinding, normalizeCwd, readBusBinding, writeBusBinding } from './context.js';
 import {
@@ -39,6 +40,81 @@ import {
   runBusAgentDaemonLoop,
   runBusAgentDaemonOnce,
 } from './agentd.js';
+
+// Each command's flags and usage in one place, consumed by --help, by the
+// unknown-flag gate, and by the message a missing argument prints. These
+// commands ship both as `kb <name>` and as standalone bins, so the gate lives
+// here rather than in either entry point.
+const SPECS = {
+  send: {
+    usage: 'Usage: bus-send <channel> <message> [--sender <name>] [--kind <kind>] [--thread <thread>] [--reply-to <id>] [--recipient <reader>] [--deadline <iso8601>] [--expects-reply] [--metadata <json>] [--status <text>] [--step <text>] [--files <a,b>] [--diff-since-last-ack <text>] [--ack-decision accepted|needs_changes|blocked] [--ack-message-id <id>] [--control-command pause|stop|redirect|resume] [--tests <cmd,...>] [--risk <text>]',
+    value: [
+      '--sender', '--kind', '--thread', '--reply-to', '--recipient', '--to', '--deadline', '--metadata',
+      '--status', '--step', '--files', '--diff-since-last-ack', '--ack-decision', '--ack-message-id',
+      '--control-command', '--tests', '--risk',
+    ],
+    boolean: ['--expects-reply'],
+  },
+  status: {
+    usage: 'Usage: bus-status <channel> [--reader <name>]...',
+    value: ['--reader'],
+  },
+  session: {
+    usage: 'Usage: bus-session register <channel> --reader <name> --agent <claude|codex|gemini> [--adapter hook|noop] [--cwd <path>] [--id <session-id>] [--tmux-pane <pane>] [--acp-session-id <id>] [--pid <pid>] [--status <status>]\n       bus-session list [channel] [--channel <channel>] [--reader <name>]\n       bus-session deliveries [--channel <channel>] [--session-id <id>]',
+    register: {
+      value: [
+        '--reader', '--agent', '--adapter', '--cwd', '--id', '--tmux-pane', '--acp-session-id', '--pid', '--status',
+      ],
+    },
+    list: { value: ['--channel', '--reader'] },
+    deliveries: { value: ['--channel', '--session-id'] },
+  },
+  agent: {
+    usage: 'Usage: bus-agent register <channel> --reader <name> --agent <claude|codex> [--adapter <adapter>] [--cwd <path>] [--id <id>] [--command <cmd>] [--arg <arg>]... [--args-json <json-array>] [--prompt-template <text>] [--max-concurrency <n>] [--cooldown-ms <ms>] [--status <status>]\n       bus-agent list [channel] [--channel <channel>] [--reader <name>]\n       bus-agent runs [--channel <channel>] [--agent-id <id>]',
+    register: {
+      value: [
+        '--reader', '--agent', '--adapter', '--cwd', '--id', '--command', '--args-json',
+        '--arg', '--prompt-template', '--max-concurrency', '--cooldown-ms', '--status',
+      ],
+    },
+    list: { value: ['--channel', '--reader'] },
+    runs: { value: ['--channel', '--agent-id'] },
+  },
+  agentd: {
+    usage: 'Usage: bus-agentd [--channel <channel>] --once | --dry-run | --serve [--interval-ms <ms>] [--limit <n>]',
+    value: ['--channel', '--interval-ms', '--limit'],
+    boolean: ['--once', '--dry-run', '--serve'],
+  },
+  read: {
+    usage: 'Usage: bus-read <channel> --reader <name> [--wait] [--timeout-ms <ms>] [--limit <n>] [--peek]',
+    value: ['--reader', '--limit', '--timeout-ms'],
+    boolean: ['--wait', '--peek'],
+  },
+  hook: {
+    usage: 'Usage: bus-hook <channel> --reader <name> [--agent <claude|codex>] [--cwd <path>] [--format hook|json|text] [--limit <n>] [--preview-chars <n>] [--hook-event <name>] [--capabilities <json>] [--dry-run]',
+    value: ['--reader', '--limit', '--preview-chars', '--format', '--hook-event', '--capabilities', '--agent', '--cwd'],
+    boolean: ['--dry-run'],
+  },
+  bind: {
+    usage: 'Usage: bus-bind <channel> --reader <name> --agent <claude|codex>\n       bus-bind --list --agent <claude|codex>',
+    value: ['--reader', '--agent'],
+    boolean: ['--list'],
+  },
+  unbind: {
+    usage: 'Usage: bus-unbind --agent <claude|codex> [--channel <channel>]',
+    value: ['--agent', '--channel'],
+  },
+  hookCurrent: {
+    usage: 'Usage: bus-hook-current --agent <claude|codex> [--hook-event <name>] [--format hook|json|text] [--capabilities <json>] [--dry-run] [--pending-only]',
+    value: ['--agent', '--format', '--hook-event', '--capabilities'],
+    boolean: ['--dry-run', '--pending-only'],
+  },
+  notifier: {
+    usage: 'Usage: bus-notifier --agent <claude|codex> [--cwd <path>] [--interval-ms <ms>] [--once|--daemonize|--serve]',
+    value: ['--agent', '--interval-ms', '--cwd'],
+    boolean: ['--once', '--daemonize', '--serve'],
+  },
+};
 
 function readHookInput() {
   if (process.stdin.isTTY) return {};
@@ -183,6 +259,7 @@ function collectCurrentBusDigest({ agent, cwd, pendingOnly = false }) {
 }
 
 export async function runBusSendCli(args) {
+  if (!acceptFlags(args, SPECS.send)) return;
   const sender = readFlag(args, '--sender', process.env.KB_BUS_SENDER || process.env.USER || 'cli');
   const kind = readFlag(args, '--kind', 'message');
   const thread = readFlag(args, '--thread');
@@ -202,18 +279,12 @@ export async function runBusSendCli(args) {
     tests: splitListFlag(readFlag(args, '--tests')),
     risk: readFlag(args, '--risk'),
   });
-  const valueFlags = [
-    '--sender', '--kind', '--thread', '--reply-to', '--recipient', '--to', '--deadline', '--metadata',
-    '--status', '--step', '--files', '--diff-since-last-ack', '--ack-decision', '--ack-message-id',
-    '--control-command', '--tests', '--risk',
-  ];
-  const positional = removeFlags(args, valueFlags, ['--expects-reply']);
+  const positional = removeFlags(args, SPECS.send.value, SPECS.send.boolean);
   const [channel, ...messageParts] = positional;
   const message = messageParts.join(' ').trim();
 
   if (!channel || !message) {
-    console.error('Usage: bus-send <channel> <message> [--sender <name>] [--kind <kind>] [--thread <thread>] [--reply-to <id>] [--recipient <reader>] [--deadline <iso8601>] [--expects-reply] [--metadata <json>] [--status <text>] [--step <text>] [--files <a,b>] [--diff-since-last-ack <text>] [--ack-decision accepted|needs_changes|blocked] [--ack-message-id <id>] [--control-command pause|stop|redirect|resume] [--tests <cmd,...>] [--risk <text>]');
-    process.exit(1);
+    throw new UsageError('bus-send needs a channel and a message', SPECS.send.usage);
   }
 
   printJson(sendBusMessage({
@@ -231,6 +302,7 @@ export async function runBusSendCli(args) {
 }
 
 export async function runBusStatusCli(args) {
+  if (!acceptFlags(args, SPECS.status)) return;
   const readers = [];
   for (let i = 0; i < args.length; i += 1) {
     const current = args[i];
@@ -241,17 +313,18 @@ export async function runBusStatusCli(args) {
   const [channel] = positional;
 
   if (!channel) {
-    console.error('Usage: bus-status <channel> [--reader <name>]...');
-    process.exit(1);
+    throw new UsageError('bus-status needs a channel', SPECS.status.usage);
   }
 
   printJson(readBusStatus({ channel, readers }));
 }
 
 export async function runBusSessionCli(args) {
+  if (showHelp(args, SPECS.session.usage)) return;
   const command = args[0];
   const rest = args.slice(1);
   if (command === 'list') {
+    assertKnownFlags(rest, { ...SPECS.session.list, usage: SPECS.session.usage });
     const channel = readFlag(rest, '--channel');
     const reader = readFlag(rest, '--reader');
     const positional = removeFlags(rest, ['--channel', '--reader']);
@@ -260,6 +333,7 @@ export async function runBusSessionCli(args) {
   }
 
   if (command === 'register') {
+    assertKnownFlags(rest, { ...SPECS.session.register, usage: SPECS.session.usage });
     const reader = readFlag(rest, '--reader');
     const agent = readFlag(rest, '--agent');
     const adapter = readFlag(rest, '--adapter', 'hook');
@@ -275,8 +349,7 @@ export async function runBusSessionCli(args) {
     const [channel] = positional;
 
     if (!channel || !reader || !agent) {
-      console.error('Usage: bus-session register <channel> --reader <name> --agent <claude|codex|gemini> [--adapter hook|noop] [--cwd <path>] [--id <session-id>]');
-      process.exit(1);
+      throw new UsageError('bus-session register needs a channel, --reader, and --agent', SPECS.session.usage);
     }
 
     printJson(registerBusSession({
@@ -295,6 +368,7 @@ export async function runBusSessionCli(args) {
   }
 
   if (command === 'deliveries') {
+    assertKnownFlags(rest, { ...SPECS.session.deliveries, usage: SPECS.session.usage });
     printJson(listBusDeliveries({
       channel: readFlag(rest, '--channel'),
       session_id: readFlag(rest, '--session-id'),
@@ -302,14 +376,15 @@ export async function runBusSessionCli(args) {
     return;
   }
 
-  console.error('Usage: bus-session register <channel> --reader <name> --agent <agent> [--adapter hook|noop] | bus-session list [channel] | bus-session deliveries [--channel <channel>] [--session-id <id>]');
-  process.exit(1);
+  throw new UsageError(`bus-session has no subcommand "${command ?? ''}"`, SPECS.session.usage);
 }
 
 export async function runBusAgentCli(args) {
+  if (showHelp(args, SPECS.agent.usage)) return;
   const commandName = args[0];
   const rest = args.slice(1);
   if (commandName === 'list') {
+    assertKnownFlags(rest, { ...SPECS.agent.list, usage: SPECS.agent.usage });
     const channel = readFlag(rest, '--channel');
     const reader = readFlag(rest, '--reader');
     const positional = removeFlags(rest, ['--channel', '--reader']);
@@ -318,6 +393,7 @@ export async function runBusAgentCli(args) {
   }
 
   if (commandName === 'runs') {
+    assertKnownFlags(rest, { ...SPECS.agent.runs, usage: SPECS.agent.usage });
     printJson(listBusRuns({
       channel: readFlag(rest, '--channel'),
       agent_id: readFlag(rest, '--agent-id'),
@@ -326,6 +402,7 @@ export async function runBusAgentCli(args) {
   }
 
   if (commandName === 'register') {
+    assertKnownFlags(rest, { ...SPECS.agent.register, usage: SPECS.agent.usage });
     const reader = readFlag(rest, '--reader');
     const agent = readFlag(rest, '--agent');
     const adapter = readFlag(rest, '--adapter', 'exec');
@@ -345,8 +422,7 @@ export async function runBusAgentCli(args) {
     const [channel] = positional;
 
     if (!channel || !reader || !agent) {
-      console.error('Usage: bus-agent register <channel> --reader <name> --agent <claude|codex> [--command <cmd>] [--arg <arg>...] [--args-json <json-array>]');
-      process.exit(1);
+      throw new UsageError('bus-agent register needs a channel, --reader, and --agent', SPECS.agent.usage);
     }
 
     printJson(registerBusAgent({
@@ -367,11 +443,11 @@ export async function runBusAgentCli(args) {
     return;
   }
 
-  console.error('Usage: bus-agent register <channel> --reader <name> --agent <agent> [--command <cmd>] [--arg <arg>...] | bus-agent list [channel] | bus-agent runs [--channel <channel>] [--agent-id <id>]');
-  process.exit(1);
+  throw new UsageError(`bus-agent has no subcommand "${commandName ?? ''}"`, SPECS.agent.usage);
 }
 
 export async function runBusAgentdCli(args) {
+  if (!acceptFlags(args, SPECS.agentd)) return;
   const channel = readFlag(args, '--channel');
   const interval_ms = readFlag(args, '--interval-ms', '1000');
   const limit = readFlag(args, '--limit', '50');
@@ -387,14 +463,14 @@ export async function runBusAgentdCli(args) {
   }
 
   if (!serve) {
-    console.error('Usage: bus-agentd [--channel <channel>] --once | --dry-run | --serve [--interval-ms <ms>]');
-    process.exit(1);
+    throw new UsageError('bus-agentd needs one of --once, --dry-run, or --serve', SPECS.agentd.usage);
   }
 
   await runBusAgentDaemonLoop({ channel: targetChannel, interval_ms });
 }
 
 export async function runBusReadCli(args) {
+  if (!acceptFlags(args, SPECS.read)) return;
   const reader = readFlag(args, '--reader');
   const limit = readFlag(args, '--limit', '50');
   const timeout_ms = readFlag(args, '--timeout-ms', '30000');
@@ -416,8 +492,7 @@ export async function runBusReadCli(args) {
   const [channel] = positional;
 
   if (!channel || !reader) {
-    console.error('Usage: bus-read <channel> --reader <name> [--wait] [--timeout-ms <ms>] [--limit <n>] [--peek]');
-    process.exit(1);
+    throw new UsageError('bus-read needs a channel and --reader', SPECS.read.usage);
   }
 
   printJson(await readBusInbox({
@@ -438,6 +513,7 @@ function handOffToSession({ channel, reader, agent, cwd, limit, preview_chars, c
 }
 
 export async function runBusHookCli(args) {
+  if (!acceptFlags(args, SPECS.hook)) return;
   if (isBatchCall()) return;
   const reader = readFlag(args, '--reader');
   const limit = readFlag(args, '--limit', '5');
@@ -448,13 +524,11 @@ export async function runBusHookCli(args) {
   const agentFlag = readFlag(args, '--agent');
   const cwd = readFlag(args, '--cwd', process.cwd());
   const dryRun = args.includes('--dry-run');
-  const positional = removeFlags(args, ['--reader', '--limit', '--preview-chars', '--format', '--hook-event', '--capabilities', '--agent', '--cwd']);
-  const filtered = positional.filter(arg => arg !== '--dry-run');
-  const [channel] = filtered;
+  const positional = removeFlags(args, SPECS.hook.value, SPECS.hook.boolean);
+  const [channel] = positional;
 
   if (!channel || !reader) {
-    console.error('Usage: bus-hook <channel> --reader <name> [--agent <claude|codex>] [--cwd <path>] [--format hook|json|text] [--limit <n>] [--preview-chars <n>] [--hook-event <name>] [--capabilities <json>] [--dry-run]');
-    process.exit(1);
+    throw new UsageError('bus-hook needs a channel and --reader', SPECS.hook.usage);
   }
 
   const preview = { limit: Number(limit), preview_chars: Number(preview_chars) };
@@ -484,16 +558,16 @@ export async function runBusHookCli(args) {
 }
 
 export async function runBusBindCli(args) {
+  if (!acceptFlags(args, SPECS.bind)) return;
   const reader = readFlag(args, '--reader');
   const agent = readFlag(args, '--agent');
   const list = args.includes('--list');
-  const positional = removeFlags(args, ['--reader', '--agent']);
+  const positional = removeFlags(args, SPECS.bind.value, SPECS.bind.boolean);
   const [channel] = positional;
   const cwd = process.cwd();
 
   if (!agent) {
-    console.error('Usage: bus-bind <channel> --reader <name> --agent <claude|codex> | bus-bind --list --agent <claude|codex>');
-    process.exit(1);
+    throw new UsageError('bus-bind needs --agent', SPECS.bind.usage);
   }
 
   if (list) {
@@ -502,26 +576,26 @@ export async function runBusBindCli(args) {
   }
 
   if (!channel || !reader) {
-    console.error('Usage: bus-bind <channel> --reader <name> --agent <claude|codex>');
-    process.exit(1);
+    throw new UsageError('bus-bind needs a channel and --reader', SPECS.bind.usage);
   }
 
   printJson(writeBusBinding({ agent, cwd, channel, reader }));
 }
 
 export async function runBusUnbindCli(args) {
+  if (!acceptFlags(args, SPECS.unbind)) return;
   const agent = readFlag(args, '--agent');
   const channel = readFlag(args, '--channel');
   const cwd = process.cwd();
   if (!agent) {
-    console.error('Usage: bus-unbind --agent <claude|codex> [--channel <channel>]');
-    process.exit(1);
+    throw new UsageError('bus-unbind needs --agent', SPECS.unbind.usage);
   }
   clearBusBinding({ agent, cwd, channel });
   printJson({ ok: true, agent, cwd, channel: channel || null });
 }
 
 export async function runBusHookCurrentCli(args) {
+  if (!acceptFlags(args, SPECS.hookCurrent)) return;
   if (isBatchCall()) return;
   const agent = readFlag(args, '--agent');
   const format = readFlag(args, '--format', 'hook');
@@ -533,8 +607,7 @@ export async function runBusHookCurrentCli(args) {
   const cwd = hookInput.cwd || process.cwd();
 
   if (!agent) {
-    console.error('Usage: bus-hook-current --agent <claude|codex> [--hook-event <name>] [--format hook|json|text] [--dry-run] [--pending-only]');
-    process.exit(1);
+    throw new UsageError('bus-hook-current needs --agent', SPECS.hookCurrent.usage);
   }
 
   const preflight = collectCurrentBusDigest({ agent, cwd, pendingOnly });
@@ -585,6 +658,7 @@ export async function runBusHookCurrentCli(args) {
 }
 
 export async function runBusNotifierCli(args) {
+  if (!acceptFlags(args, SPECS.notifier)) return;
   if (isBatchCall()) return;
   const agent = readFlag(args, '--agent');
   const interval_ms = Number(readFlag(args, '--interval-ms', String(getBusNotifierIntervalMs())));
@@ -595,8 +669,7 @@ export async function runBusNotifierCli(args) {
   const serve = args.includes('--serve');
 
   if (!agent) {
-    console.error('Usage: bus-notifier --agent <claude|codex> [--cwd <path>] [--interval-ms <ms>] [--once|--daemonize|--serve]');
-    process.exit(1);
+    throw new UsageError('bus-notifier needs --agent', SPECS.notifier.usage);
   }
 
   const state = collectCurrentBusDigest({ agent, cwd, pendingOnly: false });
@@ -666,8 +739,7 @@ export async function runBusNotifierCli(args) {
   }
 
   if (!serve) {
-    console.error('Usage: bus-notifier --agent <claude|codex> [--cwd <path>] [--interval-ms <ms>] [--once|--daemonize|--serve]');
-    process.exit(1);
+    throw new UsageError('bus-notifier needs one of --once, --daemonize, or --serve', SPECS.notifier.usage);
   }
 
   writeBusNotifierPid({ agent, cwd: scopeCwd, pid: process.pid });
