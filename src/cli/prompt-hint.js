@@ -1,15 +1,12 @@
-// UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when
-// there are strong hits, print a one-line hint so the agent knows relevant
-// entries exist. Silent (no stdout) when nothing clears the relevance bar.
-import { searchDocuments } from '../db.js';
+// UserPromptSubmit hook: when the user's prompt is actually about something the
+// knowledge base holds, print a one-line hint naming those notes. Silent
+// otherwise, which is most prompts — a surface that fires every time carries no
+// information, so declining is the product, not a failure mode.
+import { relevantNotes } from '../hint-relevance.js';
 import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { tierLabel } from '../tiers.js';
 
-// bm25 rank is negative-is-better; title matches get -20 and tag matches -10
-// boosts in searchDocuments, so -12 keeps title/tag-grade hits and strong
-// content matches while dropping incidental keyword overlap.
-const RANK_THRESHOLD = -12;
 const MAX_HINTS = 3;
 
 async function readStdin() {
@@ -29,12 +26,10 @@ export async function promptHint() {
     // Too short to mean anything, or a slash command with its own routing.
     if (prompt.trim().length < 20 || prompt.trim().startsWith('/')) process.exit(0);
 
-    const results = searchDocuments(prompt, 10)
-      .filter(r => r.rank <= RANK_THRESHOLD && r.doc_type !== 'archive')
-      .slice(0, MAX_HINTS);
+    const results = relevantNotes(prompt, { limit: MAX_HINTS });
     // A prompt the KB had nothing for is the measurement, not the absence of one:
-    // logging only the times we fired leaves a hit rate with no denominator.
-    // The rank/type filter above is why this logs rather than the search.
+    // logging only the times we fired leaves a hit rate with no denominator, and
+    // declining is now the common case rather than one that never happened.
     logRetrievalResults({
       results,
       surface: SURFACE.HINT,

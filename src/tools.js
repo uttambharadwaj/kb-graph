@@ -685,7 +685,7 @@ export function getToolDefinitions() {
           const summary = {
             total_documents: stats.count,
             current_facts: factCount,
-            health: getHealth(),
+            health: getHealth({ recordBacklog: true }),
             by_type: byType,
             by_tier: byTier,
             tier_meaning: TIER_MEANING,

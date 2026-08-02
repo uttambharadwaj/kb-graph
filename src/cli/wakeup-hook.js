@@ -41,7 +41,7 @@ export async function wakeupHook() {
       'SELECT tier, COUNT(*) c FROM documents WHERE superseded_at IS NULL GROUP BY tier'
     ).all();
 
-    const health = getHealth();
+    const health = getHealth({ recordBacklog: true });
     const healthLine = health.ok
       ? `health: OK (embeddings ${health.embeddings}, summaries ${health.summaries})`
       : `health: ⚠ ${health.warnings.join(' | ')}`;

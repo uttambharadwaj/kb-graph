@@ -209,7 +209,7 @@ The classification pipeline has three parts:
 
 2. **processor.js** -- `processNewClippings(vaultPath, { dryRun })` scans the vault for unclassified notes (no `note_type` in frontmatter), runs `classifyNote()` on each, and updates the frontmatter.
 
-3. **summarizer.js** -- `summarizeUnsummarized(vaultPath, { dryRun, limit })` finds notes without summaries and generates AI summaries.
+3. **summarizer.js** -- `summarizeUnsummarized(vaultPath, { dryRun, limit })` finds notes without summaries and generates AI summaries. One model call per note, plus a fixed 2s pause between them (~11s per note measured); it rewrites frontmatter in the vault rather than the database, so the graph reflects it after the next reindex. Use `limit` for anything interactive.
 
 **To use a different model for classification:**
 Set `CLASSIFY_MODEL` env var. The classifier spawns the `claude` CLI binary, so any model accessible via Claude Code works. To use a completely different backend (Ollama, OpenAI), replace the `runClaude()` function in `classifier.js`.

@@ -45,7 +45,7 @@ Two Claude Code hooks (installed by `kb setup`) mean your agent never starts col
 
 - **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
 
-- **Every prompt — hints.** A `UserPromptSubmit` hook matches your prompt against the KB and injects hint lines:
+- **Every prompt — hints.** A `UserPromptSubmit` hook checks whether your prompt is actually *about* something the KB holds, and if so injects hint lines:
 
   ```
   KB HINT: the knowledge base has entries relevant to this prompt:
@@ -55,6 +55,12 @@ Two Claude Code hooks (installed by `kb setup`) mean your agent never starts col
   ```
 
   The agent reads two short notes instead of re-deriving context from the codebase.
+
+  Most prompts get no hint at all, which is the point: a line that appears on
+  every prompt is one nobody reads. Relevance is scored on how much of a note's
+  own title and tags the prompt covers, weighted by how distinctive those words
+  are across the store — a measure that does not grow just because the prompt is
+  long.
 
 Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (token-efficient briefing) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
 
@@ -233,7 +239,10 @@ kb vault reindex       Reindex the vault (embeddings included)
 kb ingest <path>       Ingest a file or directory
 kb search <query>      Search from the terminal
 kb classify            Auto-classify unprocessed vault notes
-kb summarize           Generate summaries for unsummarized notes
+kb summarize           Generate summaries for unsummarized notes (one model call
+                       and ~11s per note; rewrites vault note frontmatter, and
+                       the graph picks it up on the next reindex. Try
+                       --limit=N --dry-run first)
 kb entity-merge        Merge two entity aliases in the fact store
 kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
