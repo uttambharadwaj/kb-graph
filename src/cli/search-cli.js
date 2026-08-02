@@ -1,4 +1,5 @@
 import { searchDocuments } from '../db.js';
+import { SURFACE } from '../retrieval.js';
 
 export function search(query) {
   if (!query) {
@@ -6,7 +7,7 @@ export function search(query) {
     process.exit(1);
   }
 
-  const results = searchDocuments(query, 10);
+  const results = searchDocuments(query, 10, { surface: SURFACE.CLI_SEARCH });
 
   if (!results.length) {
     console.log('No results found.');

@@ -43,6 +43,8 @@ const noVerdict = (model, reason) => ({
 });
 
 function gatherKbContext(action) {
+  // Surface-less on purpose: these notes go to our own review model, and
+  // metering them would have the read-path meter measuring itself.
   const kbResults = searchDocuments(action.slice(0, 100), 5);
   const kbContext = kbResults
     .map(r => `[${r.doc_type}] ${r.title}: ${r.snippet?.replace(/<\/?mark>/g, '').slice(0, 150)}`)

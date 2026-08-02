@@ -127,8 +127,12 @@ async function extractEpubContent(filePath, filename) {
    - `document_id` (FK), `vault_path`, `chunk_index`, `chunk_text`, `embedding` (BLOB), `dimensions`
 
 5. `retrievals` -- Read-path telemetry (see `src/retrieval.js`)
-   - `doc_id` (FK, NULL means a miss), `surface` (`kb_read`/`kb_search`/`kb_context`/`briefing`/`hint`), `query`, `session`, `created_at`
-   - `kb retrieval-report` reports coverage, freshness, hint follow-through, and miss rate over this table
+   - `doc_id` (FK, NULL means a miss), `surface`, `query`, `session`, `created_at`
+   - `surface` is one channel's one operation, from the `SURFACE` enum: MCP (`kb_read`/`kb_search`/`kb_search_smart`/`kb_context`/`kb_tunnels`), REST (`rest_read`/`rest_search`/`rest_search_smart`/`rest_context`), CLI (`cli_search`), and the push hooks (`briefing`/`hint`)
+   - `kb retrieval-report` reports coverage, freshness, hint follow-through, push/pull split, session-id coverage, and miss rate over this table
+
+**Metering a new read path:**
+`searchDocuments` and `getDocument` log for you — pass `{ surface }` and the row lands with the right channel, the empty-result miss row included. Add the surface to the `SURFACE` enum first; an unknown one is refused and logged rather than written. If your caller filters or merges the results before returning them, leave `surface` off the query and call `logRetrievalResults` yourself on the set you actually return, or the meter counts documents the caller never saw. Bulk listing (`kb_list`, `GET /documents`) is deliberately not metered: enumerating a page of titles is not evidence any of them was read, and counting it would swamp the coverage number.
 
 6. `extractions` -- Write-path telemetry for `kb_extract` (see `src/extract-meter.js`)
    - `input_hash` (sha256 of the input text, never the text itself), `input_chars`, `chunk_count`, `chunk_chars` (JSON array of per-chunk character counts), `emitted_count`, `skipped_count`, `chunk_failures`, `dry_run`, `failed`, `from_preview`, `duration_ms`, `source`, `created_at`

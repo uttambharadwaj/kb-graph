@@ -6,6 +6,7 @@ import {
   TIERS, DEFAULT_TIER, REF_MAX_CHARS,
   assertTier, byScoreThenTier, normalizeRef, RANK_BUCKET, resolveTier, sourceFamily, tierForSource, tierRank,
 } from './tiers.js';
+import { logRetrievalResults } from './retrieval.js';
 
 let db = null;
 
@@ -345,7 +346,17 @@ export function preferConfirmed(results) {
   return results.sort((a, b) => byScoreThenTier(a, b, r => r.rank, RANK_BUCKET, false));
 }
 
-export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false } = {}) {
+// Metered entry point for FTS search. The logging sits below every read
+// surface — MCP, REST, CLI — so a new caller cannot ship an unmetered read
+// path by forgetting to add a log line; the most it can get wrong is the
+// surface label. See logRetrievalResults for when to log here vs. yourself.
+export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false, surface = null } = {}) {
+  const results = ftsSearch(query, limit, { tags, includeSuperseded });
+  logRetrievalResults({ results, surface, query });
+  return results;
+}
+
+function ftsSearch(query, limit, { tags, includeSuperseded }) {
   // Build optional tag filter clause
   const tagFilter = tags ? 'AND d.tags LIKE ?' : '';
   const tagParam = tags ? `%${tags}%` : null;
@@ -455,8 +466,13 @@ export function listDocuments({ type, tag, limit = 50, offset = 0, includeSupers
   return getDb().prepare(sql).all(...params);
 }
 
-export function getDocument(id) {
-  return getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
+// Metered for the same reason as searchDocuments. A miss logs a row with a
+// NULL doc_id: a read of an id that is gone is a retrieval that failed, and
+// dropping it would leave the per-surface miss rate without a denominator.
+export function getDocument(id, { surface = null } = {}) {
+  const doc = getDb().prepare('SELECT * FROM documents WHERE id = ?').get(id) || null;
+  logRetrievalResults({ results: doc ? [doc] : [], surface });
+  return doc;
 }
 
 // Mark a note superseded (retired, not deleted) or clear it (unset). Returns

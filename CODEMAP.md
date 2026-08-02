@@ -3,8 +3,8 @@
 > Generated: 2026-08-02
 
 ## Quick Stats
-- **Files:** 142
-- **Total lines:** 21,061
+- **Files:** 143
+- **Total lines:** 21,535
 
 ## Architecture Overview
 ```
@@ -64,7 +64,7 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 764 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
+| db.js | 780 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
 | extract-meter.js | 40 | hashInput, logExtraction | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
 | extract.js | 778 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
@@ -75,12 +75,12 @@ bin/
 | mcp.js | 51 | start | Allow direct execution |
 | paths.js | 13 | KB_DIR, FILES_DIR, DB_PATH, CONFIG_PATH, PID_PATH | - |
 | restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
-| retrieval.js | 44 | SURFACE, SURFACES, resolveSessionId, logRetrieval | Read-path telemetry: the write path has always been logged (documents, |
+| retrieval.js | 91 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, resolveSessionId... | Read-path telemetry: the write path has always been logged (documents, |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
 | tiers.js | 220 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
-| tools.js | 876 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tools.js | 879 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-note.js | 148 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
@@ -126,11 +126,11 @@ bin/
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
-| prompt-hint.js | 52 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
+| prompt-hint.js | 53 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
 | register.js | 17 | register | - |
-| retrieval-report.js | 100 | retrievalReport, runRetrievalReportCli | A doc counts as "ever retrieved" if it appears with a non-null doc_id in |
+| retrieval-report.js | 126 | retrievalReport, runRetrievalReportCli | Surface lists are constants, not input, but binding them keeps the SQL |
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
-| search-cli.js | 26 | search | - |
+| search-cli.js | 27 | search | - |
 | setup-hooks.js | 48 | mergeClaudeHooks, installClaudeHooks | src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code setting |
 | setup-jobs.js | 138 | JOBS, renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
 | setup.js | 634 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
@@ -146,8 +146,8 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| embed.js | 57 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 174 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
+| embed.js | 64 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
+| search.js | 180 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
 
 ## src/middleware/
 
@@ -172,16 +172,16 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| api.js | 179 | default | All API routes require auth |
+| api.js | 182 | default | All API routes require auth |
 | auth-routes.js | 23 | default | - |
 | openapi.js | 11 | default | - |
-| v1.js | 273 | default | src/routes/v1.js |
+| v1.js | 280 | default | src/routes/v1.js |
 
 ## src/safety/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| review.js | 95 | reviewDestructiveAction, multiModelReview | Safety gate for destructive actions — blocks when the reviewer cannot answer. |
+| review.js | 97 | reviewDestructiveAction, multiModelReview | Safety gate for destructive actions — blocks when the reviewer cannot answer. |
 
 ## src/sync/
 
@@ -227,8 +227,9 @@ bin/
 | predicate-vocabulary.test.js | 276 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 60 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
-| retrieval-report.test.js | 160 | - | - |
-| retrieval.test.js | 59 | - | - |
+| retrieval-report.test.js | 210 | - | - |
+| retrieval-surfaces.test.js | 233 | - | Every read surface, counted rather than inspected. The meter's failure mode |
+| retrieval.test.js | 129 | - | - |
 | runtime-node.test.js | 64 | - | - |
 | safety-review.test.js | 89 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | setup-env-preserve.test.js | 9 | - | - |
@@ -241,7 +242,7 @@ bin/
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 49 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
 | tiers.test.js | 556 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
-| tools.test.js | 178 | - | A tool nothing points at is one no agent has a reason to call, which is |
+| tools.test.js | 180 | - | A tool nothing points at is one no agent has a reason to call, which is |
 | tunnels.test.js | 132 | - | - |
 | upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |
 | v1.test.js | 189 | - | tests/v1.test.js |

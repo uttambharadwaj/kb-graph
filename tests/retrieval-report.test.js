@@ -122,6 +122,37 @@ describe('retrievalReport hint follow-through', () => {
     db.close();
   });
 
+  // The channel someone opened the note on is not the question the metric
+  // asks. Pinning it to one surface made it silently under-count as soon as
+  // a second read channel existed.
+  it('pairs a hint with a read on any read surface, not just the MCP one', () => {
+    const db = freshDb();
+    const doc = insertDoc(db);
+    const now = new Date();
+    const at = (secOffset) => new Date(now.getTime() + secOffset * 1000).toISOString();
+
+    insertRetrieval(db, { docId: doc, surface: 'hint', session: 's1', created_at: at(0) });
+    insertRetrieval(db, { docId: doc, surface: 'rest_read', session: 's1', created_at: at(10) });
+
+    const { followThrough } = retrievalReport(db);
+    assert.strictEqual(followThrough.followed, 1);
+    db.close();
+  });
+
+  it('does not count a later search hit as following through — a hint asks to be opened', () => {
+    const db = freshDb();
+    const doc = insertDoc(db);
+    const now = new Date();
+    const at = (secOffset) => new Date(now.getTime() + secOffset * 1000).toISOString();
+
+    insertRetrieval(db, { docId: doc, surface: 'hint', session: 's1', created_at: at(0) });
+    insertRetrieval(db, { docId: doc, surface: 'kb_search', session: 's1', created_at: at(10) });
+
+    const { followThrough } = retrievalReport(db);
+    assert.strictEqual(followThrough.followed, 0);
+    db.close();
+  });
+
   it('does not pair a hint with an earlier kb_read — the read must follow the hint', () => {
     const db = freshDb();
     const doc = insertDoc(db);
@@ -134,6 +165,25 @@ describe('retrievalReport hint follow-through', () => {
     const { followThrough } = retrievalReport(db);
     assert.strictEqual(followThrough.hints_emitted, 1);
     assert.strictEqual(followThrough.followed, 0);
+    db.close();
+  });
+});
+
+describe('retrievalReport session coverage', () => {
+  it('splits rows into push and pull and reports how many carry a session id', () => {
+    const db = freshDb();
+    const doc = insertDoc(db);
+    insertRetrieval(db, { docId: doc, surface: 'briefing', session: 's1' });
+    insertRetrieval(db, { docId: doc, surface: 'hint', session: null });
+    insertRetrieval(db, { docId: doc, surface: 'kb_read', session: 's1' });
+    insertRetrieval(db, { docId: doc, surface: 'rest_search', session: null });
+    insertRetrieval(db, { docId: doc, surface: 'cli_search', session: null });
+
+    const { sessionCoverage } = retrievalReport(db);
+    assert.strictEqual(sessionCoverage.push, 2);
+    assert.strictEqual(sessionCoverage.push_with_session, 1);
+    assert.strictEqual(sessionCoverage.pull, 3);
+    assert.strictEqual(sessionCoverage.pull_with_session, 1);
     db.close();
   });
 });

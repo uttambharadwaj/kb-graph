@@ -1,6 +1,7 @@
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
 import { byScoreThenTier, RANK_BUCKET, SCORE_BUCKET } from '../tiers.js';
+import { logRetrievalResults } from '../retrieval.js';
 
 // Merge groups, in order. A row is ranked on the scale it actually carries, so
 // the group decides which comparator applies: `fts` rows arrive with a bm25
@@ -132,7 +133,7 @@ export async function checkDuplicate(content, { threshold = DUP_THRESHOLD } = {}
   };
 }
 
-export async function hybridSearch(query, { limit = 10, project, type, includeSuperseded = false } = {}) {
+export async function hybridSearch(query, { limit = 10, project, type, includeSuperseded = false, surface = null } = {}) {
   const { searchDocuments } = await import('../db.js');
 
   let ftsResults, semanticResults;
@@ -169,5 +170,10 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
   const merged = Array.from(seen.values());
   merged.sort(hybridMergeOrder);
 
-  return merged.slice(0, limit);
+  const ranked = merged.slice(0, limit);
+  // Logged on the fused set, not on the FTS half inside searchDocuments: the
+  // semantic-only hits never pass through that call, and the FTS hits the
+  // fusion drops are never returned to anyone.
+  logRetrievalResults({ results: ranked, surface, query });
+  return ranked;
 }

@@ -111,12 +111,14 @@ describe('retrieval logging', () => {
     assert.ok(row);
   });
 
-  it('kb_read logs nothing when the id does not exist', async () => {
+  // Same reasoning as the search surfaces: a read of an id that is gone is a
+  // read that failed, and dropping it leaves kb_read's miss rate structurally
+  // zero rather than measured.
+  it('kb_read logs a miss row when the id does not exist', async () => {
     const db = getDb();
-    const before = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'kb_read'").get().c;
+    const before = missesFor(db, 'kb_read');
     await handler('kb_read')({ id: 999999 });
-    const after = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'kb_read'").get().c;
-    assert.strictEqual(after, before);
+    assert.strictEqual(missesFor(db, 'kb_read'), before + 1);
   });
 
   it('kb_search logs one row per returned doc id', async () => {
