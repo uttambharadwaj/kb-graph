@@ -179,7 +179,11 @@ kb status                            # stats and server status
 
 ## MCP tools
 
-All 26 core tools are available over stdio and HTTP. The description says when to reach for each one, because an agent picks a tool from that line and nothing else:
+All 26 core tools are available over stdio. Seven of them — `kb_classify`,
+`kb_promote`, `kb_synthesize`, `kb_safety_check`, `kb_extract`,
+`kb_capture_youtube`, `kb_supersede_candidates` — are admin-only and stay off
+HTTP; the other 19 are exposed there. The description says when to reach for
+each one, because an agent picks a tool from that line and nothing else:
 
 | Tool | Description |
 |------|-------------|
@@ -249,6 +253,11 @@ kb canonicalize-entities  Back-fill entities split across case/separator spellin
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
 ```
+
+That is the set you reach for by hand. `kb --help` lists all 37, including the
+hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
+maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
+`retrieval-report`).
 
 Every command answers `--help` by printing usage and doing nothing else, and
 rejects a flag it does not recognize rather than running with defaults.
