@@ -236,6 +236,35 @@ function initSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_retrievals_session ON retrievals(session, surface, created_at);
   `);
 
+  db.exec(`
+    -- Write-path telemetry for kb_extract (see src/extract-meter.js) --
+    -- the retrievals table's twin for the write path. One row per call --
+    -- success, dry run, or failure alike -- carrying shape metrics instead
+    -- of the input itself, so a reported recall bug can be correlated
+    -- against its call weeks later without the original session. chunk_chars
+    -- is a JSON array of per-chunk character counts; chunk_failures counts
+    -- chunks that were retried and still lost their facts, which can be > 0
+    -- on a call whose overall result otherwise looks like success.
+    CREATE TABLE IF NOT EXISTS extractions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      input_hash TEXT NOT NULL,
+      input_chars INTEGER NOT NULL,
+      chunk_count INTEGER NOT NULL,
+      chunk_chars TEXT NOT NULL,
+      emitted_count INTEGER NOT NULL,
+      skipped_count INTEGER NOT NULL,
+      chunk_failures INTEGER NOT NULL DEFAULT 0,
+      dry_run INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL,
+      source TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_extractions_created_at ON extractions(created_at);
+    CREATE INDEX IF NOT EXISTS idx_extractions_hash ON extractions(input_hash);
+  `);
+
   // Migration: embeddings originally had no unique key, so INSERT OR REPLACE
   // never conflicted and every re-embed added a duplicate row. Dedupe (keep
   // newest) and enforce uniqueness so REPLACE works as intended.

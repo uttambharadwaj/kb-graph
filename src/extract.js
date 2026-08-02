@@ -4,6 +4,7 @@ import { join } from 'path';
 import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
+import { hashInput, logExtraction } from './extract-meter.js';
 
 // Auto-capture: turn a raw work conversation / session transcript into durable
 // subject-predicate-object facts, with consolidation (dedup + retire-on-contradiction).
@@ -169,6 +170,11 @@ const CHUNK_TIMEOUT_MS = 120000;
 // and short input is a single chunk, where that is the whole extraction.
 const CHUNK_ATTEMPTS = 2;
 
+// Shared with kbExtract's meter below, which filters skipped entries by this
+// same prefix to count chunks that died for good — one spelling so the two
+// can't drift apart.
+const CHUNK_FAILED_REASON_PREFIX = 'chunk_failed: ';
+
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
   const examined = text.slice(0, MAX_EXTRACT_CHARS);
@@ -191,7 +197,7 @@ export async function extractFacts(text) {
     }
     // A dead chunk is input nobody looked at. Silently returning the other
     // chunks' facts would report partial coverage as complete.
-    return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `chunk_failed: ${failure.message}` }] };
+    return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `${CHUNK_FAILED_REASON_PREFIX}${failure.message}` }] };
   }));
 
   return {
@@ -698,34 +704,64 @@ function recallPreview(key) {
   return hit;
 }
 
-// Orchestrator behind the kb_extract tool.
+// Orchestrator behind the kb_extract tool. Every call — success, dry run, or
+// one that throws — logs one row via logExtraction (see extract-meter.js) so
+// a recall bug reported weeks from now can be matched back to the call that
+// produced it. The metered fields are seeded before the try so a call that
+// fails before extraction even starts (e.g. non-string input) still logs
+// what it can, rather than going dark.
 export async function kbExtract(text, { source, observationDate, observedAt, dryRun = false } = {}) {
-  const key = previewKey(text, source, observationDate);
-  const previewed = dryRun ? null : recallPreview(key);
-  const { facts, skipped } = previewed || await extractFacts(text);
-  // The extractor's own skips ride along with consolidation's, so an empty
-  // `skipped` beside an input full of triples is a claim the caller can trust.
-  const notExtracted = skipped.map(s => ({ ...s, reason: s?.reason || 'not_extracted' }));
+  const started = Date.now();
+  let inputHash = null, inputChars = 0, chunkChars = [];
+  let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false;
+  try {
+    inputHash = hashInput(text);
+    inputChars = text.length;
+    // Independent of extractFacts's own chunking: chunkForExtract is pure and
+    // this is metering, not a second source of truth for what got sent.
+    chunkChars = chunkForExtract(text.slice(0, MAX_EXTRACT_CHARS)).map(c => c.length);
 
-  if (dryRun) {
-    rememberPreview(key, { facts, skipped });
-    // Candidates are shown post-split, post-alias and post-direction, since that is the triple
-    // consolidation will write — previewing the raw predicate would disagree
-    // with the commit for exactly the drift this preview exists to expose.
-    const candidates = facts.flatMap(splitListObject)
-      .map(f => (f?.subject && f?.predicate && f?.object ? canonicalTriple(f) : f));
-    // Previewed too: the whole point of a self-contradicting batch is that its
-    // retirements land invisibly at commit time, and a preview that showed only
-    // the candidates would be the last place to catch it before they do.
-    return {
-      dry_run: true,
-      candidates,
-      conflicts: findSingleValuedConflicts(facts),
-      skipped: notExtracted,
-      preview_key: key,
-    };
+    const key = previewKey(text, source, observationDate);
+    const previewed = dryRun ? null : recallPreview(key);
+    const { facts, skipped } = previewed || await extractFacts(text);
+    emittedCount = facts.length;
+    skippedCount = skipped.length;
+    // A chunk that died and stayed dead after CHUNK_ATTEMPTS retries — visible
+    // here even when the call as a whole reports facts added, which is exactly
+    // the silent-partial-failure shape this meter exists to catch.
+    chunkFailures = skipped.filter(s => s?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)).length;
+    // The extractor's own skips ride along with consolidation's, so an empty
+    // `skipped` beside an input full of triples is a claim the caller can trust.
+    const notExtracted = skipped.map(s => ({ ...s, reason: s?.reason || 'not_extracted' }));
+
+    if (dryRun) {
+      rememberPreview(key, { facts, skipped });
+      // Candidates are shown post-split, post-alias and post-direction, since that is the triple
+      // consolidation will write — previewing the raw predicate would disagree
+      // with the commit for exactly the drift this preview exists to expose.
+      const candidates = facts.flatMap(splitListObject)
+        .map(f => (f?.subject && f?.predicate && f?.object ? canonicalTriple(f) : f));
+      // Previewed too: the whole point of a self-contradicting batch is that its
+      // retirements land invisibly at commit time, and a preview that showed only
+      // the candidates would be the last place to catch it before they do.
+      return {
+        dry_run: true,
+        candidates,
+        conflicts: findSingleValuedConflicts(facts),
+        skipped: notExtracted,
+        preview_key: key,
+      };
+    }
+
+    const res = consolidate(facts, { source, observationDate, observedAt });
+    return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
+  } catch (err) {
+    failed = true;
+    throw err;
+  } finally {
+    logExtraction({
+      inputHash, inputChars, chunkChars, emittedCount, skippedCount, chunkFailures,
+      dryRun, failed, durationMs: Date.now() - started, source: source ?? null,
+    });
   }
-
-  const res = consolidate(facts, { source, observationDate, observedAt });
-  return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: !!previewed };
 }

@@ -130,6 +130,10 @@ async function extractEpubContent(filePath, filename) {
    - `doc_id` (FK, NULL means a miss), `surface` (`kb_read`/`kb_search`/`kb_context`/`briefing`/`hint`), `query`, `session`, `created_at`
    - `kb retrieval-report` reports coverage, freshness, hint follow-through, and miss rate over this table
 
+6. `extractions` -- Write-path telemetry for `kb_extract` (see `src/extract-meter.js`)
+   - `input_hash` (sha256 of the input text, never the text itself), `input_chars`, `chunk_count`, `chunk_chars` (JSON array of per-chunk character counts), `emitted_count`, `skipped_count`, `chunk_failures`, `dry_run`, `failed`, `duration_ms`, `source`, `created_at`
+   - One row per `kb_extract` call, including dry runs and calls that throw -- logged from a `finally` in `kbExtract` so a call can never go unmetered
+
 **To add a new query type:**
 - Export a new function from `db.js`
 - Use `getDb()` to get the singleton database connection
