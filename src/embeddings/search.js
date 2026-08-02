@@ -1,6 +1,17 @@
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
-import { tierRank } from '../tiers.js';
+import { scoreBucket, tierRank } from '../tiers.js';
+
+// Cosine similarity, where higher is better and the whole scale is 0-1, so a
+// hundredth of a point is below what the embedding meaningfully separates.
+const SCORE_BUCKET = 0.01;
+
+// Both semantic surfaces order through this, so the preference cannot drift
+// between them — which is what happened when each wrote its own tie-break.
+export const byScoreThenTier = (a, b, scoreOf) =>
+  scoreBucket(scoreOf(b), SCORE_BUCKET) - scoreBucket(scoreOf(a), SCORE_BUCKET)
+  || tierRank(b.tier) - tierRank(a.tier)
+  || scoreOf(b) - scoreOf(a);
 
 // The score at or above which a note is a duplicate rather than a relative.
 // Lives here because both the write path and kb_check_duplicate must use this
@@ -70,12 +81,14 @@ export async function semanticSearch(query, { limit = 10, project, type, include
     };
   });
 
-  scored.sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => byScoreThenTier(a, b, r => r.score));
   return scored.slice(0, limit);
 }
 
 // Score `content` against every embedded doc. One pass serves both dedup
-// (score >= 0.85) and related-links (0.55 <= score < 0.85).
+// (score >= 0.85) and related-links (0.55 <= score < 0.85). Deliberately does
+// not consider tier: whether a note duplicates this content is a question about
+// similarity, and a confirmed near-match is no more a duplicate than a guess.
 export async function similarDocs(content, { limit = 10, includeSuperseded = false } = {}) {
   const queryEmbedding = await generateEmbedding(content);
 
@@ -145,13 +158,16 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
     }
   }
 
-  // Items found by both methods rank highest; what was confirmed breaks a tie,
-  // the same preference kb_search applies.
+  // Items found by both methods rank highest, then the same score-bucket-then-
+  // tier order the other surfaces use. Comparing raw scores here put the
+  // tie-break out of reach for anything carrying a real one: FTS-only rows are
+  // merged with semantic_score 0, so an exact-equality tie-break fired only
+  // among rows the semantic scorer had no opinion about, and never elsewhere.
   const merged = Array.from(seen.values());
   merged.sort((a, b) => {
     if (a.source === 'both' && b.source !== 'both') return -1;
     if (b.source === 'both' && a.source !== 'both') return 1;
-    return ((b.semantic_score || 0) - (a.semantic_score || 0)) || (tierRank(b.tier) - tierRank(a.tier));
+    return byScoreThenTier(a, b, r => r.semantic_score || 0);
   });
 
   return merged.slice(0, limit);

@@ -4,7 +4,7 @@ import { DB_PATH } from './paths.js';
 import { normalizeTagString } from './tags.js';
 import {
   TIERS, DEFAULT_TIER, REF_MAX_CHARS,
-  assertTier, normalizeRef, resolveTier, sourceFamily, tierForSource, tierRank,
+  assertTier, normalizeRef, resolveTier, scoreBucket, sourceFamily, tierForSource, tierRank,
 } from './tiers.js';
 
 let db = null;
@@ -308,18 +308,16 @@ const STOP_WORDS = new Set([
   'it', 'its', 'they', 'them', 'their', 'about', 'up',
 ]);
 
-// bm25 scores two hits that share the same term statistics identically, and
-// the term boosts below move rows in steps of 10 and 20. A window an order of
-// magnitude smaller than the weakest of those only ever reorders hits FTS
-// already rates as the same, which is where "prefer what was confirmed"
-// belongs. Bucketing rather than comparing pairwise keeps the sort transitive.
-const TIER_TIE_WINDOW = 1;
+// bm25 rank, where lower is better and the term boosts below move rows in steps
+// of 10 and 20. A bucket an order of magnitude smaller than the weakest of those
+// only ever reorders hits FTS already rates as the same.
+const RANK_BUCKET = 1;
 
-function preferConfirmed(results) {
-  return results.sort((a, b) => {
-    const bucket = Math.round(a.rank / TIER_TIE_WINDOW) - Math.round(b.rank / TIER_TIE_WINDOW);
-    return bucket || tierRank(b.tier) - tierRank(a.tier) || a.rank - b.rank;
-  });
+export function preferConfirmed(results) {
+  return results.sort((a, b) =>
+    scoreBucket(a.rank, RANK_BUCKET) - scoreBucket(b.rank, RANK_BUCKET)
+    || tierRank(b.tier) - tierRank(a.tier)
+    || a.rank - b.rank);
 }
 
 export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false } = {}) {

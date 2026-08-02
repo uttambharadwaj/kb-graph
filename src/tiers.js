@@ -37,6 +37,12 @@ const TIER_MARK = {
 
 export const tierRank = (tier) => TIERS.indexOf(coerceTier(tier));
 
+// Two hits inside one bucket are hits the scorer is not actually separating,
+// and that is the only place preferring what was confirmed belongs. Bucketing
+// rather than an epsilon comparison keeps the sort transitive. The size is the
+// caller's, because bm25 ranks and cosine similarity are different scales.
+export const scoreBucket = (score, size) => Math.round((score || 0) / size);
+
 // An unrecognised or missing tier reads as the floor rather than as an error:
 // this runs on every rendered row, and a row with no tier is exactly the
 // unlabelled note the feature exists to remove.

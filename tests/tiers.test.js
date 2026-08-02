@@ -13,7 +13,8 @@ import {
   assertTier, coerceTier, referenceIn, resolveTier, sourceFamily, tierForSource, tierLabel, tierRank,
 } from '../src/tiers.js';
 import { getToolDefinitions } from '../src/tools.js';
-import { backfillTiers, getDb, getDocument, insertDocument, promoteDocumentTier, searchDocuments } from '../src/db.js';
+import { backfillTiers, getDb, getDocument, insertDocument, preferConfirmed, promoteDocumentTier, searchDocuments } from '../src/db.js';
+import { byScoreThenTier } from '../src/embeddings/search.js';
 import { writeNote } from '../src/write-note.js';
 import { indexVaultFile } from '../src/vault/indexer.js';
 
@@ -426,5 +427,69 @@ describe('the schema itself refuses an invalid tier', () => {
   it('gives every row a tier, with no unlabelled state', () => {
     const nulls = getDb().prepare('SELECT COUNT(*) c FROM documents WHERE tier IS NULL').get().c;
     assert.strictEqual(nulls, 0);
+  });
+});
+
+// Ranking preference: every retrieval surface must break a near-tie the same
+// way. Written after the two semantic surfaces disagreed with kb_search and
+// with each other — one compared raw scores, which put the preference out of
+// reach for anything the scorer had actually separated.
+describe('a near-tie prefers what was confirmed, on every surface', () => {
+  const bySemantic = (a, b) => byScoreThenTier(a, b, r => r.score);
+
+  it('prefers the confirmed note when scores differ by less than the bucket', () => {
+    // The confirmed note scores LOWER here on purpose: if it scored higher,
+    // sorting by raw score alone would give the same answer and this would
+    // pass with the tie-break deleted.
+    const ordered = [
+      { score: 0.8129, tier: TIER.INFERRED },
+      { score: 0.8123, tier: TIER.VERIFIED },
+    ].sort(bySemantic);
+    assert.strictEqual(ordered[0].tier, TIER.VERIFIED);
+  });
+
+  it('does not let tier outrank a materially better match', () => {
+    const ordered = [
+      { score: 0.95, tier: TIER.INFERRED },
+      { score: 0.80, tier: TIER.VERIFIED },
+    ].sort(bySemantic);
+    assert.strictEqual(ordered[0].score, 0.95, 'standing breaks ties, it does not overrule relevance');
+  });
+
+  it('stays a valid ordering under every combination', () => {
+    const rows = [];
+    for (const score of [0, 0.8, 0.804, 0.805, 0.806, 0.81, 0.999, 1]) {
+      for (const tier of TIERS) rows.push({ score, tier });
+    }
+    for (const a of rows) {
+      for (const b of rows) {
+        // Not strictEqual: a tie gives 0 and -0, which Object.is separates.
+        assert.ok(
+          Math.sign(bySemantic(a, b)) === -Math.sign(bySemantic(b, a)),
+          'comparator must be antisymmetric',
+        );
+        for (const c of rows) {
+          if (bySemantic(a, b) <= 0 && bySemantic(b, c) <= 0) {
+            assert.ok(bySemantic(a, c) <= 0, 'comparator must be transitive');
+          }
+        }
+      }
+    }
+  });
+
+  it('orders bm25 rank the same way, lower being better', () => {
+    const ordered = preferConfirmed([
+      { rank: -11.4, tier: TIER.INFERRED },
+      { rank: -11.3, tier: TIER.VERIFIED },
+    ]);
+    assert.strictEqual(ordered[0].tier, TIER.VERIFIED, 'kb_search buckets ranks the same way');
+  });
+
+  it('keeps a clearly better bm25 rank ahead of a confirmed note', () => {
+    const ordered = preferConfirmed([
+      { rank: -11.0, tier: TIER.VERIFIED },
+      { rank: -25.0, tier: TIER.INFERRED },
+    ]);
+    assert.strictEqual(ordered[0].rank, -25.0);
   });
 });
