@@ -1,17 +1,20 @@
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
-import { scoreBucket, tierRank } from '../tiers.js';
+import { byScoreThenTier, RANK_BUCKET, SCORE_BUCKET } from '../tiers.js';
 
-// Cosine similarity, where higher is better and the whole scale is 0-1, so a
-// hundredth of a point is below what the embedding meaningfully separates.
-const SCORE_BUCKET = 0.01;
+// Merge groups, in order. A row is ranked on the scale it actually carries, so
+// the group decides which comparator applies: `fts` rows arrive with a bm25
+// rank and a placeholder semantic score of 0, and scoring them as semantic
+// collapses every one of them into a single bucket.
+const MERGE_GROUP = { both: 0, semantic: 1, fts: 2 };
 
-// Both semantic surfaces order through this, so the preference cannot drift
-// between them — which is what happened when each wrote its own tie-break.
-export const byScoreThenTier = (a, b, scoreOf) =>
-  scoreBucket(scoreOf(b), SCORE_BUCKET) - scoreBucket(scoreOf(a), SCORE_BUCKET)
-  || tierRank(b.tier) - tierRank(a.tier)
-  || scoreOf(b) - scoreOf(a);
+// Named and exported because the defect this fixes lived in an anonymous sort
+// callback, where nothing could test it directly.
+export const hybridMergeOrder = (a, b) =>
+  MERGE_GROUP[a.source] - MERGE_GROUP[b.source]
+  || (a.source === 'fts'
+    ? byScoreThenTier(a, b, r => r.fts_rank, RANK_BUCKET, false)
+    : byScoreThenTier(a, b, r => r.semantic_score || 0, SCORE_BUCKET));
 
 // The score at or above which a note is a duplicate rather than a relative.
 // Lives here because both the write path and kb_check_duplicate must use this
@@ -81,7 +84,7 @@ export async function semanticSearch(query, { limit = 10, project, type, include
     };
   });
 
-  scored.sort((a, b) => byScoreThenTier(a, b, r => r.score));
+  scored.sort((a, b) => byScoreThenTier(a, b, r => r.score, SCORE_BUCKET));
   return scored.slice(0, limit);
 }
 
@@ -158,17 +161,13 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
     }
   }
 
-  // Items found by both methods rank highest, then the same score-bucket-then-
-  // tier order the other surfaces use. Comparing raw scores here put the
-  // tie-break out of reach for anything carrying a real one: FTS-only rows are
-  // merged with semantic_score 0, so an exact-equality tie-break fired only
-  // among rows the semantic scorer had no opinion about, and never elsewhere.
+  // Items found by both methods rank highest, then each group on its own scale.
+  // Ranking the FTS-only group as though it had semantic scores gave every row
+  // the same bucket and promoted tier to the primary key, so standing outranked
+  // bm25 outright — worst in the catch below, where a semantic failure makes
+  // every row FTS-only and turns the fallback into a tier-ordered list.
   const merged = Array.from(seen.values());
-  merged.sort((a, b) => {
-    if (a.source === 'both' && b.source !== 'both') return -1;
-    if (b.source === 'both' && a.source !== 'both') return 1;
-    return byScoreThenTier(a, b, r => r.semantic_score || 0);
-  });
+  merged.sort(hybridMergeOrder);
 
   return merged.slice(0, limit);
 }

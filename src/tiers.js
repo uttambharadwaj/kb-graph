@@ -43,6 +43,26 @@ export const tierRank = (tier) => TIERS.indexOf(coerceTier(tier));
 // caller's, because bm25 ranks and cosine similarity are different scales.
 export const scoreBucket = (score, size) => Math.round((score || 0) / size);
 
+// The two scales a retrieval surface ranks on. bm25 rank is better when lower
+// and its term boosts move rows in steps of 10 and 20; cosine similarity is
+// better when higher and spans 0-1.
+export const RANK_BUCKET = 1;
+export const SCORE_BUCKET = 0.01;
+
+// The one ordering every retrieval surface uses. Each site passes the score it
+// actually has: ranking a row on a scale it does not carry buckets it with
+// every other such row and hands the whole ordering to tier, which is how a
+// large relevance gap ends up losing to standing.
+export function byScoreThenTier(a, b, scoreOf, size, higherIsBetter = true) {
+  const sa = scoreOf(a), sb = scoreOf(b);
+  const bucket = higherIsBetter
+    ? scoreBucket(sb, size) - scoreBucket(sa, size)
+    : scoreBucket(sa, size) - scoreBucket(sb, size);
+  return bucket
+    || tierRank(b.tier) - tierRank(a.tier)
+    || (higherIsBetter ? sb - sa : sa - sb);
+}
+
 // An unrecognised or missing tier reads as the floor rather than as an error:
 // this runs on every rendered row, and a row with no tier is exactly the
 // unlabelled note the feature exists to remove.

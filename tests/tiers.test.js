@@ -10,11 +10,11 @@ import { fileURLToPath } from 'url';
 
 import {
   TIER, TIERS, DEFAULT_TIER, REF_MAX_CHARS,
-  assertTier, coerceTier, referenceIn, resolveTier, sourceFamily, tierForSource, tierLabel, tierRank,
+  assertTier, byScoreThenTier, coerceTier, referenceIn, resolveTier, SCORE_BUCKET, sourceFamily, tierForSource, tierLabel, tierRank,
 } from '../src/tiers.js';
 import { getToolDefinitions } from '../src/tools.js';
 import { backfillTiers, getDb, getDocument, insertDocument, preferConfirmed, promoteDocumentTier, searchDocuments } from '../src/db.js';
-import { byScoreThenTier } from '../src/embeddings/search.js';
+import { hybridMergeOrder } from '../src/embeddings/search.js';
 import { writeNote } from '../src/write-note.js';
 import { indexVaultFile } from '../src/vault/indexer.js';
 
@@ -435,7 +435,7 @@ describe('the schema itself refuses an invalid tier', () => {
 // with each other — one compared raw scores, which put the preference out of
 // reach for anything the scorer had actually separated.
 describe('a near-tie prefers what was confirmed, on every surface', () => {
-  const bySemantic = (a, b) => byScoreThenTier(a, b, r => r.score);
+  const bySemantic = (a, b) => byScoreThenTier(a, b, r => r.score, SCORE_BUCKET);
 
   it('prefers the confirmed note when scores differ by less than the bucket', () => {
     // The confirmed note scores LOWER here on purpose: if it scored higher,
@@ -491,5 +491,65 @@ describe('a near-tie prefers what was confirmed, on every surface', () => {
       { rank: -25.0, tier: TIER.INFERRED },
     ]);
     assert.strictEqual(ordered[0].rank, -25.0);
+  });
+});
+
+// The FTS-only cohort. These rows are merged carrying a bm25 rank and a
+// placeholder semantic score of 0, so ranking them on the semantic scale put
+// every one of them in the same bucket and handed the ordering to tier alone.
+// A large relevance gap then lost to standing — and worst in the fallback,
+// where a semantic failure makes every row FTS-only.
+describe('hybrid merge ranks each group on the scale it actually carries', () => {
+  const ftsOnly = () => [
+    { title: 'best match', fts_rank: -28.4, tier: TIER.INFERRED, semantic_score: 0, source: 'fts' },
+    { title: 'second', fts_rank: -25.1, tier: TIER.INFERRED, semantic_score: 0, source: 'fts' },
+    { title: 'third', fts_rank: -19.0, tier: TIER.OBSERVED, semantic_score: 0, source: 'fts' },
+    { title: 'barely matched', fts_rank: -12.2, tier: TIER.VERIFIED, semantic_score: 0, source: 'fts' },
+  ];
+
+  it('does not let standing overrule a large bm25 gap', () => {
+    const ordered = ftsOnly().sort(hybridMergeOrder).map(r => r.title);
+    assert.deepStrictEqual(ordered, ['best match', 'second', 'third', 'barely matched']);
+  });
+
+  it('still prefers the confirmed note inside one bm25 bucket', () => {
+    const ordered = [
+      { title: 'unconfirmed', fts_rank: -20.4, tier: TIER.INFERRED, source: 'fts' },
+      { title: 'confirmed', fts_rank: -20.3, tier: TIER.VERIFIED, source: 'fts' },
+    ].sort(hybridMergeOrder);
+    assert.strictEqual(ordered[0].title, 'confirmed');
+  });
+
+  it('keeps rows found by both methods ahead of either alone', () => {
+    const ordered = [
+      { title: 'fts only', fts_rank: -30, tier: TIER.VERIFIED, semantic_score: 0, source: 'fts' },
+      { title: 'semantic only', semantic_score: 0.9, tier: TIER.INFERRED, source: 'semantic' },
+      { title: 'both', semantic_score: 0.5, tier: TIER.INFERRED, source: 'both' },
+    ].sort(hybridMergeOrder);
+    assert.deepStrictEqual(ordered.map(r => r.title), ['both', 'semantic only', 'fts only']);
+  });
+
+  it('stays a valid ordering across mixed groups', () => {
+    const rows = [];
+    for (const source of ['both', 'semantic', 'fts']) {
+      for (const tier of TIERS) {
+        for (const n of [0, 0.5, 0.9]) {
+          rows.push({ source, tier, semantic_score: source === 'fts' ? 0 : n, fts_rank: -30 * n });
+        }
+      }
+    }
+    for (const a of rows) {
+      for (const b of rows) {
+        assert.ok(
+          Math.sign(hybridMergeOrder(a, b)) === -Math.sign(hybridMergeOrder(b, a)),
+          'comparator must be antisymmetric',
+        );
+        for (const c of rows) {
+          if (hybridMergeOrder(a, b) <= 0 && hybridMergeOrder(b, c) <= 0) {
+            assert.ok(hybridMergeOrder(a, c) <= 0, 'comparator must be transitive');
+          }
+        }
+      }
+    }
   });
 });

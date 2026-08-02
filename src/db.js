@@ -4,7 +4,7 @@ import { DB_PATH } from './paths.js';
 import { normalizeTagString } from './tags.js';
 import {
   TIERS, DEFAULT_TIER, REF_MAX_CHARS,
-  assertTier, normalizeRef, resolveTier, scoreBucket, sourceFamily, tierForSource, tierRank,
+  assertTier, byScoreThenTier, normalizeRef, RANK_BUCKET, resolveTier, sourceFamily, tierForSource, tierRank,
 } from './tiers.js';
 
 let db = null;
@@ -341,16 +341,8 @@ const STOP_WORDS = new Set([
   'it', 'its', 'they', 'them', 'their', 'about', 'up',
 ]);
 
-// bm25 rank, where lower is better and the term boosts below move rows in steps
-// of 10 and 20. A bucket an order of magnitude smaller than the weakest of those
-// only ever reorders hits FTS already rates as the same.
-const RANK_BUCKET = 1;
-
 export function preferConfirmed(results) {
-  return results.sort((a, b) =>
-    scoreBucket(a.rank, RANK_BUCKET) - scoreBucket(b.rank, RANK_BUCKET)
-    || tierRank(b.tier) - tierRank(a.tier)
-    || a.rank - b.rank);
+  return results.sort((a, b) => byScoreThenTier(a, b, r => r.rank, RANK_BUCKET, false));
 }
 
 export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false } = {}) {
