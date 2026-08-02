@@ -2,7 +2,11 @@
 
 import { readFileSync } from 'fs';
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
+import { isBatchCall } from '../src/claude-cli.js';
 import 'dotenv/config';
+
+// Our own model subprocesses are not sessions and have no workspace to bind.
+if (isBatchCall()) process.exit(0);
 
 await lockPreferredNodeRuntime(import.meta.url);
 

@@ -21,7 +21,14 @@ export const modelEnv = () => ({
   ...process.env,
   CLAUDE_CODE_ENTRYPOINT: 'cli',
   MAX_THINKING_TOKENS: THINKING_BUDGET,
+  // The --settings below is supposed to keep session hooks out of these calls
+  // and measurably does not: the hooks fired anyway and logged themselves as
+  // real sessions. This flag is what the hooks actually check.
+  KB_BATCH: '1',
 });
+
+// Read where it is set, so the two cannot drift apart.
+export const isBatchCall = () => process.env.KB_BATCH === '1';
 
 export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {

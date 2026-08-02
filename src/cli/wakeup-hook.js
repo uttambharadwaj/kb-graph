@@ -2,6 +2,7 @@
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
 import { getDb, getHealth } from '../db.js';
+import { isBatchCall } from '../claude-cli.js';
 import { logRetrieval, resolveSessionId } from '../retrieval.js';
 
 async function readStdin() {
@@ -11,6 +12,9 @@ async function readStdin() {
 }
 
 export async function wakeupHook() {
+  // Our own model subprocesses are not sessions. Briefing one costs ~480 tokens
+  // it cannot use, and logs it as a briefed session the meter then counts.
+  if (isBatchCall()) process.exit(0);
   // Parsed separately from the briefing query below: a malformed/absent stdin
   // payload should cost us the session id, not the whole briefing.
   let hookInput = {};
