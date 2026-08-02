@@ -22,14 +22,14 @@ A personal knowledge base server that AI agents use to persist memory across ses
 | kb_context | Token-efficient briefing. Returns summaries only, ~98% fewer tokens than full reads. Use BEFORE kb_read. |
 | kb_read | Read full document content by ID. Use after kb_context identifies relevant docs. |
 | kb_list | List documents filtered by type or tag. |
-| kb_write | Write a new note to the Obsidian vault. Types: research, idea, workflow, lesson, fix, decision, session, capture. |
+| kb_write | Write a new note to the Obsidian vault. Types: research, idea, workflow, lesson, fix, decision, session, capture. Takes a tier (inferred/observed/verified); verified needs a commit, PR or test reference. |
 | kb_ingest | Ingest raw text into the KB database directly. |
 | kb_classify | Auto-classify unprocessed notes using AI. Adds type, tags, summary, key_topics. |
 | kb_capture_session | Record a debugging/coding session with goal, commands, root causes, lessons. |
 | kb_capture_fix | Record a bug fix with symptom, cause, and resolution. |
 | kb_capture_web | Capture a web article or URL with content and metadata. |
 | kb_capture_youtube | Capture a YouTube video transcript with metadata. |
-| kb_promote | Promote a raw source note into structured knowledge (research, idea, lesson, etc.). |
+| kb_promote | Raise a note's epistemic tier because a later session confirmed it, recording what did. |
 | kb_synthesize | Generate cross-source synthesis connecting recent knowledge. |
 | kb_vault_status | Show vault indexing stats: note counts by type and project. |
 | kb_safety_check | Review a destructive action against KB history before executing. |
@@ -56,6 +56,7 @@ A personal knowledge base server that AI agents use to persist memory across ses
 | src/capture/ | Capture modules: youtube.js, web.js, terminal.js, x-bookmarks.js. |
 | src/vault/indexer.js | Obsidian vault scanner and incremental indexer. |
 | src/vault/parser.js | Vault note frontmatter parser. |
+| src/tiers.js | Epistemic tiers: the vocabulary, the reference rule for `verified`, and every surface's formatting. |
 | src/safety/review.js | Destructive action review with multi-model consensus. |
 | src/promotion/promoter.js | Knowledge promotion from sources to structured notes. |
 | src/synthesis/weekly-review.js | Weekly cross-source synthesis generator. |

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // bin/kb.js — CLI entry point
-// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, setup, stale-servers, fold-inverses, canonicalize-entities, bus-send, bus-read, bus-status, bus-session, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
+// Commands: start, stop, mcp, register, ingest <path>, search <query>, status, tags, tier, setup, stale-servers, fold-inverses, canonicalize-entities, bus-send, bus-read, bus-status, bus-session, bus-agent, bus-agentd, bus-hook, bus-bind, bus-unbind, bus-hook-current, bus-notifier
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import 'dotenv/config';
@@ -19,6 +19,7 @@ const commands = {
   search:   () => import('../src/cli/search-cli.js').then(m => m.search(args.join(' '))),
   status:   () => import('../src/cli/status.js').then(m => m.status()),
   tags:     () => import('../src/cli/tags-cli.js').then(m => m.runTagsCli(args)),
+  tier:     () => import('../src/cli/tier-cli.js').then(m => m.runTierCli(args)),
   'retrieval-report': () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   'wakeup-hook': () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
   'prompt-hint': () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
@@ -104,6 +105,7 @@ Commands:
   search <query>     Search documents
   status             Show stats and server status
   tags               Show tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
+  tier               Show notes by epistemic tier and backfill tiers from provenance (--apply to write)
   retrieval-report   Read-path coverage: how much of the KB has ever been retrieved
   wakeup-hook        Print compact KB briefing (for SessionStart hooks)
   prompt-hint        Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)

@@ -1,13 +1,14 @@
 import { z } from 'zod';
 import { join } from 'path';
 import { homedir } from 'os';
-import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, supersedeDocument, supersedeCandidates } from './db.js';
+import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, supersedeDocument, supersedeCandidates, promoteDocumentTier } from './db.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
-import { writeNote, relatedForDoc } from './write-note.js';
+import { writeNote, setNoteTier, relatedForDoc } from './write-note.js';
+import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
 import { getRecentNotes, generateSynthesisPrompt } from './synthesis/weekly-review.js';
@@ -203,13 +204,15 @@ export function getToolDefinitions() {
           logRetrieval({ docId: doc.id, surface: 'kb_read', session: resolveSessionId() });
           const related = relatedForDoc(id);
           if (related.length) doc.related = related;
-          // Superseded notes stay readable (this is the "how we got here" path)
-          // but lead with a banner so the reader knows it is retired.
-          let text = JSON.stringify(doc, null, 2);
+          // Banners lead, because this is the point at which a reader decides
+          // whether to act on the note: what standing it has, then whether it
+          // was retired. Superseded notes stay readable — this is also the
+          // "how we got here" path.
+          let text = `${tierBanner(doc)}\n\n${JSON.stringify(doc, null, 2)}`;
           if (doc.superseded_at) {
             const by = doc.superseded_by ? ` by #${doc.superseded_by}` : '';
             const reason = doc.superseded_reason ? `, ${doc.superseded_reason}` : '';
-            text = `⚠ SUPERSEDED ${doc.superseded_at}${by}${reason}\n\n${text}`;
+            text = `⚠ SUPERSEDED ${doc.superseded_at}${by}${reason}\n${text}`;
           }
           return { content: [{ type: 'text', text }] };
         } catch (err) {
@@ -250,15 +253,21 @@ export function getToolDefinitions() {
         tags: z.string().optional().describe('Comma-separated tags'),
         project: z.string().optional().describe('Project name (e.g. my-app, backend, frontend)'),
         supersedes: z.number().int().optional().describe('ID of an existing note this one replaces — that note is marked superseded and pointed at this one, or updated in place if the new note lands on its own file. This is also how you correct a note: without it, dedup refuses a near-duplicate, and a correction is always a near-duplicate of what it corrects.'),
+        tier: z.enum(TIERS).optional().default(DEFAULT_TIER).describe(
+          `How much standing this note has earned: ${TIERS.map(t => `${t} = ${TIER_MEANING[t]}`).join('; ')}. ` +
+          `Defaults to ${DEFAULT_TIER}, which is what a conclusion you reasoned your way to is. ` +
+          `${TIER.VERIFIED} is refused without tier_ref. Raise a note later with kb_promote.`
+        ),
+        tier_ref: z.string().optional().describe(`What backs the tier — a commit sha, a pull request (#42 or its URL), or a test file. Required for ${TIER.VERIFIED}.`),
       },
-      handler: async ({ title, content, type, tags, project, supersedes }) => {
+      handler: async ({ title, content, type, tags, project, supersedes, tier, tier_ref }) => {
         try {
           // Fail before writing if the supersede target does not exist — the
           // note could not fulfil its stated purpose otherwise.
           if (supersedes != null && !getDocument(supersedes)) {
             return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
           }
-          const result = await writeNote(getVaultPath(), { title, content, type, tags, project, excludeId: supersedes });
+          const result = await writeNote(getVaultPath(), { title, content, type, tags, project, tier, tier_ref, excludeId: supersedes });
           if (result.skipped) return duplicateRefusal(result.matches);
 
           // The note is on disk and indexed from here on, so nothing below may
@@ -288,7 +297,7 @@ export function getToolDefinitions() {
           const relatedNote = result.related.length
             ? `; related: ${result.related.map(r => `#${r.id} ${r.title}`).join(' | ')}`
             : '';
-          return { content: [{ type: 'text', text: `Note saved to ${result.path}${result.status}${relatedNote}${supersedeNote}` }] };
+          return { content: [{ type: 'text', text: `Note saved to ${result.path} as ${result.tier}${result.status}${relatedNote}${supersedeNote}` }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -482,13 +491,27 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_promote',
-      description: 'Analyze a source/inbox note and promote it into structured knowledge. Read the note, classify it, then use kb_write to create promoted notes (research, ideas, workflows, lessons).',
+      description: `Raise a note's tier because this session confirmed it, recording what did the confirming. This is the only way a note leaves ${DEFAULT_TIER}: ${TIERS.map(t => `${t} = ${TIER_MEANING[t]}`).join('; ')}. Promotions only go up, and ${TIER.VERIFIED} is refused unless confirmed_by names a commit, a pull request or a test. The note's own file is rewritten too, so the tier survives the next reindex.`,
       schema: {
-        note_path: z.string().describe('Vault-relative path to the source note (e.g. sources/web/article.md)'),
+        id: z.number().int().describe('ID of the note to promote'),
+        tier: z.enum(TIERS).describe('The tier the note has now earned — must be higher than its current one'),
+        confirmed_by: z.string().describe(`What confirmed it: a commit sha, a pull request (#42 or its URL) or a test file for ${TIER.VERIFIED}; a short description of what you watched happen for ${TIER.OBSERVED}.`),
       },
-      handler: async ({ note_path }) => {
+      handler: async ({ id, tier, confirmed_by }) => {
         try {
-          return { content: [{ type: 'text', text: `To promote this note, read it and use kb_write to create the appropriate output notes (research, idea, workflow, lesson, decision) based on what you extract. Source note: ${note_path}` }] };
+          const doc = promoteDocumentTier(id, { tier, confirmedBy: confirmed_by });
+          if (!doc) return { content: [{ type: 'text', text: `Error: Document with ID ${id} not found.` }], isError: true };
+
+          // The note's own file has to say so too, or the next reindex reads
+          // the old frontmatter back over the row. Failing here leaves the
+          // promotion to be undone by that reindex — the safe direction.
+          const vf = getDb().prepare('SELECT vault_path FROM vault_files WHERE document_id = ?').get(id);
+          if (!vf) {
+            return { content: [{ type: 'text', text: `#${id} "${doc.title}" promoted to ${tierBanner(doc)}\n(no vault file for this note — recorded in the index only)` }] };
+          }
+          setNoteTier(getVaultPath(), vf.vault_path, { tier: doc.tier, ref: doc.tier_ref });
+          const index = await indexVaultForResponse(getVaultPath(), vf.vault_path);
+          return { content: [{ type: 'text', text: `#${id} "${doc.title}" promoted to ${tierBanner(doc)}\n${vf.vault_path}${index.status}` }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -551,6 +574,7 @@ export function getToolDefinitions() {
               id: r.id,
               title: r.title,
               type: vf?.note_type || r.doc_type,
+              tier: r.tier,
               tags: vf?.tags || r.tags,
               project: vf?.project || null,
               summary: vf?.summary || r.snippet?.replace(/<\/?mark>/g, '').slice(0, 200),
@@ -559,7 +583,7 @@ export function getToolDefinitions() {
           });
 
           if (project || type) {
-            let sql = 'SELECT vf.document_id as id, vf.title, vf.note_type, vf.tags, vf.project, vf.summary, vf.key_topics FROM vault_files vf WHERE 1=1';
+            let sql = 'SELECT vf.document_id as id, vf.title, vf.note_type, d.tier, vf.tags, vf.project, vf.summary, vf.key_topics FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE 1=1';
             const params = [];
             if (project) { sql += ' AND vf.project = ?'; params.push(project); }
             if (type) { sql += ' AND vf.note_type = ?'; params.push(type); }
@@ -569,7 +593,7 @@ export function getToolDefinitions() {
             const seenIds = new Set(briefings.map(b => b.id));
             for (const f of filtered) {
               if (!seenIds.has(f.id)) {
-                briefings.push({ id: f.id, title: f.title, type: f.note_type, tags: f.tags, project: f.project, summary: f.summary, key_topics: f.key_topics });
+                briefings.push({ id: f.id, title: f.title, type: f.note_type, tier: f.tier, tags: f.tags, project: f.project, summary: f.summary, key_topics: f.key_topics });
               }
             }
           }
@@ -581,7 +605,7 @@ export function getToolDefinitions() {
             for (const b of briefings) logRetrieval({ docId: b.id, surface: 'kb_context', query, session });
           }
 
-          const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful.`;
+          const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful. tier "${DEFAULT_TIER}" means ${TIER_MEANING[DEFAULT_TIER]}.`;
           return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(briefings, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -630,7 +654,11 @@ export function getToolDefinitions() {
           // Parity with the wakeup-hook briefing: superseded notes drop out of
           // "recent". LEFT JOIN keeps vault files with no linked document.
           const recent = db.prepare(
-            'SELECT vf.title, vf.note_type, vf.tags, vf.project FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 10'
+            'SELECT vf.title, vf.note_type, vf.tags, vf.project, d.tier FROM vault_files vf LEFT JOIN documents d ON d.id = vf.document_id WHERE d.superseded_at IS NULL ORDER BY vf.indexed_at DESC LIMIT 10'
+          ).all();
+
+          const byTier = db.prepare(
+            'SELECT tier, COUNT(*) as count FROM documents WHERE superseded_at IS NULL GROUP BY tier'
           ).all();
 
           const factCount = db.prepare('SELECT COUNT(*) as count FROM facts WHERE valid_to IS NULL').get()?.count || 0;
@@ -640,9 +668,11 @@ export function getToolDefinitions() {
             current_facts: factCount,
             health: getHealth(),
             by_type: byType,
+            by_tier: byTier,
+            tier_meaning: TIER_MEANING,
             top_domains: byDomain.slice(0, 10),
             recent_entries: recent,
-            hint: 'Use kb_search(query, tags) for keyword search, kb_search_smart(query) for conceptual queries, kb_context(query) for token-efficient browsing, kb_fact_query(entity) for temporal facts.',
+            hint: `Use kb_search(query, tags) for keyword search, kb_search_smart(query) for conceptual queries, kb_context(query) for token-efficient browsing, kb_fact_query(entity) for temporal facts. A ${DEFAULT_TIER} note is a lead, not a finding — kb_promote one when a session confirms it.`,
           };
           return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }] };
         } catch (err) {

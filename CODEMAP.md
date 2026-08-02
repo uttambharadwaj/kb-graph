@@ -3,14 +3,15 @@
 > Generated: 2026-08-02
 
 ## Quick Stats
-- **Files:** 137
-- **Total lines:** 19,731
+- **Files:** 140
+- **Total lines:** 20,669
 
 ## Architecture Overview
 ```
 src/
   mcp.js          ← MCP server (16 tools: search, write, capture, classify, safety)
   db.js            ← SQLite + FTS5 (documents, vault_files, embeddings tables)
+  tiers.js         ← Epistemic tiers: the vocabulary, the verified-needs-a-reference rule, surface formatting
   server.js        ← Express dashboard server
   vault/           ← Obsidian vault indexer + parser
   capture/         ← YouTube, web, X bookmarks, terminal session capture
@@ -49,9 +50,9 @@ bin/
 | bus-status.js | 9 | - | !/usr/bin/env node |
 | bus-unbind.js | 13 | - | !/usr/bin/env node |
 | cron-capture.sh | 30 | - | !/bin/bash |
-| generate-codemap.js | 155 | - | Generates a token-efficient codebase map for AI agents |
+| generate-codemap.js | 156 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 141 | - | bin/kb.js — CLI entry point |
+| kb.js | 143 | - | bin/kb.js — CLI entry point |
 | post-sync.sh | 31 | - | !/bin/bash |
 | weekly-synthesis.js | 45 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
@@ -63,10 +64,10 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | claude-cli.js | 95 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 625 | insertDocument, updateDocument, deleteDocument, searchDocuments, listDocuments... | Common English stop words to filter from search queries |
+| db.js | 739 | insertDocument, updateDocument, deleteDocument, preferConfirmed, searchDocuments... | Every insert into documents lands here, which is what makes it the place an |
 | extract.js | 732 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | facts.js | 329 | initFactSchema, sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
-| harvest.js | 372 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
+| harvest.js | 375 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | ingest.js | 170 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | - |
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
 | mcp-supervisor.js | 295 | superviseMcpServer | Taken from the client's own default rather than restated: past its timeout a |
@@ -77,9 +78,10 @@ bin/
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 28 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
-| tools.js | 830 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tiers.js | 200 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
+| tools.js | 860 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
-| write-note.js | 128 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
+| write-note.js | 148 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
 ## src/bus/
 
@@ -123,7 +125,7 @@ bin/
 | ingest-cli.js | 36 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 63 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | - |
-| prompt-hint.js | 51 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
+| prompt-hint.js | 52 | promptHint | UserPromptSubmit hook: FTS-match the user's prompt against the KB and, when |
 | register.js | 17 | register | - |
 | retrieval-report.js | 100 | retrievalReport, runRetrievalReportCli | A doc counts as "ever retrieved" if it appears with a non-null doc_id in |
 | runtime-node.js | 74 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime | - |
@@ -135,15 +137,16 @@ bin/
 | status.js | 38 | status | - |
 | stop.js | 25 | stop | - |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
+| tier-cli.js | 29 | runTierCli | `kb tier` — the standing of what is stored, and the backfill that derives it |
 | vault-cli.js | 20 | vaultReindex | - |
-| wakeup-hook.js | 71 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
+| wakeup-hook.js | 76 | wakeupHook | SessionStart hook: print a compact KB briefing to stdout so the harness |
 
 ## src/embeddings/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | embed.js | 57 | generateEmbedding, embeddingToBuffer, bufferToEmbedding, cosineSimilarity | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 156 | DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs, checkDuplicate... | The score at or above which a note is a duplicate rather than a relative. |
+| search.js | 175 | byScoreThenTier, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Cosine similarity, where higher is better and the whole scale is 0-1, so a |
 
 ## src/middleware/
 
@@ -183,7 +186,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| kb-to-vault.js | 280 | - | KB-to-Vault Sync  Exports all KB documents that don't have corresponding vault f |
+| kb-to-vault.js | 286 | - | KB-to-Vault Sync  Exports all KB documents that don't have corresponding vault f |
 
 ## src/synthesis/
 
@@ -195,8 +198,8 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| indexer.js | 271 | scanVault, indexVault, indexVaultFile, embeddableBody | - |
-| parser.js | 85 | parseVaultNote | Map folder prefixes to note types |
+| indexer.js | 275 | scanVault, indexVault, indexVaultFile, embeddableBody | - |
+| parser.js | 89 | parseVaultNote | Map folder prefixes to note types |
 
 ## tests/
 
@@ -235,11 +238,12 @@ bin/
 | synthesis-prompt.test.js | 28 | - | - |
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 49 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
+| tiers.test.js | 496 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
 | tools.test.js | 149 | - | - |
 | tunnels.test.js | 132 | - | - |
 | upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |
 | v1.test.js | 189 | - | tests/v1.test.js |
-| vault-indexer.test.js | 87 | - | Test Research |
+| vault-indexer.test.js | 91 | - | Must come first: this file indexes notes through getDb(), so without it the |
 | vault-parser.test.js | 55 | - | Test Note |
 | write-correction.test.js | 82 | - | - |
 
@@ -282,6 +286,6 @@ bin/
 | kb_capture_session | Record debugging session |
 | kb_capture_fix | Record bug fix |
 | kb_vault_status | Vault indexing stats |
-| kb_promote | Promote source to structured knowledge |
+| kb_promote | Raise a note's epistemic tier once a session confirms it |
 | kb_synthesize | Generate cross-source synthesis |
 | kb_safety_check | Review destructive action before executing |

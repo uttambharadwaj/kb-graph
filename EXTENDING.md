@@ -44,7 +44,7 @@ capture -> classify -> synthesize -> promote -> retrieve -> improve
 1. **Capture:** Agent records a session, fix, web article, or YouTube transcript via `kb_capture_*` tools
 2. **Classify:** `kb_classify` runs AI classification on new/unprocessed notes (type, tags, summary)
 3. **Synthesize:** `kb_synthesize` generates cross-source synthesis connecting dots across recent knowledge
-4. **Promote:** `kb_promote` extracts structured knowledge from raw sources into research/idea/lesson/workflow notes
+4. **Promote:** `kb_promote` raises a note's epistemic tier once a later session confirms it, recording the commit, PR or test that did. Everything enters at `inferred`; this is the only way out of it (see `src/tiers.js`)
 5. **Retrieve:** `kb_context` and `kb_search_smart` find relevant knowledge for active tasks
 6. **Improve:** Each retrieval that leads to a fix or lesson feeds back into capture
 
@@ -111,6 +111,8 @@ async function extractEpubContent(filePath, filename) {
 
 1. `documents` -- Core content store
    - `id`, `title`, `content`, `source`, `doc_type`, `tags`, `file_path`, `file_size`, `created_at`, `updated_at`
+   - `superseded_at` / `superseded_by` / `superseded_reason` -- retirement pointers; `superseded_at IS NULL` is the current-state filter
+   - `tier` / `tier_ref` / `tier_at` -- epistemic tier (see `src/tiers.js`). `tier` is NOT NULL with a CHECK against the tier vocabulary, so no note can be unlabelled
 
 2. `documents_fts` -- FTS5 virtual table (auto-synced via triggers)
    - Columns: `title` (weight 10x), `content` (weight 1x), `tags` (weight 5x)
@@ -119,6 +121,7 @@ async function extractEpubContent(filePath, filename) {
 
 3. `vault_files` -- Obsidian vault file tracking for incremental indexing
    - `vault_path` (unique), `content_hash`, `document_id` (FK to documents), `title`, `note_type`, `tags`, `project`, `status`, `source`, `confidence`, `summary`, `key_topics`
+   - `source` here is the note's OWN provenance from its frontmatter (`harvest:<id>`, `manual`, a URL). `documents.source` is the indexer's `vault:<path>` and says nothing about where the knowledge came from -- tier backfills and provenance rules read this column, not that one
 
 4. `embeddings` -- Semantic search vectors
    - `document_id` (FK), `vault_path`, `chunk_index`, `chunk_text`, `embedding` (BLOB), `dimensions`

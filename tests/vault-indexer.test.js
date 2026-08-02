@@ -1,3 +1,7 @@
+// Must come first: this file indexes notes through getDb(), so without it the
+// run opens the real ~/.knowledge-base/kb.db, migrates it, and writes rows into
+// it — which is what the delete-on-the-way-out below was compensating for.
+import './helpers/tmp-kb.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'fs';

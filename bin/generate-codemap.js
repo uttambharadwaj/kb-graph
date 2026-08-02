@@ -87,6 +87,7 @@ let md = `# Codebase Map
 src/
   mcp.js          ← MCP server (16 tools: search, write, capture, classify, safety)
   db.js            ← SQLite + FTS5 (documents, vault_files, embeddings tables)
+  tiers.js         ← Epistemic tiers: the vocabulary, the verified-needs-a-reference rule, surface formatting
   server.js        ← Express dashboard server
   vault/           ← Obsidian vault indexer + parser
   capture/         ← YouTube, web, X bookmarks, terminal session capture
@@ -145,7 +146,7 @@ md += `## Key Data Flows
 | kb_capture_session | Record debugging session |
 | kb_capture_fix | Record bug fix |
 | kb_vault_status | Vault indexing stats |
-| kb_promote | Promote source to structured knowledge |
+| kb_promote | Raise a note's epistemic tier once a session confirms it |
 | kb_synthesize | Generate cross-source synthesis |
 | kb_safety_check | Review destructive action before executing |
 `;

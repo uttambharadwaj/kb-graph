@@ -91,6 +91,7 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
 ## Design principles
 
 - **Files first.** Every note is plain markdown with frontmatter in a directory you own. Obsidian renders it beautifully but is optional. When search ranking fails, `grep` is the fallback — an agent can always inspect the raw store.
+- **A guess does not get to sound like a finding.** Every note carries a tier: `verified` (a fix landed or a test proves it — refused without a commit, PR or test reference), `observed` (an agent watched it happen), or `inferred` (an unconfirmed model conclusion). The nightly transcript sweep may only write `inferred`. The tier is printed on every surface a note is read from — hints, briefings, `kb_read`, search — and a confirmed note outranks an unconfirmed one at equal relevance. `kb_promote` is how a note earns its way up, and it records what did the confirming.
 - **No LLM in the read path.** Retrieval is SQLite FTS5 (BM25) + local embeddings (all-MiniLM-L6-v2, runs on your machine) fused at query time. LLM calls are spent at write time — classification, extraction, synthesis — where latency doesn't hurt.
 - **Self-tending, and honest about it.** Embeddings, harvest, consolidation, and synthesis run on schedules. The briefing carries a health heartbeat; if a loop stops running, you see ⚠ at your next session start instead of discovering silent rot months later.
 - **No external services.** SQLite, local embeddings, your filesystem. Nothing leaves your machine unless you expose the REST API yourself.
@@ -188,7 +189,7 @@ All 24 core tools are available over stdio and HTTP:
 | `kb_check_duplicate` | Similarity check before writing — prevents near-duplicate notes |
 | `kb_classify` | Auto-classify unprocessed notes (type, tags, summary) |
 | `kb_extract` | Extract structured facts/lessons from raw text or transcripts |
-| `kb_promote` | Promote raw source into structured knowledge |
+| `kb_promote` | Raise a note's tier because a later session confirmed it, recording what did |
 | `kb_synthesize` | Cross-source synthesis of recent knowledge |
 | `kb_fact_add` | Add an entity fact (subject/predicate/object + validity) |
 | `kb_fact_query` | Query facts about an entity |
@@ -211,6 +212,7 @@ kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
 kb mcp                 MCP stdio server (what your agents connect to)
 kb register            Register MCP with Claude Code / Codex / Gemini
+kb tier                Notes by epistemic tier; backfills tiers from provenance (--apply to write)
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included)

@@ -4,6 +4,7 @@
 import { searchDocuments } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { logRetrieval, resolveSessionId } from '../retrieval.js';
+import { tierLabel } from '../tiers.js';
 
 // bm25 rank is negative-is-better; title matches get -20 and tag matches -10
 // boosts in searchDocuments, so -12 keeps title/tag-grade hits and strong
@@ -41,8 +42,8 @@ export async function promptHint() {
 
     for (const r of results) logRetrieval({ docId: r.id, surface: 'hint', query: prompt, session });
 
-    const items = results.map(r => `#${r.id} "${r.title}" (${r.doc_type})`).join('; ');
-    console.log(`KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch.`);
+    const items = results.map(r => `#${r.id} "${r.title}" (${r.doc_type}, ${tierLabel(r.tier)})`).join('; ');
+    console.log(`KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch. ⚠ marks an unconfirmed model conclusion — treat it as a lead, not a finding.`);
   } catch {
     // Never block a prompt on KB problems.
   }

@@ -74,6 +74,10 @@ export function parseVaultNote(content, vaultPath) {
     project: fm.project || null,
     status: fm.status || 'active',
     source: fm.source || null,
+    // Not graded here — the file is the source of truth for what a note claims,
+    // and whether the claim stands is decided once, at the DB boundary.
+    tier: fm.tier || null,
+    tier_ref: fm.tier_ref || null,
     confidence: fm.confidence || null,
     created: fm.created || null,
     updated: fm.updated || null,
