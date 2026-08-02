@@ -3,7 +3,7 @@
 // entries exist. Silent (no stdout) when nothing clears the relevance bar.
 import { searchDocuments } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
-import { logRetrieval, resolveSessionId } from '../retrieval.js';
+import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { tierLabel } from '../tiers.js';
 
 // bm25 rank is negative-is-better; title matches get -20 and tag matches -10
@@ -32,15 +32,16 @@ export async function promptHint() {
     const results = searchDocuments(prompt, 10)
       .filter(r => r.rank <= RANK_THRESHOLD && r.doc_type !== 'archive')
       .slice(0, MAX_HINTS);
-    const session = resolveSessionId(hookInput);
     // A prompt the KB had nothing for is the measurement, not the absence of one:
     // logging only the times we fired leaves a hit rate with no denominator.
-    if (results.length === 0) {
-      logRetrieval({ surface: 'hint', query: prompt, session });
-      process.exit(0);
-    }
-
-    for (const r of results) logRetrieval({ docId: r.id, surface: 'hint', query: prompt, session });
+    // The rank/type filter above is why this logs rather than the search.
+    logRetrievalResults({
+      results,
+      surface: SURFACE.HINT,
+      query: prompt,
+      session: resolveSessionId(hookInput),
+    });
+    if (results.length === 0) process.exit(0);
 
     const items = results.map(r => `#${r.id} "${r.title}" (${r.doc_type}, ${tierLabel(r.tier)})`).join('; ');
     console.log(`KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch. ⚠ marks an unconfirmed model conclusion — treat it as a lead, not a finding.`);

@@ -17,7 +17,7 @@ import { reviewDestructiveAction } from './safety/review.js';
 import { getBusToolDefinitions } from './bus/tools.js';
 import { tunnel, tagNeighbors, strongestTunnels } from './tunnels.js';
 import { canonicalTag, getTagAliasMap } from './tags.js';
-import { logRetrieval, resolveSessionId } from './retrieval.js';
+import { SURFACE, logRetrievalResults } from './retrieval.js';
 
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
@@ -129,13 +129,11 @@ export function getToolDefinitions() {
       },
       handler: async ({ query, tags, limit, include_superseded }) => {
         try {
-          const results = searchDocuments(query, limit, { tags, includeSuperseded: include_superseded });
-          const session = resolveSessionId();
-          if (results.length === 0) {
-            logRetrieval({ surface: 'kb_search', query, session });
-          } else {
-            for (const r of results) logRetrieval({ docId: r.id, surface: 'kb_search', query, session });
-          }
+          const results = searchDocuments(query, limit, {
+            tags,
+            includeSuperseded: include_superseded,
+            surface: SURFACE.SEARCH,
+          });
           return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -163,6 +161,13 @@ export function getToolDefinitions() {
           const result = to
             ? tunnel(db, from, to, { limit })
             : { from, neighbors: tagNeighbors(db, from, { limit }) };
+          // Two-tag mode hands back specific notes, so it meters like any
+          // other surface that does. Single-tag mode returns tag names only —
+          // there is no document to have been retrieved, and a miss row would
+          // claim the caller asked for one.
+          if (result.bridge_docs) {
+            logRetrievalResults({ results: result.bridge_docs, surface: SURFACE.TUNNELS, query: `${from} -> ${to}` });
+          }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -197,11 +202,10 @@ export function getToolDefinitions() {
       },
       handler: async ({ id }) => {
         try {
-          const doc = getDocument(id);
+          const doc = getDocument(id, { surface: SURFACE.READ });
           if (!doc) {
             return { content: [{ type: 'text', text: `Error: Document with ID ${id} not found.` }], isError: true };
           }
-          logRetrieval({ docId: doc.id, surface: 'kb_read', session: resolveSessionId() });
           const related = relatedForDoc(id);
           if (related.length) doc.related = related;
           // Banners lead, because this is the point at which a reader decides
@@ -263,7 +267,8 @@ export function getToolDefinitions() {
       handler: async ({ title, content, type, tags, project, supersedes, tier, tier_ref }) => {
         try {
           // Fail before writing if the supersede target does not exist — the
-          // note could not fulfil its stated purpose otherwise.
+          // note could not fulfil its stated purpose otherwise. Deliberately
+          // surface-less: an existence check on a write is not a retrieval.
           if (supersedes != null && !getDocument(supersedes)) {
             return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
           }
@@ -478,7 +483,7 @@ export function getToolDefinitions() {
       },
       handler: async ({ query, limit, project, type }) => {
         try {
-          const results = await hybridSearch(query, { limit, project, type });
+          const results = await hybridSearch(query, { limit, project, type, surface: SURFACE.SEARCH_SMART });
           const warning = embeddingCount() === 0
             ? "WARNING: semantic layer is empty — these results are keyword-only. Run 'kb vault reindex' to build embeddings.\n\n"
             : '';
@@ -614,12 +619,10 @@ export function getToolDefinitions() {
             }
           }
 
-          const session = resolveSessionId();
-          if (briefings.length === 0) {
-            logRetrieval({ surface: 'kb_context', query, session });
-          } else {
-            for (const b of briefings) logRetrieval({ docId: b.id, surface: 'kb_context', query, session });
-          }
+          // Logged here rather than by threading a surface into the search:
+          // the project/type pass appends docs the search never returned, and
+          // the briefing set is what the caller actually gets.
+          logRetrievalResults({ results: briefings, surface: SURFACE.CONTEXT, query });
 
           const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful. tier "${DEFAULT_TIER}" means ${TIER_MEANING[DEFAULT_TIER]}.`;
           return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(briefings, null, 2) }] };

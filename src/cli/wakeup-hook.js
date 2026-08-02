@@ -3,7 +3,7 @@
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
 import { getDb, getHealth } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
-import { logRetrieval, resolveSessionId } from '../retrieval.js';
+import { SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { TIER, tierLabel } from '../tiers.js';
 
 async function readStdin() {
@@ -53,7 +53,7 @@ export async function wakeupHook() {
     // the only part of this hook an agent can act on with kb_read(id), so
     // it's the only part worth logging as a retrieval.
     const session = resolveSessionId(hookInput);
-    for (const s of states) logRetrieval({ docId: s.document_id, surface: 'briefing', session });
+    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session });
 
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,

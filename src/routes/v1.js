@@ -11,6 +11,7 @@ import {
   getDb,
 } from '../db.js';
 import { writeNote } from '../write-note.js';
+import { SURFACE, logRetrievalResults } from '../retrieval.js';
 
 const router = Router();
 
@@ -65,6 +66,9 @@ router.get('/search', (req, res) => {
       results = results.filter(r => projectDocIds.has(r.id));
     }
 
+    // Logged after filtering, so no surface on the search above: a doc the
+    // type/project filter dropped was never shown to the caller.
+    logRetrievalResults({ results, surface: SURFACE.REST_SEARCH, query: q });
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -83,7 +87,7 @@ router.get('/search/smart', async (req, res) => {
 
   try {
     const { hybridSearch } = await import('../embeddings/search.js');
-    const results = await hybridSearch(q, { limit, project, type });
+    const results = await hybridSearch(q, { limit, project, type, surface: SURFACE.REST_SEARCH_SMART });
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -117,6 +121,9 @@ router.get('/context', async (req, res) => {
       );
       filtered = filtered.filter(r => projectDocIds.has(r.id));
     }
+
+    // Same reason as /search: log the post-filter set, not the search's.
+    logRetrievalResults({ results: filtered, surface: SURFACE.REST_CONTEXT, query: q });
 
     // Pull summaries from vault_files table for matched documents
     const db = getDb();
@@ -177,7 +184,7 @@ router.get('/documents/:id', (req, res) => {
   }
 
   try {
-    const doc = getDocument(id);
+    const doc = getDocument(id, { surface: SURFACE.REST_READ });
     if (!doc) {
       return res.status(404).json({ error: 'Document not found' });
     }

@@ -17,6 +17,7 @@ import {
 import { ingestFile, ingestDirectory } from '../ingest.js';
 import { indexVault } from '../vault/indexer.js';
 import { normalizeTagString } from '../tags.js';
+import { SURFACE } from '../retrieval.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -31,7 +32,9 @@ router.get('/api/documents', (req, res) => {
   try {
     const { q, type, tag, limit, offset } = req.query;
     if (q) {
-      const results = searchDocuments(q, limit ? parseInt(limit, 10) : 20);
+      const results = searchDocuments(q, limit ? parseInt(limit, 10) : 20, {
+        surface: SURFACE.REST_SEARCH,
+      });
       return res.json(results);
     }
     const results = listDocuments({
@@ -49,7 +52,7 @@ router.get('/api/documents', (req, res) => {
 // GET /api/documents/:id
 router.get('/api/documents/:id', (req, res) => {
   try {
-    const doc = getDocument(parseInt(req.params.id, 10));
+    const doc = getDocument(parseInt(req.params.id, 10), { surface: SURFACE.REST_READ });
     if (!doc) return res.status(404).json({ error: 'Not found' });
     return res.json(doc);
   } catch (err) {

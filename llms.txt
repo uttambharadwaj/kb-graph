@@ -66,7 +66,7 @@ The `bus_*` tools cover the one case a harness cannot: coordinating with an agen
 |------|----------------|
 | src/tools.js | Add new MCP tools. Central registry for all tool definitions. |
 | src/ingest.js | Add new content source types. Extend TYPE_MAP and extractors. |
-| src/db.js | Database schema, queries, FTS5 config. Three tables: documents, vault_files, embeddings. |
+| src/db.js | Database schema, queries, FTS5 config. Core tables: documents, vault_files, embeddings, facts, retrievals. Search and single-doc reads are metered here — pass a `surface` from src/retrieval.js. |
 | src/server.js | Express routes, middleware, auth chain. |
 | src/mcp-http.js | HTTP MCP transport. Session management, StreamableHTTP. |
 | src/mcp.js | Stdio MCP transport. Local agent integration. |
