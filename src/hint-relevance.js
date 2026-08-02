@@ -115,7 +115,7 @@ export function relevantNotes(prompt, { limit = 3 } = {}) {
   if (!query.length) return [];
 
   const candidates = db.prepare(`
-    SELECT d.id, d.title, d.doc_type, d.tags
+    SELECT d.id, d.title, d.doc_type, d.tags, d.tier
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
@@ -137,7 +137,7 @@ export function relevantNotes(prompt, { limit = 3 } = {}) {
     if (matched.length < MIN_COVERED_TERMS) return;
     const mass = matched.reduce((sum, w) => sum + idf(w), 0);
     if (mass < minMass) return;
-    hits.push({ id: doc.id, title: doc.title, doc_type: doc.doc_type, mass });
+    hits.push({ id: doc.id, title: doc.title, doc_type: doc.doc_type, tier: doc.tier, mass });
   });
 
   hits.sort((a, b) => b.mass - a.mass);

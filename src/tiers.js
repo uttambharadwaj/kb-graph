@@ -76,6 +76,17 @@ export const tierLabel = (tier) => {
   return `${TIER_MARK[t]}${t}`;
 };
 
+// Whether a tier is worth printing on a surface nobody asked for.
+//
+// A mark that appears on every row is not a mark. The hint and the briefing are
+// pushed into a session unasked and cost context on every prompt, so the label
+// earns its space only while the store actually holds more than one tier — and
+// starts appearing on its own the first time a note is promoted. kb_read is
+// deliberately not gated on this: it is a pull, one note, at the moment a
+// reader decides whether to act, which is where the warning does its work.
+export const tiersDiscriminate = (counts) =>
+  new Set((counts || []).filter(t => (t.count || 0) > 0).map(t => coerceTier(t.tier))).size > 1;
+
 // The kb_read form: the same gating, plus the evidence and when it was recorded.
 export function tierBanner({ tier, tier_ref, tier_at } = {}) {
   const t = coerceTier(tier);

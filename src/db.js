@@ -735,6 +735,14 @@ export function setMeta(key, value) {
   ).run(key, String(value));
 }
 
+// One query behind every surface that decides whether to print a tier, so the
+// push surfaces cannot disagree about what the store contains.
+export function liveTierCounts() {
+  return getDb().prepare(
+    'SELECT tier, COUNT(*) AS count FROM documents WHERE superseded_at IS NULL GROUP BY tier'
+  ).all();
+}
+
 export function getMeta(key) {
   return getDb().prepare('SELECT value, updated_at FROM meta WHERE key = ?').get(key) || null;
 }

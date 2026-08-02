@@ -44,7 +44,7 @@ capture -> classify -> synthesize -> promote -> retrieve -> improve
 1. **Capture:** Agent records a session, fix, web article, or YouTube transcript via `kb_capture_*` tools
 2. **Classify:** `kb_classify` runs AI classification on new/unprocessed notes (type, tags, summary)
 3. **Synthesize:** `kb_synthesize` generates cross-source synthesis connecting dots across recent knowledge
-4. **Promote:** `kb_promote` raises a note's epistemic tier once a later session confirms it, recording the commit, PR or test that did. Everything enters at `inferred`; this is the only way out of it (see `src/tiers.js`)
+4. **Promote:** `kb_promote` raises a note's epistemic tier once a later session confirms it, recording the commit, PR or test that did. Everything enters at `inferred`; this is the only way out of it (see `src/tiers.js`). `kb_read` always shows the tier — that is where a reader decides whether to act. The pushed surfaces (prompt hint, session briefing) show it only while more than one tier is populated, since a mark on every row costs context to say nothing; it appears on its own after the first promotion
 5. **Retrieve:** `kb_context` and `kb_search_smart` find relevant knowledge for active tasks
 6. **Improve:** Each retrieval that leads to a fix or lesson feeds back into capture
 
