@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 153
-- **Total lines:** 22,964
+- **Total lines:** 23,003
 
 ## Architecture Overview
 ```
@@ -214,7 +214,7 @@ bin/
 | autobind.test.js | 196 | - | - |
 | bus.test.js | 1592 | - | - |
 | claude-cli.test.js | 59 | - | Fake claude binaries so these tests need no network and run in ms. |
-| cli-inert.test.js | 227 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
+| cli-inert.test.js | 247 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
 | db-connect-guard.test.js | 40 | - | Runs in its own process so KB_DIR can point somewhere disposable before |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 98 | - | - |
@@ -240,7 +240,7 @@ bin/
 | retrieval.test.js | 129 | - | - |
 | runtime-node.test.js | 64 | - | - |
 | safety-review.test.js | 89 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
-| schema-migrations.test.js | 228 | - | - |
+| schema-migrations.test.js | 247 | - | - |
 | setup-env-preserve.test.js | 9 | - | - |
 | setup-hooks.test.js | 77 | - | tests/setup-hooks.test.js |
 | setup-jobs.test.js | 87 | - | tests/setup-jobs.test.js |
