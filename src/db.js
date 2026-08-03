@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { statSync } from 'fs';
 import { DB_PATH } from './paths.js';
-import { normalizeTagString } from './tags.js';
+import { normalizeTagString, splitTags, canonicalTag, tagSpellings, getTagAliasMap } from './tags.js';
 import { STALE_AFTER } from './jobs.js';
 import {
   TIERS, DEFAULT_TIER, REF_MAX_CHARS,
@@ -432,10 +432,47 @@ export function searchDocuments(query, limit = 20, { tags, includeSuperseded = f
   return results;
 }
 
+// A tag is a whole element of the comma-separated list, never a substring of
+// it: `auth` must not match a note tagged `oauth`. SQLite has no split, so
+// bracket both the stored list and the wanted tag with the separator and
+// compare. The inner replace makes an unspaced `a,b` match the same as `a, b`.
+const taggedWith = (column) =>
+  `(',' || replace(lower(${column}), ', ', ',') || ',') LIKE ?`;
+
+// One clause per requested tag, so callers AND them; the spellings of a single
+// tag are ORed inside its clause.
+function tagFilterFor(tags, column) {
+  const wanted = splitTags(tags);
+  // Before touching the alias table: unfiltered search is the common call.
+  if (!wanted.length) return { clauses: [], params: [] };
+  const aliasMap = getTagAliasMap(getDb());
+  const clauses = [], params = [];
+  for (const tag of wanted) {
+    const spellings = tagSpellings(tag, aliasMap);
+    clauses.push(`(${spellings.map(() => taggedWith(column)).join(' OR ')})`);
+    params.push(...spellings.map(s => `%,${s},%`));
+  }
+  return { clauses, params };
+}
+
+// How much of a note's own identity the query terms cover, as a rank bonus.
+// Tags match whole or not at all, the same rule the filter uses: sub-token
+// overlap ("auth" inside "oauth") is already carried by the tags column's
+// bm25 weight, and awarding it here counts a coincidence twice.
+export function identityBoost(doc, terms) {
+  const title = (doc.title || '').toLowerCase();
+  const tags = new Set(splitTags(doc.tags));
+  let boost = 0;
+  for (const term of terms) {
+    if (title.includes(term)) boost += 20;  // title match is very strong
+    if (tags.has(term)) boost += 10;        // tag match is strong
+  }
+  return boost;
+}
+
 function ftsSearch(query, limit, { tags, includeSuperseded }) {
-  // Build optional tag filter clause
-  const tagFilter = tags ? 'AND d.tags LIKE ?' : '';
-  const tagParam = tags ? `%${tags}%` : null;
+  const { clauses, params: tagParams } = tagFilterFor(tags ?? '', 'd.tags');
+  const tagFilter = clauses.map(c => `AND ${c}`).join(' ');
   // Superseded notes drop out of current-state recall unless explicitly asked
   // for. No bound param — the clause is a literal, so param arrays are unchanged.
   const supersededFilter = includeSuperseded ? '' : 'AND d.superseded_at IS NULL';
@@ -466,8 +503,7 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
       ORDER BY rank
       LIMIT ?
     `);
-    const params = tagParam ? [sanitized, tagParam, limit] : [sanitized, limit];
-    return preferConfirmed(stmt.all(...params));
+    return preferConfirmed(stmt.all(sanitized, ...tagParams, limit));
   }
 
   // Build FTS5 query: AND-first for precision, OR fallback for recall
@@ -490,26 +526,15 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
   `);
 
   // Try AND first for precision; fall back to OR if no results
-  const params = tagParam ? [andQuery, tagParam, limit] : [andQuery, limit];
-  let results = stmt.all(...params);
+  let results = stmt.all(andQuery, ...tagParams, limit);
   if (results.length === 0 && terms.length > 1) {
-    const orParams = tagParam ? [orQuery, tagParam, limit] : [orQuery, limit];
-    results = stmt.all(...orParams);
+    results = stmt.all(orQuery, ...tagParams, limit);
   }
 
   // If OR gives too many low-quality results, re-rank: boost docs matching more terms
   if (terms.length > 1 && results.length > 0) {
-    for (const r of results) {
-      const titleLower = (r.title || '').toLowerCase();
-      const tagsLower = (r.tags || '').toLowerCase();
-      let termBoost = 0;
-      for (const term of terms) {
-        if (titleLower.includes(term)) termBoost += 20;  // title match is very strong
-        if (tagsLower.includes(term)) termBoost += 10;   // tag match is strong
-      }
-      // rank is negative (lower = better in bm25), so subtract boost to improve ranking
-      r.rank = r.rank - termBoost;
-    }
+    // rank is negative (lower = better in bm25), so subtract boost to improve ranking
+    for (const r of results) r.rank = r.rank - identityBoost(r, terms);
   }
 
   return preferConfirmed(results);
@@ -525,8 +550,9 @@ export function listDocuments({ type, tag, limit = 50, offset = 0, includeSupers
     params.push(type);
   }
   if (tag) {
-    conditions.push("tags LIKE '%' || ? || '%'");
-    params.push(tag);
+    const filter = tagFilterFor(tag, 'tags');
+    conditions.push(...filter.clauses);
+    params.push(...filter.params);
   }
   if (!includeSuperseded) {
     conditions.push('superseded_at IS NULL');
@@ -718,6 +744,23 @@ export function getStats() {
   return { count, totalSize, dbFileSize };
 }
 
+// Notes per tag, biggest first. Grouping on the stored string counts tag
+// *sets* instead, and those are near-unique — so the biggest "domain" it
+// reports is whichever combination happens to repeat, off by ~30x.
+export function tagCounts(limit = 15) {
+  const aliasMap = getTagAliasMap(getDb());
+  const counts = new Map();
+  for (const row of getDb().prepare("SELECT tags FROM documents WHERE tags != ''").all()) {
+    for (const tag of new Set(splitTags(row.tags).map(t => canonicalTag(t, aliasMap)))) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  return [...counts]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([tag, count]) => ({ tag, count }));
+}
+
 export function getDocumentCount() {
   return getDb().prepare('SELECT COUNT(*) as count FROM documents').get().count;
 }
@@ -733,7 +776,7 @@ export function updateDocumentFull(id, { title, content, tags, doc_type, source,
       tier = ?, tier_ref = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `);
-  return stmt.run(title, content, tags, doc_type, source, file_path, file_size, graded.tier, graded.tier, graded.ref, id);
+  return stmt.run(title, content, normalizeTagString(tags), doc_type, source, file_path, file_size, graded.tier, graded.tier, graded.ref, id);
 }
 
 // Raise a note's tier because a later session confirmed it, recording what did
