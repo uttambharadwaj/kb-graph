@@ -40,6 +40,30 @@ function getDb() {
   return db;
 }
 
+// Our own model subprocesses, by the opening words of what we send them.
+// Prefixes, not full text: the prompts have been edited since, and a row only
+// has to be recognisable, not reproducible.
+const OWN_PROMPT_PREFIXES = [
+  'You are a Memory Extractor%',
+  'You are the auto-debrief%',
+  'You maintain the CURRENT-STATE%',
+  'You are a knowledge base summarizer%',
+];
+
+// Surface names are literals rather than retrieval.js's constants: that module
+// and this one are already a cycle, and this SQL is built at module load, so
+// importing them throws "cannot access before initialization" whenever
+// retrieval.js is the entry point.
+const OWN_SUBPROCESS_SESSIONS = `
+  SELECT DISTINCT session FROM retrievals
+  WHERE surface = 'hint' AND session IS NOT NULL
+    AND (${OWN_PROMPT_PREFIXES.map(prefix => `query LIKE '${prefix}'`).join(' OR ')})
+    AND session NOT IN (
+      SELECT session FROM retrievals
+      WHERE surface NOT IN ('hint', 'briefing') AND session IS NOT NULL
+    )
+`;
+
 export const MIGRATIONS = [{
   version: 1,
   name: 'documents, full-text index, and vault file tracking',
@@ -311,6 +335,24 @@ export const MIGRATIONS = [{
   up: db => db.exec(
     "CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts_vocab USING fts5vocab(documents_fts, 'row');"
   ),
+}, {
+  version: 10,
+  // The session hooks used to fire for our own model subprocesses, so the meter
+  // recorded the system pushing notes at itself — 913 of 1421 rows where this
+  // was measured. isBatchCall stopped the collection but could not clean up
+  // behind itself, and nothing on a row says which kind it is, so every
+  // aggregate mixed the two populations with no way to notice from the data.
+  //
+  // A session is ours iff it emitted a hint for one of our own prompts AND
+  // never pulled a note. The second half is what stops a human who pastes one
+  // of those prompts from losing their session: they have tools.
+  //
+  // Matches nothing on a fresh install. Going pending again would mean the
+  // batch guard has regressed, which is worth the `kb migrate` it will demand.
+  name: 'drop meter rows logged for the system talking to itself',
+  applied: db => !hasTable(db, 'retrievals')
+    || !db.prepare(`SELECT 1 FROM (${OWN_SUBPROCESS_SESSIONS}) LIMIT 1`).get(),
+  up: db => db.exec(`DELETE FROM retrievals WHERE session IN (${OWN_SUBPROCESS_SESSIONS})`),
 }];
 
 // Bring a database up to the schema this code needs. `kb migrate` and tests are
