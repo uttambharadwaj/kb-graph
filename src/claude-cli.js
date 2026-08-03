@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { onChildDone } from './child-exit.js';
 
 // Shared "run the local claude CLI in print mode, get JSON back" helper.
 // Reuses the OAuth session — no API key needed. Factored out of classify/classifier.js
@@ -54,7 +55,8 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = 
     let stderr = '';
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
-    proc.on('close', (code, signal) => {
+
+    onChildDone(proc, (code, signal) => {
       if (code === 0) return resolve(stdout);
       const elapsed = Date.now() - started;
       // spawn's timeout kills with SIGTERM; the claude shim surfaces that as

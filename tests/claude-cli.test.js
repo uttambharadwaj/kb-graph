@@ -12,6 +12,11 @@ chmodSync(fakeEcho, 0o755);
 const fakeSleep = join(tmp, 'fake-sleep.sh');
 writeFileSync(fakeSleep, '#!/bin/sh\nsleep 5\n');
 chmodSync(fakeSleep, 0o755);
+// Exits at once but leaves a descendant holding stdout — the shape that hung
+// for 1800s in a debrief, because nothing was left for the timeout to kill.
+const fakeOrphan = join(tmp, 'fake-orphan.sh');
+writeFileSync(fakeOrphan, '#!/bin/sh\nsleep 30 &\nexec sleep 0.05\n');
+chmodSync(fakeOrphan, 0o755);
 const fakeEnv = join(tmp, 'fake-env.sh');
 writeFileSync(fakeEnv, '#!/bin/sh\necho "THINKING=$MAX_THINKING_TOKENS"\n');
 chmodSync(fakeEnv, 0o755);
@@ -43,6 +48,18 @@ describe('runClaude subprocess handling', () => {
     const mod = await import('../src/claude-cli.js?bin=env2');
     assert.match(await mod.runClaude('ignored'), /THINKING=2048/);
     delete process.env.MAX_THINKING_TOKENS;
+  });
+
+  // The test timeout is the assertion: without the flush window this call never
+  // settles at all, and a hang and a slow pass are indistinguishable otherwise.
+  it('answers once the child is dead even if a descendant holds its pipes', { timeout: 8000 }, async () => {
+    process.env.CLAUDE_PATH = fakeOrphan;
+    const mod = await import('../src/claude-cli.js?bin=orphan');
+    const started = Date.now();
+    // Exit 0 with no JSON on stdout, so the call resolves and the parse fails
+    // downstream — the point is that it answers, well inside its own timeout.
+    assert.strictEqual(await mod.runClaude('ignored', { timeout: 120000 }), '');
+    assert.ok(Date.now() - started < 5000, 'must not wait out the full timeout');
   });
 
   it('names the timeout instead of a bare exit code when the child is killed', async () => {
