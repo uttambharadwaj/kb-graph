@@ -6,8 +6,7 @@ import { join } from 'path';
 
 import {
   findPreferredKnowledgeBaseNode,
-  shouldReexecWithPreferredNode,
-} from '../src/cli/runtime-node.js';
+  shouldReexecWithPreferredNode, stableNodePath } from '../src/cli/runtime-node.js';
 
 const tempDirs = [];
 
@@ -59,5 +58,37 @@ describe('runtime node pinning', () => {
     assert.strictEqual(shouldReexecWithPreferredNode(null, '/current/node'), false);
     assert.strictEqual(shouldReexecWithPreferredNode('/current/node', '/current/node'), false);
     assert.strictEqual(shouldReexecWithPreferredNode('/preferred/node', '/current/node'), true);
+  });
+});
+
+// Homebrew's Cellar path names one patch release. Persisting it into a job,
+// hook or MCP registration means the next `brew upgrade` deletes the runtime
+// out from under all of them at once — and the MCP server fails at spawn,
+// before the re-exec logic above can run.
+describe('stableNodePath', () => {
+  const CELLAR = '/opt/homebrew/Cellar/node@22/22.23.1/bin/node';
+  const OPT = '/opt/homebrew/opt/node@22/bin/node';
+
+  it('prefers the version-stable symlink over the versioned directory', () => {
+    assert.strictEqual(
+      stableNodePath(CELLAR, { exists: () => true, resolve: () => '/real/node' }), OPT);
+  });
+
+  it('keeps the literal path when no stable symlink exists', () => {
+    assert.strictEqual(stableNodePath(CELLAR, { exists: () => false, resolve: () => '/real/node' }), CELLAR);
+  });
+
+  // A symlink pointing somewhere else would quietly move every artifact onto a
+  // runtime nobody chose, which is worse than the pin it replaces.
+  it('refuses a symlink that resolves to a different binary', () => {
+    assert.strictEqual(
+      stableNodePath(CELLAR, { exists: () => true, resolve: (p) => (p === OPT ? '/other/node' : '/real/node') }),
+      CELLAR);
+  });
+
+  it('leaves a path that was never Cellar-shaped alone', () => {
+    for (const path of ['/usr/bin/node', '/usr/local/bin/node', '/home/u/.nvm/versions/node/v22.0.0/bin/node']) {
+      assert.strictEqual(stableNodePath(path, { exists: () => true, resolve: () => 'x' }), path);
+    }
   });
 });

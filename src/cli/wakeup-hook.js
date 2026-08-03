@@ -16,8 +16,10 @@ import { unresolvableHookCommands } from './setup-hooks.js';
 function staleHookWarnings(home = homedir()) {
   try {
     const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
-    return unresolvableHookCommands(settings)
-      .map(h => `${h.event} hook cannot run: ${h.missing.join(', ')} missing — re-run 'kb setup' if this is a moved checkout`);
+    return unresolvableHookCommands(settings).flatMap(h => [
+      ...(h.missing.length ? [`${h.event} hook cannot run: ${h.missing.join(', ')} missing — re-run 'kb setup' if this is a moved checkout`] : []),
+      ...(h.pinned.length ? [`${h.event} hook is pinned to one package version and dies on the next upgrade: ${h.pinned.join(', ')} — re-run 'kb setup'`] : []),
+    ]);
   } catch {
     return [];
   }

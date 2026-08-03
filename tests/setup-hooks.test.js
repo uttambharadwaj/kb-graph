@@ -120,3 +120,20 @@ test('does not mistake a slash-command for a path', () => {
   assert.deepEqual(
     unresolvableHookCommands(hookSettings('echo /style-review', 'PreToolUse'), { exists: nothingExists }), []);
 });
+
+// A Cellar path resolves right up until the package is upgraded, at which point
+// every artifact holding one dies in the same hour. Reporting only what has
+// already stopped resolving finds the corpse, never the pin.
+test('reports a version-pinned path before it stops resolving', () => {
+  const pinned = '/opt/homebrew/Cellar/node@22/22.23.1/bin/node';
+  const found = unresolvableHookCommands(hookSettings(`${pinned} /opt/kb/bin/kb.js wakeup-hook`), { exists: () => true });
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].missing, [], 'nothing is missing yet — that is the point');
+  assert.deepEqual(found[0].pinned, [pinned]);
+});
+
+test('a version-stable symlink is not reported as pinned', () => {
+  assert.deepEqual(
+    unresolvableHookCommands(hookSettings('/opt/homebrew/opt/node@22/bin/node /opt/kb/bin/kb.js wakeup-hook'), { exists: () => true }),
+    []);
+});

@@ -66,6 +66,12 @@ const absolutePathsIn = (text) => [...text.matchAll(ABSOLUTE_PATH)]
   .map(m => m[1])
   .filter(path => !path.includes('$'));
 
+// A path that names one Homebrew patch release. It resolves today and stops
+// resolving the moment that package is upgraded, so it is a death already
+// scheduled rather than one that has happened — worth reporting while there is
+// still a working system to fix it in.
+const VERSION_PINNED = /\/Cellar\/[^/]+\/[^/]+\//;
+
 export function unresolvableHookCommands(settings, { exists = existsSync, read = readFileSync } = {}) {
   const out = [];
   const scriptPaths = (path) => {
@@ -83,8 +89,10 @@ export function unresolvableHookCommands(settings, { exists = existsSync, read =
         const command = hook.command ?? '';
         const direct = absolutePathsIn(command);
         const indirect = direct.filter(exists).flatMap(scriptPaths);
-        const missing = [...direct, ...indirect].filter(path => !exists(path));
-        if (missing.length) out.push({ event, command, missing: [...new Set(missing)] });
+        const all = [...new Set([...direct, ...indirect])];
+        const missing = all.filter(path => !exists(path));
+        const pinned = all.filter(path => !missing.includes(path) && VERSION_PINNED.test(path));
+        if (missing.length || pinned.length) out.push({ event, command, missing, pinned });
       }
     }
   }
