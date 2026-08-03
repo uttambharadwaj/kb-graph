@@ -46,12 +46,15 @@ export function deliver(line, out = process.stdout) {
   });
 }
 
-// Task notifications and system reminders reach this hook the same way a typed
-// prompt does, wrapped in a tag. Nobody said them to us, so hinting on them is
-// noise and metering them measures the harness — the same reason slash commands
-// are skipped below. The whole prompt must be the one element: merely *opening*
-// with a tag would also swallow someone asking why their <div> renders wrong.
-const HARNESS_ENVELOPE = /^<([a-z][a-z-]*)>[\s\S]*<\/\1>$/i;
+// Task notifications, system reminders and subagent reports reach this hook the
+// same way a typed prompt does, wrapped in a tag. Nobody said them to us, so
+// hinting on them is noise and metering them measures the harness — the same
+// reason slash commands are skipped below. The whole prompt must be the one
+// element: merely *opening* with a tag would also swallow someone asking why
+// their <div> renders wrong. The attributes are not optional decoration —
+// `<agent-message from="...">` is how a subagent's report arrives, and matching
+// only bare tags let 11kB of one through onto the meter.
+const HARNESS_ENVELOPE = /^<([a-z][a-z-]*)(?:\s[^>]*)?>[\s\S]*<\/\1>$/i;
 
 async function readStdin() {
   let data = '';

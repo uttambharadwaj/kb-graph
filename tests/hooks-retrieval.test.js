@@ -113,16 +113,25 @@ describe('prompt-hint retrieval logging', () => {
     for (const prompt of [
       '<task-notification>\n<task-id>abc123</task-id>\n<status>failed</status>\n</task-notification>',
       '<system-reminder>the task list has not been used recently, consider updating it</system-reminder>',
+      // The attributes are how a subagent's report arrives, and an envelope
+      // filter that only knows bare tags passed the whole report through.
+      '<agent-message from="scheduled-audit">\nRead-only audit complete, nothing to report.\n</agent-message>',
+      "<agent-message from='scheduled-audit' to='main'>done</agent-message>",
     ]) runHook('prompt-hint', { session_id: 'sess-envelope', prompt });
     const after = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'hint'").get().c;
     assert.strictEqual(after, before, 'a harness envelope is not a user prompt');
 
     // Opening with a tag is not enough: the prompt has to BE the element.
-    runHook('prompt-hint', { session_id: 'sess-markup', prompt: '<div> is not rendering right on the settings page' });
-    assert.strictEqual(
-      db.prepare("SELECT COUNT(*) c FROM retrievals WHERE session = 'sess-markup'").get().c, 1,
-      'someone asking about markup is still a user',
-    );
+    for (const [session, prompt] of [
+      ['sess-markup', '<div> is not rendering right on the settings page'],
+      ['sess-quoting', '<agent-message from="a">it failed</agent-message> what do you make of that'],
+    ]) {
+      runHook('prompt-hint', { session_id: session, prompt });
+      assert.strictEqual(
+        db.prepare('SELECT COUNT(*) c FROM retrievals WHERE session = ?').get(session).c, 1,
+        'someone asking about markup, or quoting one, is still a user',
+      );
+    }
   });
 
   it('logs a miss when a real prompt clears no entry, so the hit rate keeps its denominator', () => {
