@@ -13,6 +13,7 @@ import {
   supersedeCandidates,
 } from '../src/db.js';
 import { addFact, invalidateFact } from '../src/facts.js';
+import { getToolDefinitions } from '../src/tools.js';
 
 describe('supersession migration', () => {
   it('adds the three columns and is idempotent (run initSchema twice)', () => {
@@ -140,5 +141,34 @@ describe('supersedeCandidates', () => {
 
     // The whole point: a proposal, never a mutation.
     assert.strictEqual(getDocument(staleNote).superseded_at, null, 'candidate detection must not write superseded_at');
+  });
+});
+
+describe('kb_supersede names what the pointer resolved to', () => {
+  const supersede = () => getToolDefinitions().find(t => t.name === 'kb_supersede');
+
+  it('echoes the replacement title, so a wrong-but-existing id is visible', async () => {
+    const stale = insertDocument({ title: 'the old reading', content: 'a', doc_type: 'lesson' });
+    const unrelated = insertDocument({ title: 'something else entirely', content: 'b', doc_type: 'lesson' });
+
+    const text = (await supersede().handler({ id: stale.id, replacement_id: unrelated.id })).content[0].text;
+    // The incident this guards: an id guessed one ahead of the last write, which
+    // existed and belonged to someone else. Only the title says so.
+    assert.match(text, /something else entirely/);
+    assert.match(text, new RegExp(`#${unrelated.id}`));
+  });
+
+  it('says nothing about a replacement when there is none', async () => {
+    const orphan = insertDocument({ title: 'wrong, and nothing replaces it', content: 'c', doc_type: 'lesson' });
+    const text = (await supersede().handler({ id: orphan.id, reason: 'measured and false' })).content[0].text;
+    assert.match(text, /superseded/);
+    assert.doesNotMatch(text, / by #/);
+  });
+
+  it('still refuses a replacement id that does not exist', async () => {
+    const doc = insertDocument({ title: 'target', content: 'd', doc_type: 'lesson' });
+    const result = await supersede().handler({ id: doc.id, replacement_id: 999999 });
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /999999 not found/);
   });
 });
