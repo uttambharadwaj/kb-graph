@@ -28,6 +28,9 @@ export async function ingest(pathArg) {
     const doc = await ingestFile(fullPath);
     if (doc) {
       console.log(`  Ingested: ${doc.title} (${doc.doc_type}, ${doc.file_size} bytes)`);
+      // Indexed but unembedded is half-ingested: full-text search finds it,
+      // semantic search and dedup never will.
+      if (doc.embedError) console.log(`  Not embedded: ${doc.embedError}`);
     } else {
       console.log('  Skipped: unsupported file type');
     }

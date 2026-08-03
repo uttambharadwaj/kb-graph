@@ -58,8 +58,9 @@ export function installClaudeHooks({ home, nodeBin, kbJsPath }) {
 // bitten: the hook command named a shell script that existed, and the dead
 // paths were the interpreter and target pinned inside it. Checking only the
 // command would have passed that install clean.
+// Two segments minimum: a slash-prefixed word with no second segment is a
+// slash-command, not a path.
 const ABSOLUTE_PATH = /(?:^|[\s"'=])(\/[^\s"':]+\/[^\s"':]+)/g;
-// A slash-prefixed word with no second segment is a slash-command, not a path.
 
 const absolutePathsIn = (text) => [...text.matchAll(ABSOLUTE_PATH)]
   .map(m => m[1])

@@ -33,7 +33,7 @@ export const MAX_SESSIONS_PER_RUN = 30;
 // being wrong the other way corrupts deliberate capture, which is the capture
 // worth having.
 const QUIESCENT_MS = 30 * 60 * 1000;
-export const isInFlight = (mtime, now = Date.now()) => now - mtime < QUIESCENT_MS;
+const isInFlight = (mtime) => Date.now() - mtime < QUIESCENT_MS;
 
 // Fact extraction is off unless asked for. It runs kb_extract over every chunk
 // of every transcript, which is where nearly all of this job's token cost went,

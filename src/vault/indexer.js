@@ -168,7 +168,7 @@ async function embedIfMissing(relPath, embeddings, errors) {
   const has = getDb().prepare('SELECT 1 FROM embeddings WHERE document_id = ? LIMIT 1').get(vf.document_id);
   if (has) return 0;
   const doc = getDb().prepare('SELECT content FROM documents WHERE id = ?').get(vf.document_id);
-  if (!doc?.content) return 0;
+  if (!doc?.content?.trim()) return 0;   // same guard storeEmbedding applies, or this retries forever
   try {
     return await embeddings.storeEmbedding(vf.document_id, doc.content, relPath);
   } catch (embErr) {

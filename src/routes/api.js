@@ -78,8 +78,10 @@ router.post('/api/documents', upload.array('files'), async (req, res) => {
 
       try {
         writeFileSync(tempPath, file.buffer);
-        const doc = await ingestFile(tempPath);
-        if (doc) {
+        const ingested = await ingestFile(tempPath);
+        if (ingested) {
+          // The embed outcome is internal bookkeeping; the response is the row.
+          const { embedded: _embedded, embedError: _embedError, ...doc } = ingested;
           // Fix title and source to use original filename
           const origName = file.originalname;
           const title = origName.replace(/\.[^.]+$/, '');
