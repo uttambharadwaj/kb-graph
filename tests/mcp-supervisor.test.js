@@ -124,6 +124,8 @@ describe('mcp supervisor', () => {
     // that stops issuing at 200ms. A single fixed-length burst misses it
     // outright about one run in eight on a loaded machine, and then fails for
     // having nothing to measure rather than for anything the supervisor did.
+    // Deliberately not `until`: its poll gap between attempts is a hole the
+    // one-and-only swap can fall into, which is a fresh race, not this one.
     const marker = (answer) => answer.split(':')[1];
     const seen = [];
     const deadline = Date.now() + DEADLINE_MS;
