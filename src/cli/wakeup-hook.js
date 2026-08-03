@@ -1,10 +1,27 @@
 // SessionStart hook: print a compact KB briefing to stdout so the harness
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
+import { readFileSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { getDb, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
+import { unresolvableHookCommands } from './setup-hooks.js';
+
+// A hook whose paths have gone stale fails exactly like one with nothing to
+// say, so the only place it can surface is a briefing that goes looking. This
+// runs inside the briefing and must never be the reason one fails to print.
+function staleHookWarnings(home = homedir()) {
+  try {
+    const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
+    return unresolvableHookCommands(settings)
+      .map(h => `${h.event} hook cannot run: ${h.missing.join(', ')} missing — re-run 'kb setup' if this is a moved checkout`);
+  } catch {
+    return [];
+  }
+}
 
 async function readStdin() {
   let data = '';
@@ -44,9 +61,10 @@ export async function wakeupHook() {
     const showTier = tiersDiscriminate(tiers);
 
     const health = getHealth({ recordBacklog: true });
-    const healthLine = health.ok
+    const warnings = [...health.warnings, ...staleHookWarnings()];
+    const healthLine = warnings.length === 0
       ? `health: OK (embeddings ${health.embeddings}, summaries ${health.summaries})`
-      : `health: ⚠ ${health.warnings.join(' | ')}`;
+      : `health: ⚠ ${warnings.join(' | ')}`;
 
     const states = db.prepare(
       "SELECT vf.title, vf.document_id, d.tier, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"

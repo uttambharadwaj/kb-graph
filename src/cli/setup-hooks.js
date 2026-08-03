@@ -45,3 +45,47 @@ export function installClaudeHooks({ home, nodeBin, kbJsPath }) {
   renameSync(`${path}.kb-tmp`, path);
   return { path, backup };
 }
+
+// Hook commands whose absolute paths no longer exist.
+//
+// A hook is a fire-and-forget subprocess: the host runs it, ignores what it
+// prints, and carries on. So a command naming a checkout that has moved, or a
+// Node binary a `brew upgrade` replaced, fails identically to one that had
+// nothing to say — and the surface it powers goes quiet with nothing anywhere
+// reporting it.
+//
+// One level of indirection is followed, because that is where this has actually
+// bitten: the hook command named a shell script that existed, and the dead
+// paths were the interpreter and target pinned inside it. Checking only the
+// command would have passed that install clean.
+const ABSOLUTE_PATH = /(?:^|[\s"'=])(\/[^\s"':]+\/[^\s"':]+)/g;
+// A slash-prefixed word with no second segment is a slash-command, not a path.
+
+const absolutePathsIn = (text) => [...text.matchAll(ABSOLUTE_PATH)]
+  .map(m => m[1])
+  .filter(path => !path.includes('$'));
+
+export function unresolvableHookCommands(settings, { exists = existsSync, read = readFileSync } = {}) {
+  const out = [];
+  const scriptPaths = (path) => {
+    if (!path.endsWith('.sh')) return [];
+    // Assignments only. A path in a comment or a usage string is documentation,
+    // and warning about it would train the reader to ignore this line.
+    try {
+      return [...read(path, 'utf8').matchAll(/^\s*[A-Za-z_][A-Za-z0-9_]*=("?)(\/[^\s"']+)\1/gm)].map(m => m[2]);
+    } catch { return []; }
+  };
+
+  for (const [event, groups] of Object.entries(settings?.hooks ?? {})) {
+    for (const group of groups ?? []) {
+      for (const hook of group.hooks ?? []) {
+        const command = hook.command ?? '';
+        const direct = absolutePathsIn(command);
+        const indirect = direct.filter(exists).flatMap(scriptPaths);
+        const missing = [...direct, ...indirect].filter(path => !exists(path));
+        if (missing.length) out.push({ event, command, missing: [...new Set(missing)] });
+      }
+    }
+  }
+  return out;
+}
