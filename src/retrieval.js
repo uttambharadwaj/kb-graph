@@ -41,6 +41,24 @@ export const PUSH_SURFACES = [SURFACE.BRIEFING, SURFACE.HINT];
 // time a channel is added.
 export const READ_SURFACES = [SURFACE.READ, SURFACE.REST_READ];
 
+// Being told to go and look is the one label a person produces unprompted: it
+// says the retrieval that should have happened didn't, in their words, at the
+// moment it failed. Everything else the meter holds is the system describing
+// its own behaviour.
+//
+// Deliberately narrow. These prompts are read off a store whose owner spends
+// whole sessions working ON the knowledge base, so anything that fires on
+// merely *discussing* it — "silent fails on the kb", "pin this in the kb" —
+// measures the topic instead of the failure. Widen only against a real miss.
+const KB = String.raw`(?:kb|knowledge[ -]?base)`;
+const KB_NUDGE = new RegExp([
+  String.raw`\b(?:look|check|search|read|consult|grep|query)\s+(?:in|at|into|through|up|on)?\s*(?:the\s+)?${KB}\b`,
+  String.raw`\b(?:any|some|no)thing\s+(?:\w+\s+){0,3}?in\s+(?:the\s+)?${KB}\b`,
+  String.raw`\bkb_(?:search|read|context)\b`,
+].join('|'), 'i');
+
+export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
+
 // session_id from Claude Code's hook stdin JSON is the only *documented*
 // source — stable across every hook fired in one session. Stdio MCP
 // subprocesses (kb_read/kb_search/kb_context handlers) get no such id from

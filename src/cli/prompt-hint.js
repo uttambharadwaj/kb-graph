@@ -10,6 +10,13 @@ import { tierLabel, tiersDiscriminate } from '../tiers.js';
 
 const MAX_HINTS = 3;
 
+// Task notifications and system reminders reach this hook the same way a typed
+// prompt does, wrapped in a tag. Nobody said them to us, so hinting on them is
+// noise and metering them measures the harness — the same reason slash commands
+// are skipped below. The whole prompt must be the one element: merely *opening*
+// with a tag would also swallow someone asking why their <div> renders wrong.
+const HARNESS_ENVELOPE = /^<([a-z][a-z-]*)>[\s\S]*<\/\1>$/i;
+
 async function readStdin() {
   let data = '';
   for await (const chunk of process.stdin) data += chunk;
@@ -24,8 +31,10 @@ export async function promptHint() {
     const raw = await readStdin();
     const hookInput = JSON.parse(raw);
     const prompt = hookInput?.prompt || '';
-    // Too short to mean anything, or a slash command with its own routing.
-    if (prompt.trim().length < 20 || prompt.trim().startsWith('/')) process.exit(0);
+    // Too short to mean anything, a slash command with its own routing, or
+    // something the harness said rather than the user.
+    const trimmed = prompt.trim();
+    if (trimmed.length < 20 || trimmed.startsWith('/') || HARNESS_ENVELOPE.test(trimmed)) process.exit(0);
 
     const results = relevantNotes(prompt, { limit: MAX_HINTS });
     // A prompt the KB had nothing for is the measurement, not the absence of one:
