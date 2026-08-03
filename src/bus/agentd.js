@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
+import { onChildDone } from '../child-exit.js';
 import { getBusDb } from './db.js';
 import { getBusPollMs } from './config.js';
 import { normalizeCwd } from './context.js';
@@ -237,7 +238,11 @@ async function runExecAgent(agent, message) {
       updateRun(runId, { status: 'failed', pid: child.pid, stdout, stderr, error: error.message });
       resolve(getBusRun(runId));
     });
-    child.on('close', code => {
+    // A worker command is arbitrary, so it is free to leave a background
+    // descendant holding stdout — which never closes the pipes and would leave
+    // this run 'running' for good. There is no timeout on this path to fall
+    // back on: the worker is meant to take as long as it takes.
+    onChildDone(child, code => {
       updateRun(runId, {
         status: code === 0 ? 'completed' : 'failed',
         pid: child.pid,
