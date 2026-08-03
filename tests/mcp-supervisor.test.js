@@ -117,17 +117,38 @@ describe('mcp supervisor', () => {
     // A burst rather than one call: spread across the debounce, the kill and
     // the handshake replay, some of these are certain to land while there is no
     // process to send them to, which one well-timed call cannot guarantee.
-    const answers = [];
-    for (let i = 0; i < 20; i += 1) {
-      answers.push(call('whoami'));
-      await settle(10);
+    //
+    // Kept up until the new child has answered something, because the window
+    // opens on an fs event rather than on a clock this test controls: measured
+    // at 33ms after the write typically, and 275ms under load, against a burst
+    // that stops issuing at 200ms. A single fixed-length burst misses it
+    // outright about one run in eight on a loaded machine, and then fails for
+    // having nothing to measure rather than for anything the supervisor did.
+    // Deliberately not `until`: its poll gap between attempts is a hole the
+    // one-and-only swap can fall into, which is a fresh race, not this one.
+    const marker = (answer) => answer.split(':')[1];
+    const seen = [];
+    const deadline = Date.now() + DEADLINE_MS;
+    while (!seen.some(a => marker(a) === 'three')) {
+      assert.ok(Date.now() < deadline, `timed out after ${DEADLINE_MS}ms waiting for the swap`);
+      const burst = [];
+      for (let i = 0; i < 20; i += 1) {
+        burst.push(call('whoami'));
+        await settle(10);
+      }
+      seen.push(...await Promise.all(burst));
     }
-    const seen = await Promise.all(answers);
+
+    // The first calls go out before the swap can have started, so both children
+    // are represented and the collection genuinely spans the blackout.
+    assert.ok(seen.some(a => marker(a) === 'one'), `nothing was served by the original child: ${seen}`);
     // `ready` on every one is the queue doing its job: nothing reaches a new
     // child until its replayed handshake has completed, so no call is ever
     // served by a half-initialized process.
-    assert.ok(seen.every((a) => /^\d+:(one|three):supervisor-test:ready$/.test(a)), `unanswered or malformed: ${seen}`);
-    assert.ok(seen.some((a) => a.split(':')[1] === 'three'), 'the burst must have straddled the swap');
+    assert.ok(
+      seen.every((a) => /^\d+:(one|three):supervisor-test:ready$/.test(a)),
+      `unanswered or malformed: ${seen}`,
+    );
   });
 
   // A cancelled request never gets a response, so an id left in the in-flight
