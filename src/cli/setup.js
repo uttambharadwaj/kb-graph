@@ -8,6 +8,7 @@ import { execFileSync } from 'child_process';
 import { registerAgents } from './mcp-register.js';
 import { installClaudeHooks } from './setup-hooks.js';
 import { installJobs } from './setup-jobs.js';
+import { stableNodePath } from './runtime-node.js';
 
 const HOME = homedir();
 // fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication)
@@ -192,7 +193,7 @@ After=network.target
 Type=simple
 User=${process.env.USER || 'root'}
 WorkingDirectory=${PROJECT_ROOT}
-ExecStart=${process.execPath} ${join(PROJECT_ROOT, 'bin', 'kb.js')} start
+ExecStart=${stableNodePath()} ${join(PROJECT_ROOT, 'bin', 'kb.js')} start
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
@@ -220,7 +221,7 @@ function installLaunchd() {
   <string>com.knowledgebase.server</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${process.execPath}</string>
+    <string>${stableNodePath()}</string>
     <string>${join(PROJECT_ROOT, 'bin', 'kb.js')}</string>
     <string>start</string>
   </array>
@@ -477,7 +478,7 @@ function applyConfig(cfg) {
   // 4. Claude Code hooks: session briefing + per-prompt KB hints
   if ((cfg.agents || []).includes('claude')) {
     try {
-      const r = installClaudeHooks({ home: HOME, nodeBin: process.execPath, kbJsPath: join(PROJECT_ROOT, 'bin', 'kb.js') });
+      const r = installClaudeHooks({ home: HOME, nodeBin: stableNodePath(), kbJsPath: join(PROJECT_ROOT, 'bin', 'kb.js') });
       results.steps.push({ action: 'Installed Claude Code hooks (briefing + hints)', path: r.path });
       if (r.backup) results.steps.push({ action: 'Backed up prior settings.json', path: r.backup });
     } catch (err) {
@@ -489,7 +490,7 @@ function applyConfig(cfg) {
   let claudePath = null;
   try { claudePath = execFileSync('which', ['claude']).toString().trim(); } catch { /* optional */ }
   const jobs = installJobs({
-    home: HOME, nodeBin: process.execPath, kbRoot: PROJECT_ROOT,
+    home: HOME, nodeBin: stableNodePath(), kbRoot: PROJECT_ROOT,
     vaultPath: cfg.vaultPath, claudePath, load: cfg.loadJobs !== false,
   });
   results.steps.push(...jobs.steps);

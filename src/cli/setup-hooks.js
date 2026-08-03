@@ -1,5 +1,6 @@
 // src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code settings
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, renameSync } from 'fs';
+import { isVersionPinned } from './runtime-node.js';
 import { join } from 'path';
 
 const HOOK_SPECS = [
@@ -83,8 +84,12 @@ export function unresolvableHookCommands(settings, { exists = existsSync, read =
         const command = hook.command ?? '';
         const direct = absolutePathsIn(command);
         const indirect = direct.filter(exists).flatMap(scriptPaths);
-        const missing = [...direct, ...indirect].filter(path => !exists(path));
-        if (missing.length) out.push({ event, command, missing: [...new Set(missing)] });
+        const all = [...new Set([...direct, ...indirect])];
+        const missing = all.filter(path => !exists(path));
+        // Resolves today, stops the moment that package is upgraded: a death already
+        // scheduled rather than one that has happened.
+        const pinned = all.filter(path => !missing.includes(path) && isVersionPinned(path));
+        if (missing.length || pinned.length) out.push({ event, command, missing, pinned });
       }
     }
   }

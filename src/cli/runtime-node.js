@@ -71,3 +71,31 @@ export async function lockPreferredNodeRuntime(scriptUrl, homeDir = homedir()) {
   if (result.error) throw result.error;
   process.exit(result.status ?? 1);
 }
+
+// Homebrew keeps a versioned Cellar directory plus an `opt` symlink that
+// follows upgrades. Writing the Cellar path into a job, hook or MCP
+// registration pins it to one patch release, and the next `brew upgrade`
+// deletes that directory out from under every one of them in the same hour —
+// the MCP server fails at spawn, before any of this file can run and re-exec.
+//
+// Not hypothetical: the bus Stop hook on the machine this was found on pins
+// node@22/22.21.1_4, which no longer exists, and has been a silent no-op since.
+const CELLAR_PATH = /^(?<prefix>.*)\/Cellar\/(?<pkg>[^/]+)\/[^/]+\/(?<rest>.+)$/;
+
+// One owner for "this path names a single package version". The hook check asks
+// the same question about paths it did not produce, and two spellings of it
+// would drift into disagreeing about what is safe.
+export const isVersionPinned = (path) => CELLAR_PATH.test(path);
+
+export function stableNodePath(execPath = process.execPath, { exists = existsSync, resolve = realpathSync } = {}) {
+  const cellar = CELLAR_PATH.exec(execPath);
+  if (!cellar) return execPath;
+  const { prefix, pkg, rest } = cellar.groups;
+  const stable = `${prefix}/opt/${pkg}/${rest}`;
+  try {
+    // Same binary, or nothing: an opt symlink pointing at a different version
+    // would quietly move every artifact onto a runtime nobody chose.
+    if (exists(stable) && resolve(stable) === resolve(execPath)) return stable;
+  } catch { /* unreadable link — the literal path is the safe answer */ }
+  return execPath;
+}
