@@ -2,6 +2,7 @@
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
+import { LOGS_DIR } from '../paths.js';
 
 export const JOBS = [
   { name: 'harvest', args: ['bin/kb.js', 'harvest'], schedule: { calendar: { Hour: 3, Minute: 30 } }, onCalendar: '*-*-* 03:30:00' },
@@ -49,9 +50,9 @@ ${cmd}
     </array>
 ${sched}
     <key>StandardOutPath</key>
-    <string>/tmp/kb-${job.name}.log</string>
+    <string>${xmlEscape(join(opts.logsDir, `${job.name}.log`))}</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/kb-${job.name}.err</string>
+    <string>${xmlEscape(join(opts.logsDir, `${job.name}.err`))}</string>
     <key>EnvironmentVariables</key>
     <dict>
 ${Object.entries(jobEnv(job, opts)).map(([k, v]) => `        <key>${k}</key>\n        <string>${xmlEscape(v)}</string>`).join('\n')}
@@ -86,9 +87,17 @@ WantedBy=timers.target
   return { service, timer };
 }
 
-export function installJobs({ home, nodeBin, kbRoot, vaultPath, claudePath, harvestFacts = process.env.KB_HARVEST_FACTS, load = true }) {
-  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts };
+export function installJobs({ home, nodeBin, kbRoot, vaultPath, claudePath, harvestFacts = process.env.KB_HARVEST_FACTS, load = true, logsDir = LOGS_DIR }) {
+  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts, logsDir };
   const steps = [];
+  // launchd does not create the directory it is told to redirect into; a
+  // missing one makes the job fail before it runs, with nowhere to say so.
+  try {
+    mkdirSync(logsDir, { recursive: true });
+  } catch (err) {
+    steps.push({ action: 'Failed to create job log directory', error: err.message });
+    return { steps };
+  }
   if (process.platform === 'darwin') {
     const dir = join(home, 'Library', 'LaunchAgents');
     try {

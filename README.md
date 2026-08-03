@@ -322,7 +322,7 @@ All agents share one brain: what one learns in a session, the others have in the
 
 ## Running as a service
 
-`kb setup` installs the scheduled jobs automatically (launchd on macOS, systemd user timers on Linux). To run the dashboard/API server itself as a Linux service, use `kb-server.service.example` or pick "systemd" in the wizard. Logs: `journalctl -u kb-server -f` (server) and `journalctl --user -u kb-harvest.service` or `/tmp/kb-*.log` on macOS (jobs).
+`kb setup` installs the scheduled jobs automatically (launchd on macOS, systemd user timers on Linux). To run the dashboard/API server itself as a Linux service, use `kb-server.service.example` or pick "systemd" in the wizard. Logs: `journalctl -u kb-server -f` (server) and `journalctl --user -u kb-harvest.service` or `~/.knowledge-base/logs/*.log` on macOS (jobs). Job logs live beside the data rather than in `/tmp`, where a weekly job's log is reaped before its next run.
 
 ## Workflow templates
 
