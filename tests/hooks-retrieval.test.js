@@ -5,6 +5,8 @@ import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { execFileSync } from 'child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { getDb } from '../src/db.js';
@@ -134,5 +136,51 @@ describe('prompt-hint retrieval logging', () => {
     assert.ok(row, 'expected a miss row for a prompt that surfaced nothing');
     assert.strictEqual(row.doc_id, null, 'a miss is recorded as a NULL doc_id, not an absent row');
     assert.strictEqual(row.query, prompt);
+  });
+});
+
+// The intermittent "Failed to write to socket" on prompt submit has never been
+// attributable to a hook, because a hook that fails and one that had nothing to
+// say produce the same thing: no output, no row, no trace.
+describe('prompt-hint leaves a marker when it fails', () => {
+  // Its own KB dir, holding a kb.db that is not a database — a failure the hook
+  // meets on the read path, where a real one would happen.
+  const broken = mkdtempSync(join(tmpdir(), 'kb-hook-fail-'));
+  const errorLog = join(broken, 'logs', 'prompt-hint-errors.log');
+  const logLines = () => (existsSync(errorLog) ? readFileSync(errorLog, 'utf8').trim().split('\n').filter(Boolean) : []);
+
+  it('records the failure instead of swallowing it, and still injects nothing', () => {
+    writeFileSync(join(broken, 'kb.db'), 'not a sqlite file');
+    const stdout = runHook(
+      'prompt-hint',
+      { session_id: 'sess-hook-failure', prompt: 'a prompt long enough to clear the hint length gate' },
+      { KB_DIR: broken },
+    );
+
+    assert.strictEqual(stdout, '', 'a failed hint still injects nothing — non-blocking is the rule');
+    const lines = logLines();
+    assert.strictEqual(lines.length, 1, 'exactly one line per failure');
+    assert.match(lines[0], /^\d{4}-\d\d-\d\dT[\d:.]+Z hint: /);
+  });
+
+  it('says nothing when the hook works', () => {
+    const healthy = join(process.env.KB_DIR, 'logs', 'prompt-hint-errors.log');
+    runHook('prompt-hint', { session_id: 'sess-hook-ok', prompt: 'a prompt long enough to clear the hint length gate' });
+    assert.strictEqual(existsSync(healthy), false, 'a working hook writes no error line');
+  });
+});
+
+// Node hands EPIPE to this callback when the reader is gone — verified directly
+// against a real pipe, since a test that kills a reader mid-write is a race.
+// What is checked here is the wiring: an errored write must be recorded as one.
+describe('a hint that is written but not delivered says so', () => {
+  it('records the failed write under its own stage', async () => {
+    const { deliver, HOOK_ERROR_LOG } = await import('../src/cli/prompt-hint.js');
+    const refuses = { write: (_data, cb) => cb(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })) };
+
+    await deliver('KB HINT: something', refuses);
+
+    const lines = readFileSync(HOOK_ERROR_LOG, 'utf8').trim().split('\n');
+    assert.match(lines.at(-1), /deliver: .*EPIPE/);
   });
 });
