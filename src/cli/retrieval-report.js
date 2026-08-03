@@ -1,5 +1,5 @@
 import { getDb } from '../db.js';
-import { PUSH_SURFACES, READ_SURFACES, SURFACE } from '../retrieval.js';
+import { isKbNudge, PUSH_SURFACES, READ_SURFACES, SURFACE } from '../retrieval.js';
 
 function pct(n, total) {
   return total > 0 ? `${((n / total) * 100).toFixed(1)}%` : 'n/a';
@@ -15,6 +15,34 @@ function placeholders(values) {
 // ANY surface — coverage measures whether the read path has touched it at
 // all, not specifically whether someone opened it.
 const RETRIEVED_DOC_IDS = 'SELECT DISTINCT doc_id FROM retrievals WHERE doc_id IS NOT NULL';
+
+// Every prompt long enough to score leaves one row per note it surfaced, or a
+// single null-doc row when it declined, so the prompt text is already here and
+// the labelling applies to history instead of starting a denominator at zero.
+// What each nudge is worth is the state of the prompt *before* it: told to look
+// right after the hint declined is that decline graded by a person.
+function askedToLook(db) {
+  const events = db.prepare(`
+    SELECT session, query, MIN(created_at) AS at, MAX(doc_id IS NOT NULL) AS fired
+    FROM retrievals
+    WHERE surface = ? AND query IS NOT NULL AND session IS NOT NULL
+    GROUP BY session, query
+    ORDER BY session, at
+  `).all(SURFACE.HINT);
+
+  const after = { decline: 0, fire: 0, nothing: 0 };
+  let previous = null;
+  for (const event of events) {
+    if (previous && previous.session !== event.session) previous = null;
+    if (isKbNudge(event.query)) {
+      if (!previous) after.nothing++;
+      else if (previous.fired) after.fire++;
+      else after.decline++;
+    }
+    previous = event;
+  }
+  return { prompts: events.length, nudges: after.decline + after.fire + after.nothing, after };
+}
 
 export function retrievalReport(db = getDb()) {
   const coverage = db.prepare(`
@@ -91,11 +119,11 @@ export function retrievalReport(db = getDb()) {
     ORDER BY surface
   `).all();
 
-  return { coverage, byType, freshness, followThrough, missRate, sessionCoverage };
+  return { coverage, byType, freshness, followThrough, missRate, sessionCoverage, askedToLook: askedToLook(db) };
 }
 
 export function runRetrievalReportCli() {
-  const { coverage, byType, freshness, followThrough, missRate, sessionCoverage } = retrievalReport();
+  const { coverage, byType, freshness, followThrough, missRate, sessionCoverage, askedToLook } = retrievalReport();
 
   console.log('Retrieval Report');
   console.log('================');
@@ -112,6 +140,14 @@ export function runRetrievalReportCli() {
 
   const followed = followThrough.followed || 0;
   console.log(`\nHint follow-through: ${followed}/${followThrough.hints_emitted} hints led to a read of the same doc in the same session (${pct(followed, followThrough.hints_emitted)})`);
+
+  const { nudges, prompts, after } = askedToLook;
+  console.log(`\nAsked to look: ${nudges}/${prompts} prompts told the agent to go and check the knowledge base (${pct(nudges, prompts)})`);
+  if (nudges > 0) {
+    console.log(`  ${after.decline} came straight after a prompt the hint declined — those declines are graded wrong by a person`);
+    console.log(`  ${after.fire} after a prompt it fired on, ${after.nothing} opening a session`);
+  }
+  console.log('  Blind spot: prompts under 20 characters and slash commands never reach the meter, and a terse "check kb" is that shape');
 
   const push = sessionCoverage.push || 0;
   const pull = sessionCoverage.pull || 0;

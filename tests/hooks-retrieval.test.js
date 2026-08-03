@@ -105,6 +105,24 @@ describe('prompt-hint retrieval logging', () => {
     assert.strictEqual(after, before);
   });
 
+  it('logs nothing for markup the harness sent rather than the user', () => {
+    const db = getDb();
+    const before = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'hint'").get().c;
+    for (const prompt of [
+      '<task-notification>\n<task-id>abc123</task-id>\n<status>failed</status>\n</task-notification>',
+      '<system-reminder>the task list has not been used recently, consider updating it</system-reminder>',
+    ]) runHook('prompt-hint', { session_id: 'sess-envelope', prompt });
+    const after = db.prepare("SELECT COUNT(*) c FROM retrievals WHERE surface = 'hint'").get().c;
+    assert.strictEqual(after, before, 'a harness envelope is not a user prompt');
+
+    // Opening with a tag is not enough: the prompt has to BE the element.
+    runHook('prompt-hint', { session_id: 'sess-markup', prompt: '<div> is not rendering right on the settings page' });
+    assert.strictEqual(
+      db.prepare("SELECT COUNT(*) c FROM retrievals WHERE session = 'sess-markup'").get().c, 1,
+      'someone asking about markup is still a user',
+    );
+  });
+
   it('logs a miss when a real prompt clears no entry, so the hit rate keeps its denominator', () => {
     const db = getDb();
     const prompt = 'zqxjkv unrelatable phrasing that matches no stored entry at all';

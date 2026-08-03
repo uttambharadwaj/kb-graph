@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { initSchema } from '../src/db.js';
 import { retrievalReport } from '../src/cli/retrieval-report.js';
+import { isKbNudge } from '../src/retrieval.js';
 
 function freshDb() {
   const db = new Database(':memory:');
@@ -204,6 +205,84 @@ describe('retrievalReport miss rate', () => {
     assert.strictEqual(search.misses, 2);
     assert.strictEqual(context.total, 1);
     assert.strictEqual(context.misses, 0);
+    db.close();
+  });
+});
+
+// The classifier's whole job is to separate "go and look in the KB" from
+// talking about the KB, and the second is most of what this store contains —
+// every rejection below is a real prompt the meter already holds.
+describe('recognising a prompt that tells the agent to go and look', () => {
+  const NUDGES = [
+    'here. Look in KB there might be something in KB for this',
+    'check the kb before you start on any of this',
+    'search the knowledge base for prior art on this one',
+    'is there anything in the KB about how this used to work',
+    'consult kb first, I think we hit this before',
+    'read the knowledge-base note on it and then decide',
+    'run kb_search on this before you go reading files',
+  ];
+
+  const NOT_NUDGES = [
+    "ok let's pin this in the kb and move to another topic",
+    "or was it all silent fails on the kb that I wasn't seeing",
+    'ok did we fix the hinting?',
+    'check the dashboard now, I also did the deploy',
+    'we should use the advisor that we have on tap, while we both make suggestions',
+    'first thing, make sure all these gaps are properly tracked',
+    'the kb has 2199 notes and the harvest ran clean last night',
+  ];
+
+  for (const prompt of NUDGES) {
+    it(`fires: ${prompt.slice(0, 48)}`, () => assert.ok(isKbNudge(prompt), prompt));
+  }
+  for (const prompt of NOT_NUDGES) {
+    it(`declines: ${prompt.slice(0, 48)}`, () => assert.ok(!isKbNudge(prompt), prompt));
+  }
+});
+
+describe('what a nudge is worth: the prompt before it', () => {
+  // One prompt is one event however many notes it surfaced, so a fired hint
+  // that returned three notes must not read as three prompts.
+  function session(db, name, turns) {
+    const doc = insertDoc(db, { title: `${name}-doc` });
+    turns.forEach(([query, fired], i) => {
+      const at = `2026-08-03 10:0${i}:00`;
+      if (fired) {
+        insertRetrieval(db, { docId: doc, surface: 'hint', query, session: name, created_at: at });
+        insertRetrieval(db, { docId: doc, surface: 'hint', query, session: name, created_at: at });
+      } else {
+        insertRetrieval(db, { docId: null, surface: 'hint', query, session: name, created_at: at });
+      }
+    });
+  }
+
+  it('attributes each nudge to what the hint did on the prompt before it', () => {
+    const db = freshDb();
+    session(db, 'a', [
+      ['why is the nightly job not writing anything', false],
+      ['check the kb, there might be something on that', false],
+    ]);
+    session(db, 'b', [
+      ['how does the indexer work', true],
+      ['look in the knowledge base for the rest', false],
+    ]);
+    session(db, 'c', [['search the kb for anything on this', false]]);
+
+    const { askedToLook } = retrievalReport(db);
+    assert.strictEqual(askedToLook.prompts, 5, 'a hint that surfaced two notes is still one prompt');
+    assert.strictEqual(askedToLook.nudges, 3);
+    assert.deepStrictEqual(askedToLook.after, { decline: 1, fire: 1, nothing: 1 });
+    db.close();
+  });
+
+  it('does not carry the previous prompt across a session boundary', () => {
+    const db = freshDb();
+    session(db, 'a', [['some unrelated question about the build', true]]);
+    session(db, 'b', [['check the kb on this one', false]]);
+
+    const { askedToLook } = retrievalReport(db);
+    assert.deepStrictEqual(askedToLook.after, { decline: 0, fire: 0, nothing: 1 });
     db.close();
   });
 });
