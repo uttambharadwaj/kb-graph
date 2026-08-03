@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { JOBS, renderPlist, renderSystemdUnits, installJobs } from '../src/cli/setup-jobs.js';
 
-const OPTS = { nodeBin: '/usr/local/bin/node', kbRoot: '/opt/kb', vaultPath: '/home/u/kb-vault', claudePath: '/usr/local/bin/claude' };
+const OPTS = { nodeBin: '/usr/local/bin/node', kbRoot: '/opt/kb', vaultPath: '/home/u/kb-vault', claudePath: '/usr/local/bin/claude', logsDir: '/home/u/.knowledge-base/logs' };
 
 test('JOBS defines harvest, reindex, synthesis', () => {
   assert.deepEqual(JOBS.map(j => j.name), ['harvest', 'reindex', 'synthesis']);
@@ -42,6 +42,19 @@ test('renderPlist mirrors the reference install', () => {
   assert.match(synthesis, /<string>\/opt\/kb\/bin\/weekly-synthesis\.js<\/string>/);
 });
 
+// /tmp is reaped once a file has gone untouched for a few days. A weekly job's
+// log sits idle for seven, so it was always deleted before the next run could
+// append to it — leaving the job whose misses are hardest to spot as the only
+// one with no log at all.
+test('job logs are written beside the data, not into /tmp', () => {
+  for (const job of JOBS) {
+    const out = renderPlist(job, OPTS);
+    assert.match(out, new RegExp(`<key>StandardOutPath</key>\\s*<string>/home/u/\\.knowledge-base/logs/${job.name}\\.log</string>`));
+    assert.match(out, new RegExp(`<key>StandardErrorPath</key>\\s*<string>/home/u/\\.knowledge-base/logs/${job.name}\\.err</string>`));
+    assert.doesNotMatch(out, /\/tmp\//, `${job.name} still logs into /tmp`);
+  }
+});
+
 test('renderSystemdUnits produces service+timer with matching cadences', () => {
   const { service, timer } = renderSystemdUnits(JOBS[0], OPTS);
   assert.match(service, /ExecStart=\/usr\/local\/bin\/node \/opt\/kb\/bin\/kb\.js harvest/);
@@ -75,8 +88,11 @@ test('installJobs surfaces mkdir failure as an error step, never throws', () => 
 
 test('installJobs with load:false writes files and never shells out', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbjobs-'));
-  const result = installJobs({ home, ...OPTS, load: false });
+  const logsDir = join(home, '.knowledge-base', 'logs');
+  const result = installJobs({ home, ...OPTS, logsDir, load: false });
   assert.equal(result.steps.filter(s => !s.error).length, 3);
+  // launchd will not create the directory it redirects into, so install must.
+  assert.ok(existsSync(logsDir), 'the log directory must exist before the job first runs');
   if (process.platform === 'darwin') {
     assert.ok(existsSync(join(home, 'Library', 'LaunchAgents', 'com.kb.harvest.plist')));
     assert.match(readFileSync(join(home, 'Library', 'LaunchAgents', 'com.kb.reindex.plist'), 'utf8'), /StartInterval/);

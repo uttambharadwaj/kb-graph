@@ -162,33 +162,15 @@ async function _indexVault(vaultPath, { embeddings = false } = {}) {
   return { indexed, skipped, deleted, embedded, errors, total: files.length };
 }
 
-/**
- * The text a note is embedded as, wherever it is embedded from.
- *
- * The Related section comes off first: it is auto-appended and cites other
- * notes' titles, so leaving it in makes linked notes look like each other and
- * similarity self-reinforces. Both embedding sites route through here — the
- * backfill used to embed the stored body, Related section included, so whether
- * a note's vector was comparable to its neighbours' depended on which path
- * happened to produce it.
- */
-export const embeddableBody = (body) => body.replace(/\n+## Related\n[\s\S]*$/, '').slice(0, 2000);
-
 async function embedIfMissing(relPath, embeddings, errors) {
   const vf = getVaultFile(relPath);
   if (!vf?.document_id) return 0;
   const has = getDb().prepare('SELECT 1 FROM embeddings WHERE document_id = ? LIMIT 1').get(vf.document_id);
   if (has) return 0;
   const doc = getDb().prepare('SELECT content FROM documents WHERE id = ?').get(vf.document_id);
-  if (!doc?.content) return 0;
+  if (!doc?.content?.trim()) return 0;   // same guard storeEmbedding applies, or this retries forever
   try {
-    const embedding = await embeddings.generateEmbedding(embeddableBody(doc.content));
-    const buffer = embeddings.embeddingToBuffer(embedding);
-    getDb().prepare(`
-      INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
-      VALUES (?, ?, 0, ?, ?, ?)
-    `).run(vf.document_id, relPath, doc.content.slice(0, 500), buffer, embedding.length);
-    return 1;
+    return await embeddings.storeEmbedding(vf.document_id, doc.content, relPath);
   } catch (embErr) {
     errors.push(`embedding ${relPath}: ${embErr.message}`);
     return 0;
@@ -198,10 +180,7 @@ async function embedIfMissing(relPath, embeddings, errors) {
 async function loadEmbeddingHelpers(errors) {
   try {
     const embedModule = await import('../embeddings/embed.js');
-    return {
-      generateEmbedding: embedModule.generateEmbedding,
-      embeddingToBuffer: embedModule.embeddingToBuffer,
-    };
+    return { storeEmbedding: embedModule.storeEmbedding };
   } catch (err) {
     errors.push(`embeddings init: ${err.message}`);
     return false;
@@ -258,13 +237,7 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
 
   if (embeddings) {
     try {
-      const embedding = await embeddings.generateEmbedding(embeddableBody(parsed.body));
-      const buffer = embeddings.embeddingToBuffer(embedding);
-      getDb().prepare(`
-        INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
-        VALUES (?, ?, 0, ?, ?, ?)
-      `).run(docId, relPath, parsed.body.slice(0, 500), buffer, embedding.length);
-      return 1;
+      return await embeddings.storeEmbedding(docId, parsed.body, relPath);
     } catch (embErr) {
       errors.push(`embedding ${relPath}: ${embErr.message}`);
     }

@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -65,6 +65,16 @@ describe('harvest transcript parsing', () => {
 });
 
 describe('harvest candidate selection', () => {
+  // The harvest holds back transcripts touched in the last half hour, so a
+  // fixture written just now looks like a session still in progress. Every
+  // fixture is backdated unless the test is specifically about that guard.
+  const quiesce = (path) => {
+    const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+    utimesSync(path, old, old);
+    return path;
+  };
+  const writeTranscript = (path, lines) => quiesce((writeFileSync(path, lines), path));
+
   const jsonl = (name, lines) => {
     const path = join(tmp, name);
     writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n'));
@@ -129,12 +139,36 @@ describe('harvest candidate selection', () => {
     assert.strictEqual(selectWork(candidates).length, 4);
   });
 
+  // PF-3187: the harvest read a session that was still open and wrote near-
+  // duplicates of notes that session's human was writing by hand. The automatic
+  // copy arrives first, so the deliberate note is the one dedup then refuses.
+  it('leaves a session that is still being written for the next run', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const live = join(root, 'in-progress.jsonl');
+    const done = join(root, 'finished.jsonl');
+    const body = (t) => [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: t.repeat(500) }] } }),
+    ].join('\n');
+    writeFileSync(live, body('still typing '));      // keeps its real mtime: in flight
+    writeTranscript(done, body('long finished '));   // backdated: quiescent
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(summary.inFlight, 1, 'the open session must be held back');
+    assert.strictEqual(summary.sessions, 1, 'and the quiet one must still be harvested');
+    // Held back, not consumed: no watermark, so the next run sees it again.
+    const logged = getDb().prepare('SELECT transcript_path FROM harvest_log WHERE transcript_path = ?').get(live);
+    assert.strictEqual(logged, undefined, 'an unharvested session must not be watermarked');
+    rmSync(root, { recursive: true, force: true });
+  });
+
   // The wiring, not the pieces: that the filter is applied at all, that the
   // count reported is the number dropped, and that the backlog math adds up.
   it('counts what it passed over rather than reporting only what it did', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
-    writeFileSync(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
-    writeFileSync(join(root, 'short.jsonl'), [
+    writeTranscript(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
+    writeTranscript(join(root, 'short.jsonl'), [
       JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
       JSON.stringify({ type: 'user', message: { content: 'too short to be worth a note' } }),
     ].join('\n'));
@@ -154,7 +188,7 @@ describe('harvest candidate selection', () => {
   // A session of `chars` characters of assistant text, in its own discovery root.
   const sessionOf = (name, chars) => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
-    writeFileSync(join(root, name), [
+    writeTranscript(join(root, name), [
       JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
       JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(chars) }] } }),
     ].join('\n'));
@@ -205,7 +239,7 @@ describe('harvest candidate selection', () => {
 
   it('does not call a session partial when all of it was read', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
-    writeFileSync(join(root, 'short-enough.jsonl'), [
+    writeTranscript(join(root, 'short-enough.jsonl'), [
       JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
       JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a fine session. '.repeat(400) }] } }),
     ].join('\n'));
@@ -222,7 +256,7 @@ describe('harvest candidate selection', () => {
   // job — and skipping print-mode transcripts makes quiet runs the normal case.
   it('is healthy after a run with nothing to harvest', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
-    writeFileSync(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
+    writeTranscript(join(root, 'own.jsonl'), JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }));
     // Nothing has ever been harvested here, so harvest_log cannot supply the
     // timestamp and only the heartbeat can. Runs last in this file.
     getDb().prepare('DELETE FROM harvest_log').run();

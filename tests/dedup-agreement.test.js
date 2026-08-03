@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 
 import { DUP_THRESHOLD, duplicatesIn } from '../src/embeddings/search.js';
 import { DUP_THRESHOLD as WRITE_THRESHOLD } from '../src/write-note.js';
-import { embeddableBody } from '../src/vault/indexer.js';
+import { embeddableBody } from '../src/embeddings/embed.js';
 import { getToolDefinitions } from '../src/tools.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
@@ -88,10 +88,21 @@ describe('embeddable body', () => {
     assert.strictEqual(embeddableBody(body), 'x'.repeat(1990));
   });
 
-  it('is the only thing either embedding site embeds', () => {
-    const indexer = read('vault/indexer.js');
-    const calls = [...indexer.matchAll(/generateEmbedding\(([^)]*)\)/g)].map(m => m[1]);
-    assert.ok(calls.length >= 2, 'expected both embedding sites');
-    for (const arg of calls) assert.match(arg, /^embeddableBody\(/, `raw text embedded: ${arg}`);
+  // There used to be two embedding writes and this test grepped both. They are
+  // one now, which is the point: a third caller cannot embed raw text by
+  // forgetting the strip, because no caller chooses what gets embedded at all.
+  it('is the only thing any embedding site embeds', () => {
+    const calls = [...read('embeddings/embed.js').matchAll(/generateEmbedding\(([^)]*)\)/g)]
+      .map(m => m[1])
+      .filter(arg => arg !== 'text');   // the primitive itself, called by storeEmbedding
+    assert.strictEqual(calls.length, 1, 'expected exactly one embedding write');
+    assert.match(calls[0], /^embeddableBody\(/, `raw text embedded: ${calls[0]}`);
+  });
+
+  it('leaves no embedding write outside the shared helper', () => {
+    for (const rel of ['vault/indexer.js', 'ingest.js', 'write-note.js']) {
+      assert.doesNotMatch(read(rel), /INSERT OR REPLACE INTO embeddings/,
+        `${rel} writes embeddings directly instead of through storeEmbedding`);
+    }
   });
 });

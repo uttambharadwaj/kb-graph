@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mergeClaudeHooks, installClaudeHooks } from '../src/cli/setup-hooks.js';
+import { mergeClaudeHooks, installClaudeHooks , unresolvableHookCommands } from '../src/cli/setup-hooks.js';
 
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
 
@@ -73,4 +73,50 @@ test('installClaudeHooks creates settings.json when absent, backs up when presen
   assert.ok(existsSync(second.backup));
   const after = JSON.parse(readFileSync(second.path, 'utf8'));
   assert.equal(after.hooks.SessionStart.length, 1); // idempotent on disk too
+});
+
+// A hook is fire-and-forget: the host runs it, ignores its output, and carries
+// on. A command naming a path that has moved fails exactly like one with
+// nothing to report, so nothing surfaces it until someone goes looking.
+const hookSettings = (command, event = 'Stop') => ({ hooks: { [event]: [{ hooks: [{ type: 'command', command }] }] } });
+const nothingExists = () => false;
+
+test('reports a hook command whose own path is gone', () => {
+  const found = unresolvableHookCommands(hookSettings('/gone/node /gone/kb.js wakeup-hook'), { exists: nothingExists });
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].missing, ['/gone/node', '/gone/kb.js']);
+  assert.equal(found[0].event, 'Stop');
+});
+
+test('says nothing when every hook path resolves', () => {
+  assert.deepEqual(
+    unresolvableHookCommands(hookSettings('/bin/node /opt/kb/bin/kb.js wakeup-hook'), { exists: () => true }), []);
+});
+
+// The real defect: the script the hook named existed, and the dead paths were
+// the interpreter and target pinned inside it. A command-only check passes that
+// install clean, which is exactly how it went unnoticed.
+test('follows the script a hook names, because that is where the dead paths were', () => {
+  const script = [
+    '#!/bin/bash',
+    'NODE="/opt/homebrew/Cellar/node@22/22.21.1_4/bin/node"',
+    'HOOK="/Users/u/Documents/tf/repos/kb/bin/bus-hook-current.js"',
+    '# see /Users/u/docs/design.md for why',   // a comment is documentation, not a dependency
+  ].join('\n');
+  const found = unresolvableHookCommands(hookSettings('/home/u/.claude/bus-stop-hook.sh claude'), {
+    exists: (p) => p.endsWith('bus-stop-hook.sh'),
+    read: () => script,
+  });
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].missing, [
+    '/opt/homebrew/Cellar/node@22/22.21.1_4/bin/node',
+    '/Users/u/Documents/tf/repos/kb/bin/bus-hook-current.js',
+  ], 'a path in a comment must not be reported as a dependency');
+});
+
+// `/style-review` is a slash-command, not a path. Warning about it would train
+// the reader to ignore the line that carries the real one.
+test('does not mistake a slash-command for a path', () => {
+  assert.deepEqual(
+    unresolvableHookCommands(hookSettings('echo /style-review', 'PreToolUse'), { exists: nothingExists }), []);
 });

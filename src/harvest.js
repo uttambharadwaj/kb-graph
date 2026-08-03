@@ -24,6 +24,17 @@ const LESSONS_HEAD_CHARS = 6000;    // the opening frames the goal...
 const LESSONS_TAIL_CHARS = 20000;   // ...and the conclusions land at the end
 export const MAX_SESSIONS_PER_RUN = 30;
 
+// A transcript still being appended to belongs to a session that is still
+// happening, and harvesting it writes lessons the human is in the middle of
+// writing by hand — so the automatic near-duplicate lands before the note it
+// duplicates, and the human's own write is the one that gets refused.
+// Quiescence is the only end-of-session signal the file gives. Being wrong in
+// this direction costs one night's delay on a session that merely went quiet;
+// being wrong the other way corrupts deliberate capture, which is the capture
+// worth having.
+const QUIESCENT_MS = 30 * 60 * 1000;
+const isInFlight = (mtime) => Date.now() - mtime < QUIESCENT_MS;
+
 // Fact extraction is off unless asked for. It runs kb_extract over every chunk
 // of every transcript, which is where nearly all of this job's token cost went,
 // and unattended it writes against an open predicate vocabulary — 77% of the
@@ -271,21 +282,23 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
 
   // An explicit --path is an instruction, not a sweep: run it whatever the
   // watermark says, and whatever wrote it.
-  let candidates, printModeCalls = 0;
+  let candidates, printModeCalls = 0, inFlight = 0;
   if (onlyPath) {
     candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }];
   } else {
     const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000, searchRoots });
     const sessions = harvestsPrintModeSessions() ? found : found.filter(t => !isPrintModeTranscript(t.path));
     printModeCalls = found.length - sessions.length;
-    candidates = stillPending(db, sessions, wantFacts);
+    const quiet = sessions.filter(t => !isInFlight(t.mtime));
+    inFlight = sessions.length - quiet.length;
+    candidates = stillPending(db, quiet, wantFacts);
   }
 
   const pending = candidates.length;
   const work = selectWork(candidates);
 
   const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0, contested: 0,
-    unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls };
+    unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls, inFlight };
   for (const { path, mtime } of work) {
     try {
       const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
@@ -334,6 +347,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   if (summary.contested) console.log(`${summary.contested} pairs were given two values in one call and left unretired — kb_fact_query them and retire the dead ones`);
   if (summary.notReached) console.log(`Backlog: ${summary.notReached} of ${summary.pending} pending sessions not reached this run`);
   if (summary.printModeCalls) console.log(`Skipped ${summary.printModeCalls} print-mode (SDK) transcripts — set KB_HARVEST_SDK_SESSIONS=1 to harvest them`);
+  if (summary.inFlight) console.log(`Left ${summary.inFlight} sessions still in progress for the next run`);
 
   // Fold any fresh session notes into their workstream state notes so state
   // stays current nightly without a separate job. No-ops when nothing is fresh.

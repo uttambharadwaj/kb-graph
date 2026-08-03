@@ -26,20 +26,32 @@ describe('tools', () => {
     }
   });
 
-  it('includes all expected tool names', () => {
-    const tools = getToolDefinitions();
-    const names = tools.map(t => t.name);
-    const expected = [
-      'bus_send', 'bus_read',
-      'kb_search', 'kb_tunnels', 'kb_list', 'kb_read', 'kb_ingest',
-      'kb_write', 'kb_vault_status', 'kb_capture_youtube',
-      'kb_capture_web', 'kb_capture_session', 'kb_capture_fix',
-      'kb_search_smart', 'kb_promote', 'kb_synthesize',
-      'kb_classify', 'kb_context', 'kb_safety_check'
-    ];
-    for (const name of expected) {
-      assert.ok(names.includes(name), `missing tool: ${name}`);
-    }
+  // Named in full, and compared both ways. The old form asserted `length >= 20`
+  // against a list of 19, so deleting any of the other seven kept the suite
+  // green — and the seven not named were the admin-only ones, which are also
+  // the ones absent from HTTP and therefore least likely to be missed by hand.
+  const CORE_TOOLS = [
+    'kb_capture_fix', 'kb_capture_session', 'kb_capture_web', 'kb_capture_youtube',
+    'kb_check_duplicate', 'kb_classify', 'kb_context', 'kb_extract',
+    'kb_fact_add', 'kb_fact_invalidate', 'kb_fact_query', 'kb_fact_timeline',
+    'kb_ingest', 'kb_list', 'kb_promote', 'kb_read', 'kb_safety_check',
+    'kb_search', 'kb_search_smart', 'kb_supersede', 'kb_supersede_candidates',
+    'kb_synthesize', 'kb_tunnels', 'kb_vault_status', 'kb_wakeup', 'kb_write',
+  ];
+
+  it('registers exactly the advertised core tool set', () => {
+    const names = getToolDefinitions().map(t => t.name).filter(n => n.startsWith('kb_')).sort();
+    assert.deepStrictEqual(names, [...CORE_TOOLS].sort(),
+      'the registered kb_ tools and the advertised set have drifted apart');
+  });
+
+  // A tool the README documents but nothing routes to is still a tool an agent
+  // can call; a tool that quietly stops being registered is not, and no test
+  // that only checks for extras would notice.
+  it('documents every core tool it registers', () => {
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    const undocumented = CORE_TOOLS.filter(name => !readme.includes(`\`${name}\``));
+    assert.deepStrictEqual(undocumented, [], 'registered tools missing from the README table');
   });
 
   it('getHttpToolDefinitions excludes admin-only tools', () => {
