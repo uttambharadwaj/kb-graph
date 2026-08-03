@@ -195,7 +195,7 @@ each one, because an agent picks a tool from that line and nothing else:
 | `kb_tunnels` | Cross-domain bridges: neighboring domains for one tag, or the shared notes + entities between two |
 | `kb_write` | Write a note to the vault |
 | `kb_ingest` | Ingest raw text |
-| `kb_check_duplicate` | Similarity check before writing — prevents near-duplicate notes |
+| `kb_check_duplicate` | Similarity check before writing a **note** — prevents near-duplicates on `kb_write`, `kb_ingest`, `POST /api/v1/ingest` and the harvest. Bulk file import is deliberately exempt, see `kb ingest <path>` below |
 | `kb_supersede` | Retire a note that has been meaningfully replaced (still readable, out of recall) |
 | `kb_supersede_candidates` | Notes the fact graph says may be stale — suggestions only, when a briefing contradicts what you see |
 | `kb_classify` | Type, tag and summarise notes sitting unclassified in `inbox/` and `Clippings/` |
@@ -241,7 +241,10 @@ kb register            Register MCP with Claude Code / Codex / Gemini
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included)
-kb ingest <path>       Ingest a file or directory
+kb ingest <path>       Ingest a file or directory. Skips files it has already
+                       ingested by name; does NOT similarity-check contents,
+                       so importing the same text under two names keeps both.
+                       That is on purpose — see "Two kinds of write" below
 kb search <query>      Search from the terminal
 kb classify            Auto-classify unprocessed vault notes
 kb summarize           Generate summaries for unsummarized notes (one model call
@@ -261,6 +264,23 @@ maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
 
 Every command answers `--help` by printing usage and doing nothing else, and
 rejects a flag it does not recognize rather than running with defaults.
+
+## Two kinds of write
+
+Writing a **note** and importing a **file** are different operations, and only
+one of them is duplicate-checked.
+
+| | surfaces | duplicate check |
+|---|---|---|
+| Note | `kb_write`, `kb_ingest`, `POST /api/v1/ingest`, the nightly harvest | content similarity, before the write |
+| File | `kb ingest <path>`, the dashboard uploader | filename only — same name, already imported, skipped |
+
+A note is something you decided to record, so a near-duplicate is almost always
+a mistake worth refusing. An import is somebody else's corpus, and refusing a
+file because it resembles a note you already have would silently drop real
+content in the middle of a bulk run — losing data you asked to keep is worse
+than storing something twice. The asymmetry is deliberate; the count of skipped
+files comes back in the result.
 
 ## Schema changes
 

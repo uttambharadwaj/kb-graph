@@ -143,8 +143,13 @@ export async function ingestDirectory(dirPath) {
 
   const files = collectFiles(dirPath);
 
-  // Get all existing sources for duplicate detection — superseded docs still
-  // own their source file, so include them to avoid re-ingesting duplicates.
+  // Filename, not content, and that is the decision rather than an omission:
+  // note-writing surfaces route through writeNote and refuse a near-duplicate,
+  // but this is somebody else's corpus. Refusing a file for resembling a note
+  // already held would silently drop real content mid-import, and losing what
+  // was asked for is worse than storing something twice.
+  //
+  // Superseded docs still own their source file, so they count as ingested.
   const existing = listDocuments({ limit: 100000, includeSuperseded: true });
   const existingSources = new Set(existing.map(d => d.source));
 
