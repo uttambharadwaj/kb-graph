@@ -35,6 +35,41 @@ async function getEmbedder() {
   return pipelinePromise;
 }
 
+/**
+ * The text a note is embedded as, wherever it is embedded from.
+ *
+ * The Related section comes off first: it is auto-appended and cites other
+ * notes' titles, so leaving it in makes linked notes look like each other and
+ * similarity self-reinforces. Lives beside the only call site that matters —
+ * when this and the embedding write were in different modules, whether a note's
+ * vector was comparable to its neighbours' depended on which path produced it.
+ */
+export const embeddableBody = (body) => body.replace(/\n+## Related\n[\s\S]*$/, '').slice(0, 2000);
+
+/**
+ * Embed `content` for `documentId` and store it.
+ *
+ * Every path that creates a document routes through here, because a document
+ * without an embedding is reachable by full-text search and by nothing else —
+ * semantic search, duplicate detection and related-links all read this table,
+ * and none of them can report a document they never saw. `vaultPath` is null
+ * for documents that have no vault file.
+ *
+ * Returns 1 when a vector was written, 0 when the caller passed nothing to
+ * embed. Throws on model failure, so a caller that can carry on without the
+ * vector has to say so.
+ */
+export async function storeEmbedding(documentId, content, vaultPath = null) {
+  if (!documentId || !content?.trim()) return 0;
+  const { getDb } = await import('../db.js');
+  const embedding = await generateEmbedding(embeddableBody(content));
+  getDb().prepare(`
+    INSERT OR REPLACE INTO embeddings (document_id, vault_path, chunk_index, chunk_text, embedding, dimensions)
+    VALUES (?, ?, 0, ?, ?, ?)
+  `).run(documentId, vaultPath, content.slice(0, 500), embeddingToBuffer(embedding), embedding.length);
+  return 1;
+}
+
 export async function generateEmbedding(text) {
   const embedder = await getEmbedder();
   const result = await embedder(text, { pooling: 'mean', normalize: true });

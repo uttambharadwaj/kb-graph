@@ -102,7 +102,21 @@ export async function ingestFile(filePath) {
     file_size: stat.size,
   });
 
-  return doc;
+  return { ...doc, ...(await embedIngested(doc.id, content)) };
+}
+
+// Ingested documents have no vault file, so the reindex job — which walks the
+// vault — will never reach them. Embed here or they stay findable by full-text
+// search alone, for good. A model failure must not lose the ingest, so it is
+// reported rather than thrown: the caller decides what an unembedded document
+// is worth.
+async function embedIngested(documentId, content) {
+  try {
+    const { storeEmbedding } = await import('./embeddings/embed.js');
+    return { embedded: await storeEmbedding(documentId, content) };
+  } catch (err) {
+    return { embedded: 0, embedError: err.message };
+  }
 }
 
 function collectFiles(dir) {
@@ -145,7 +159,11 @@ export async function ingestDirectory(dirPath) {
       continue;
     }
     try {
-      await ingestFile(filePath);
+      const doc = await ingestFile(filePath);
+      // An unembedded document is half-ingested, and the count alone would call
+      // it a success. Name it here or the run reports "ingested" for a document
+      // no semantic query will ever return.
+      if (doc?.embedError) errors.push(`${filename}: indexed but not embedded: ${doc.embedError}`);
       existingSources.add(filename); // prevent duplicates within same batch
       ingested++;
     } catch (err) {
