@@ -62,7 +62,7 @@ export function nearbyEntities(entityName) {
   const detail = db.prepare('SELECT name, (SELECT COUNT(*) FROM facts WHERE subject = e.id OR object = e.id) AS facts FROM entities e WHERE id = ?');
   const out = [];
   for (const id of db.prepare('SELECT id FROM entities').pluck().all()) {
-    if (id === eid || id.startsWith(`${eid}_`) || looseKey(id) !== target) continue;
+    if (isQualifiedForm(id, eid) || looseKey(id) !== target) continue;
     const row = detail.get(id);
     if (row.facts > 0) out.push({ id, name: row.name, facts: row.facts });
   }
@@ -147,29 +147,47 @@ function prefixPattern(eid) {
   return eid.replace(/([%_\\])/g, '\\$1') + '\\_%';
 }
 
+// A number is not a qualifier. "auth-service_sandbox" is a variant of the
+// service; "pr_3583" and "prod_3832" are a pull request and a worktree that
+// merely start with a short generic word, and folding them in makes a query for
+// that word return someone else's facts. The leading # is how issue numbers
+// arrive; date-shaped runs of digits go the same way.
+const NUMBER_QUALIFIER = /^#?\d+(_\d+)*$/;
+
+// Whether `id` is `eid` itself or a genuine qualified form of it. The SQL LIKE
+// is only a cheap pre-filter; this is the rule, in one place, because the two
+// callers disagreeing is the same drift the entity-key helper exists to stop.
+export function isQualifiedForm(id, eid) {
+  if (id === eid) return true;
+  if (!id.startsWith(`${eid}_`)) return false;
+  return !NUMBER_QUALIFIER.test(id.slice(eid.length + 1));
+}
+
 export function queryFact(entityName, { asOf, direction = 'both', exact = false } = {}) {
   const db = getDb();
   const eid = entityKey(entityName);
   // exact=true restores strict matching — consolidation uses it so an
   // "auth-service" fact never reads as contradicting an "auth-service_sandbox" one.
   const like = exact ? eid : prefixPattern(eid);
-  const results = [];
 
-  if (direction === 'outgoing' || direction === 'both') {
+  // The two directions differ only in which end of the edge is matched, and a
+  // rule applied to one of them is a rule half-applied.
+  const edges = (column, direction) => {
     let sql = `
       SELECT f.*, s.name as sub_name, o.name as obj_name FROM facts f
       JOIN entities s ON f.subject = s.id
       JOIN entities o ON f.object = o.id
-      WHERE (f.subject = ? OR f.subject LIKE ? ESCAPE '\\')
+      WHERE (f.${column} = ? OR f.${column} LIKE ? ESCAPE '\\')
     `;
     const params = [eid, like];
     if (asOf) {
       sql += ' AND (f.valid_from IS NULL OR f.valid_from <= ?) AND (f.valid_to IS NULL OR f.valid_to >= ?)';
       params.push(asOf, asOf);
     }
-    for (const row of db.prepare(sql).all(...params)) {
-      results.push({
-        direction: 'outgoing',
+    return db.prepare(sql).all(...params)
+      .filter(row => isQualifiedForm(row[column], eid))
+      .map(row => ({
+        direction,
         subject: row.sub_name,
         predicate: row.predicate,
         object: row.obj_name,
@@ -178,38 +196,13 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
         current: row.valid_to === null,
         source: row.source,
         recorded_at: row.created_at,
-      });
-    }
-  }
+      }));
+  };
 
-  if (direction === 'incoming' || direction === 'both') {
-    let sql = `
-      SELECT f.*, s.name as sub_name, o.name as obj_name FROM facts f
-      JOIN entities s ON f.subject = s.id
-      JOIN entities o ON f.object = o.id
-      WHERE (f.object = ? OR f.object LIKE ? ESCAPE '\\')
-    `;
-    const params = [eid, like];
-    if (asOf) {
-      sql += ' AND (f.valid_from IS NULL OR f.valid_from <= ?) AND (f.valid_to IS NULL OR f.valid_to >= ?)';
-      params.push(asOf, asOf);
-    }
-    for (const row of db.prepare(sql).all(...params)) {
-      results.push({
-        direction: 'incoming',
-        subject: row.sub_name,
-        predicate: row.predicate,
-        object: row.obj_name,
-        valid_from: row.valid_from,
-        valid_to: row.valid_to,
-        current: row.valid_to === null,
-        source: row.source,
-        recorded_at: row.created_at,
-      });
-    }
-  }
-
-  return results;
+  return [
+    ...(direction === 'outgoing' || direction === 'both' ? edges('subject', 'outgoing') : []),
+    ...(direction === 'incoming' || direction === 'both' ? edges('object', 'incoming') : []),
+  ];
 }
 
 export function invalidateFact(subject, predicate, object, { ended } = {}) {
