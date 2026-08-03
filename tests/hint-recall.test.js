@@ -192,6 +192,30 @@ const SUBJECTS = [
 const singleton = (i) => `zq${i}xj${i}kv`;
 const FILLER = 1200;
 
+// Real notes are not written in pure domain prose. They are written by someone
+// at work, so their bodies carry the ordinary vocabulary of working — tracking,
+// running, checking, gaps, alerts — which is also all a conversational prompt
+// is made of. A fixture whose bodies are only about sundials and kilns shares
+// no words with such a prompt, so it cannot reproduce the way body text turns
+// every filler sentence into a match. Measured: without these lines, scoring
+// identity against bodies passes every test in this file while taking the live
+// fire rate from 84% to 97%.
+const WORKING_PROSE = [
+  'We should track this before the next run and note down what we find.',
+  'The job has been quiet for a while and nobody has looked at the gaps.',
+  'Worth an alert on this one too, and a clue in the monitoring notes.',
+  'First thing is to make sure all of these are properly tracked somewhere.',
+  'Not really fixing anything yet, but keep it in mind for tonight.',
+  'Let us prove it out and then move on to the other topic.',
+];
+
+// Spread, for the same reason the subjects are spread. Uniform assignment put
+// every working word in 200 of 1232 documents — 16%, just over the scorer's 15%
+// document-frequency ceiling — so they were dropped from the query before
+// anything could match them, and the fixture stayed silent for a reason that
+// has nothing to do with the behaviour under test.
+const PROSE_PREVALENCE = [25, 45, 70, 100, 140, 175];
+
 // How many filler notes mention each subject in passing, worst-covered subject
 // first. A real store's subject words are not rare — measured on the live graph,
 // "harvest" sits in 3% of documents and "profiles" in 28% — and the bar a note
@@ -215,7 +239,8 @@ before(() => {
       .filter((_, s) => i < PREVALENCE[s])
       .map(subject => `${subject.notes[0][0]} ${subject.tags}`)
       .join('. ');
-    insert.run(`Filler ${i}`, `unremarkable prose ${singleton(i)}. ${mentions}`, 'note', 'misc');
+    const prose = WORKING_PROSE.filter((_, j) => i < PROSE_PREVALENCE[j]).join(' ');
+    insert.run(`Filler ${i}`, `unremarkable prose ${singleton(i)}. ${prose} ${mentions}`, 'note', 'misc');
   }
 });
 
@@ -272,10 +297,39 @@ describe('hint recall', () => {
     assert.ok(result.rate >= 0.30, report(result));
   });
 
-  // Without this the floors above are satisfiable by returning every note for
+  // Without these the floors above are satisfiable by returning every note for
   // every prompt, which is the behaviour the decline tests exist to prevent —
   // stated here too so this file cannot be made to pass by removing the bar.
   it('declines a prompt about none of the corpus', () => {
     assert.deepStrictEqual(relevantNotes('what is the weather forecast for tomorrow afternoon'), []);
+  });
+
+  // Conversational filler, in the register real prompts arrive in — most of a
+  // session is this. It is a different thing from an off-topic prompt with a
+  // subject ("the weather forecast" above): filler has no subject at all, and
+  // shares its vocabulary with the ordinary working English every note's BODY
+  // is written in, while matching nothing in any title.
+  //
+  // That distinction is the whole test. Scoring a note's identity from its body
+  // as well as its title looks free on every other measure here — recall rises
+  // 38% to 63%, off-topic false fires stay at 0, all of hint-relevance.test.js
+  // still passes — and takes the live fire rate from 84% to 97%, which is the
+  // never-declining surface this scorer replaced. These prompts are the only
+  // thing in the suite that says so.
+  it('declines conversational filler, which has no subject to be about', () => {
+    const FILLER_PROMPTS = [
+      'yeah lets start smoothing this out',
+      'let us note that down somewhere and move on to another topic',
+      'i have no clue what you did so far, looks like a lot of noise',
+      'this is not really fixing anything though, keep these in mind',
+      'first thing, make sure all of these gaps are tracked properly',
+      'what is the most we can get done tonight if i cap you at five',
+      'do the backfill but like you said, how will you prove it',
+      'we can alert on this one too, it is in the monitoring repo',
+    ];
+    const fired = FILLER_PROMPTS
+      .map(prompt => ({ prompt, hits: relevantNotes(prompt) }))
+      .filter(r => r.hits.length > 0);
+    assert.deepStrictEqual(fired.map(r => `${r.prompt} -> ${r.hits.map(h => h.title).join(', ')}`), []);
   });
 });
