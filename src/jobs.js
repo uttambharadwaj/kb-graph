@@ -1,12 +1,6 @@
 // The scheduled loops, and how long each may go quiet before that is news.
-//
-// These lived apart: the installer owned the cadence, and the health check
-// owned three hand-picked staleness thresholds. Chosen independently, one of
-// them drifted wider than the loop it watched — the harvest ran daily and was
-// not called stale until 48h, so a single missed night was indistinguishable
-// from a night that worked, and the briefing said OK through it. Deriving the
-// tolerance from the period is what makes "if a loop stops running you see it
-// at your next session start" true rather than aspirational.
+// Cadence and tolerance belong together: held apart, one hand-picked threshold
+// grew to twice the period it watched, and a missed run stopped being visible.
 
 const HOUR = 3600;
 
