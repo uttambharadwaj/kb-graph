@@ -112,6 +112,54 @@ describe('bootstrapping a fresh database', () => {
   });
 });
 
+// The meter logged the system's own subprocesses alongside real sessions, and
+// nothing on a row said which was which. The repair has to be able to tell them
+// apart from the rows alone, which is what these two cases pin down.
+describe('purging meter rows the system logged for itself', () => {
+  function seeded(rows) {
+    const db = current(KB_MIGRATIONS);
+    const stmt = db.prepare('INSERT INTO retrievals (surface, query, session) VALUES (?, ?, ?)');
+    for (const row of rows) stmt.run(...row);
+    return db;
+  }
+
+  const sessionsIn = db =>
+    db.prepare('SELECT DISTINCT session FROM retrievals ORDER BY session').all().map(r => r.session);
+
+  it('drops every row a subprocess session logged, on both push surfaces', () => {
+    const db = seeded([
+      ['hint', 'You are a Memory Extractor for an engineering knowledge base. Read a work…', 'sub-1'],
+      ['briefing', null, 'sub-1'],
+      ['briefing', null, 'sub-1'],
+      ['hint', 'why is the harvest job not writing anything', 'human-1'],
+      ['briefing', null, 'human-1'],
+    ]);
+
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [10]);
+    assert.deepStrictEqual(sessionsIn(db), ['human-1']);
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS), [], 'nothing left to purge on a second pass');
+  });
+
+  it('keeps a human session that pasted one of those prompts, because it has tools', () => {
+    const db = seeded([
+      ['hint', 'You are a knowledge base summarizer. Given a note, return ONLY valid JSON…', 'human-2'],
+      ['briefing', null, 'human-2'],
+      ['kb_read', null, 'human-2'],
+    ]);
+
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS), []);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM retrievals').get().c, 3);
+  });
+
+  // Every migration's `applied` is evaluated on connect, including against a
+  // database old enough to predate the table this one reads.
+  it('does not trip over a database too old to have the meter table', () => {
+    const db = current(KB_MIGRATIONS);
+    db.exec('DROP TABLE retrievals');
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6]);
+  });
+});
+
 describe('connecting to a database that is behind', () => {
   it('refuses instead of migrating, and names the command that would', () => {
     const db = current(KB_MIGRATIONS);
