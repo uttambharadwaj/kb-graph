@@ -171,12 +171,12 @@ describe('kb_write', () => {
   it(`records ${TIER.VERIFIED} with its reference, in the file as well as the index`, async () => {
     const res = await call('kb_write', {
       title: 'A fix that landed for the retry loop', content: 'Fixed and covered.', type: 'fix',
-      tier: TIER.VERIFIED, tier_ref: 'tests/retry.test.js',
+      tier: TIER.VERIFIED, tier_ref: 'tests/tiers.test.js',
     });
     assert.strictEqual(res.isError, false, res.text);
     const doc = getDb().prepare('SELECT * FROM documents WHERE title = ?').get('A fix that landed for the retry loop');
     assert.strictEqual(doc.tier, TIER.VERIFIED);
-    assert.strictEqual(doc.tier_ref, 'tests/retry.test.js');
+    assert.strictEqual(doc.tier_ref, 'tests/tiers.test.js');
     const vf = getDb().prepare('SELECT vault_path FROM vault_files WHERE document_id = ?').get(doc.id);
     assert.match(readFileSync(join(VAULT, vf.vault_path), 'utf8'), /^tier: verified$/m);
   });
@@ -219,14 +219,14 @@ describe('kb_promote', () => {
     const doc = insertDocument({ title: 'A guess about the queue', content: 'Guessed.', doc_type: 'lesson' });
     assert.strictEqual(doc.tier, DEFAULT_TIER);
 
-    const res = await promote({ id: doc.id, tier: TIER.VERIFIED, confirmed_by: 'fixed in a1b2c3d' });
+    const res = await promote({ id: doc.id, tier: TIER.VERIFIED, confirmed_by: 'fixed in tests/tiers.test.js' });
     assert.strictEqual(res.isError, false, res.text);
 
     const after = getDocument(doc.id);
     assert.strictEqual(after.tier, TIER.VERIFIED);
-    assert.strictEqual(after.tier_ref, 'fixed in a1b2c3d');
+    assert.strictEqual(after.tier_ref, 'fixed in tests/tiers.test.js');
     assert.ok(after.tier_at, 'the moment of confirmation must be recorded');
-    assert.match(res.text, /a1b2c3d/);
+    assert.match(res.text, /tests\/tiers\.test\.js/);
   });
 
   it('will not confirm without saying what did the confirming', async () => {
@@ -270,7 +270,7 @@ describe('kb_promote', () => {
   it('writes the tier into the note file, so the next reindex does not undo it', async () => {
     const written = await writeNote(VAULT, { title: 'A promotion that must survive a reindex', content: 'Body.' });
     assert.strictEqual(written.skipped, false, JSON.stringify(written));
-    await promote({ id: written.docId, tier: TIER.VERIFIED, confirmed_by: 'tests/survives.test.js' });
+    await promote({ id: written.docId, tier: TIER.VERIFIED, confirmed_by: 'tests/tiers.test.js' });
     assert.match(readFileSync(join(VAULT, written.path), 'utf8'), /^tier: verified$/m);
 
     await indexVaultFile(VAULT, written.path);
@@ -410,7 +410,7 @@ describe('backfilling tiers from provenance', () => {
 
   it('never lowers a note that earned its tier', () => {
     const id = seed('backfill/promoted-from-harvest.md', 'harvest:ccc');
-    promoteDocumentTier(id, { tier: TIER.VERIFIED, confirmedBy: 'tests/backfill.test.js' });
+    promoteDocumentTier(id, { tier: TIER.VERIFIED, confirmedBy: 'tests/tiers.test.js' });
     backfillTiers({ apply: true });
     assert.strictEqual(getDocument(id).tier, TIER.VERIFIED, 'a re-run of the backfill must not undo a confirmation');
   });
@@ -551,5 +551,48 @@ describe('hybrid merge ranks each group on the scale it actually carries', () =>
         }
       }
     }
+  });
+});
+
+// The tier demands evidence and then never asked whether the evidence exists,
+// so `deadbeef` was sufficient. Every rejection below is a real string that was
+// accepted by the shipped code: a UUID tail, a hex constant printed by a
+// binary, and two sha-shaped runs that resolve nowhere.
+describe('a reference has to resolve, not just look like one', () => {
+  const REPO = process.cwd();
+  const HEAD = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO }).toString().trim();
+
+  const verified = (ref, cwd = REPO) => assertTier({ tier: 'verified', ref, cwd });
+
+  for (const ref of ['deadbeef', 'b9e5e41c6d4758bf', 'dfe347b233c4', 'ab8aa3cce']) {
+    it(`refuses a sha-shaped reference that names nothing: ${ref}`, () => {
+      assert.throws(() => verified(ref), /names nothing reachable/);
+    });
+  }
+
+  it('accepts a commit that exists in the repository the note is written from', () => {
+    assert.strictEqual(verified(HEAD).tier, 'verified');
+  });
+
+  it('accepts a test file that is on disk and refuses one that is not', () => {
+    assert.strictEqual(verified('tests/tiers.test.js').tier, 'verified');
+    assert.throws(() => verified('tests/no-such-thing.test.js'), /names nothing reachable/);
+  });
+
+  // A pull request lives on a host this repository knows nothing about, and
+  // "#42" is structured in a way hex noise is not.
+  it('leaves a pull request to its shape', () => {
+    assert.strictEqual(verified('#42').tier, 'verified');
+    assert.strictEqual(verified('some-org/some-repo#3955').tier, 'verified');
+  });
+
+  it('says which tier to write instead, rather than only what is wrong', () => {
+    assert.throws(() => verified('deadbeef'), /observed/);
+  });
+
+  // The whole vault is re-read on a schedule, so the pure path has to stay pure
+  // or every reindex spawns a git process per note.
+  it('does not resolve on the silent path a reindex uses', () => {
+    assert.strictEqual(resolveTier({ tier: 'verified', ref: 'deadbeef' }).tier, 'verified');
   });
 });

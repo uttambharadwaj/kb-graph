@@ -6,6 +6,10 @@
 // value appears in hints, briefings, kb_read, kb_search ranking and the vault
 // frontmatter, and per-surface copies of the condition drift.
 
+import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
+
 export const TIER = {
   VERIFIED: 'verified',   // a fix landed or a test proves it — requires a reference
   OBSERVED: 'observed',   // an agent directly saw the behaviour
@@ -173,10 +177,49 @@ function tokenIsReference(token) {
 
 // The normalized reference if it names a commit, a pull/merge request or a test
 // file; null otherwise. Prose about having checked is not a reference.
+//
+// Shape only. Kept pure and free of I/O because every row that lands, including
+// a whole-vault reindex, passes through it — see resolvedReferenceIn for the
+// half that asks whether the thing named exists.
 export function referenceIn(ref) {
   const flat = normalizeRef(ref);
   if (!flat) return null;
   return flat.split(' ').some(tokenIsReference) ? flat : null;
+}
+
+// Shape is not evidence. A UUID tail, a hex constant printed by a binary and
+// the word `deadbeef` are all sha-shaped and name nothing — and a citation that
+// resolves nowhere reads as the verification, which is the exact failure the
+// tier exists to prevent.
+//
+// Only what can be checked from here is checked: a commit in the repository the
+// note is being written from, a test file on disk. A pull request lives on a
+// host this code knows nothing about, so it is left to its shape — and `#42` is
+// structured enough that it is not produced by accident the way hex is.
+function tokenResolves(token, cwd) {
+  const t = token.replace(TOKEN_EDGES, '');
+  if (PR_URL.test(t) || PR_NUMBER.test(t)) return true;
+  if (FILE_PATH.test(t) && TEST_PART.test(t)) return existsSync(resolve(cwd, t));
+  const sha = LABELLED_SHA.test(t) ? t.split(/[:=]/)[1] : t;
+  try {
+    // argv, not a shell, and the token is hex by construction.
+    execFileSync('git', ['-C', cwd, 'cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' });
+    return true;
+  } catch {
+    // "Cannot check" and "does not resolve" get the same answer on purpose:
+    // both mean the claim is unsupported from here, which is the only thing
+    // this function is entitled to say.
+    return false;
+  }
+}
+
+// The reference if at least one token in it both looks like a citation and
+// resolves. Costs a `git cat-file` per sha, so this is the write path's gate
+// and never the reindex's.
+export function resolvedReferenceIn(ref, cwd = process.cwd()) {
+  const flat = normalizeRef(ref);
+  if (!flat) return null;
+  return flat.split(' ').some(t => tokenIsReference(t) && tokenResolves(t, cwd)) ? flat : null;
 }
 
 // --- resolution -------------------------------------------------------------
@@ -208,7 +251,7 @@ export function resolveTier({ tier, ref = null } = {}) {
  * the sweep wrote is the single most likely thing a later session confirms —
  * 36% of the store arrived that way — so kb_promote must be able to raise it.
  */
-export function assertTier({ tier, ref = null, provenance = null } = {}) {
+export function assertTier({ tier, ref = null, provenance = null, cwd = process.cwd() } = {}) {
   if (tier != null && !TIERS.includes(tier)) {
     throw new Error(`Unknown tier "${tier}" — expected one of ${TIERS.join(', ')}.`);
   }
@@ -224,6 +267,15 @@ export function assertTier({ tier, ref = null, provenance = null } = {}) {
       `Tier "${TIER.VERIFIED}" requires a reference to a commit, a pull request or a test ` +
       `(e.g. "abc1234", "#42", "tests/thing.test.js"). ` +
       `${normalizeRef(ref) ? `Got: ${normalizeRef(ref)}` : 'None given'}.`
+    );
+  }
+  // Second half of the same question. Shape got it this far; this asks whether
+  // the thing named is real, which is what the writer was claiming to have.
+  if (resolved.tier === TIER.VERIFIED && !resolvedReferenceIn(ref, cwd)) {
+    throw new Error(
+      `Tier "${TIER.VERIFIED}" needs a reference that resolves, and "${normalizeRef(ref)}" ` +
+      `names nothing reachable from ${cwd} — no such commit, no such file. ` +
+      `Cite something checkable from here, or write "${TIER.OBSERVED}" with what you saw.`
     );
   }
   return resolved;
