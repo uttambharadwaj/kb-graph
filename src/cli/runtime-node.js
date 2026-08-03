@@ -82,6 +82,11 @@ export async function lockPreferredNodeRuntime(scriptUrl, homeDir = homedir()) {
 // node@22/22.21.1_4, which no longer exists, and has been a silent no-op since.
 const CELLAR_PATH = /^(?<prefix>.*)\/Cellar\/(?<pkg>[^/]+)\/[^/]+\/(?<rest>.+)$/;
 
+// One owner for "this path names a single package version". The hook check asks
+// the same question about paths it did not produce, and two spellings of it
+// would drift into disagreeing about what is safe.
+export const isVersionPinned = (path) => CELLAR_PATH.test(path);
+
 export function stableNodePath(execPath = process.execPath, { exists = existsSync, resolve = realpathSync } = {}) {
   const cellar = CELLAR_PATH.exec(execPath);
   if (!cellar) return execPath;

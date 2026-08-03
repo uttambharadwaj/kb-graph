@@ -1,5 +1,6 @@
 // src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code settings
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, renameSync } from 'fs';
+import { isVersionPinned } from './runtime-node.js';
 import { join } from 'path';
 
 const HOOK_SPECS = [
@@ -66,12 +67,6 @@ const absolutePathsIn = (text) => [...text.matchAll(ABSOLUTE_PATH)]
   .map(m => m[1])
   .filter(path => !path.includes('$'));
 
-// A path that names one Homebrew patch release. It resolves today and stops
-// resolving the moment that package is upgraded, so it is a death already
-// scheduled rather than one that has happened — worth reporting while there is
-// still a working system to fix it in.
-const VERSION_PINNED = /\/Cellar\/[^/]+\/[^/]+\//;
-
 export function unresolvableHookCommands(settings, { exists = existsSync, read = readFileSync } = {}) {
   const out = [];
   const scriptPaths = (path) => {
@@ -91,7 +86,9 @@ export function unresolvableHookCommands(settings, { exists = existsSync, read =
         const indirect = direct.filter(exists).flatMap(scriptPaths);
         const all = [...new Set([...direct, ...indirect])];
         const missing = all.filter(path => !exists(path));
-        const pinned = all.filter(path => !missing.includes(path) && VERSION_PINNED.test(path));
+        // Resolves today, stops the moment that package is upgraded: a death already
+        // scheduled rather than one that has happened.
+        const pinned = all.filter(path => !missing.includes(path) && isVersionPinned(path));
         if (missing.length || pinned.length) out.push({ event, command, missing, pinned });
       }
     }
