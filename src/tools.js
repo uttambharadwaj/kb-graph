@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { join } from 'path';
 import { homedir } from 'os';
-import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, liveTierCounts, supersedeDocument, supersedeCandidates, promoteDocumentTier } from './db.js';
+import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, liveTierCounts, supersedeDocument, supersedeCandidates, promoteDocumentTier, tagCounts } from './db.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
@@ -123,7 +123,7 @@ export function getToolDefinitions() {
       description: 'Search the knowledge base using full-text search. Returns ranked results with highlighted snippets. Superseded (retired) notes are excluded unless include_superseded is set.',
       schema: {
         query: z.string().describe('Full-text search query'),
-        tags: z.string().optional().describe('Filter results by tag (e.g. "backend", "infra", "auth"). Matches entries whose tags contain this value.'),
+        tags: z.string().optional().describe('Filter results by tag (e.g. "backend", "infra", "auth"). Matches whole tags, not parts of them. Comma-separate to require several at once.'),
         limit: z.number().optional().default(20).describe('Maximum number of results to return'),
         include_superseded: z.boolean().optional().default(false).describe('Include notes marked superseded (retired). Off by default — use to trace how a current state was reached.'),
       },
@@ -180,7 +180,7 @@ export function getToolDefinitions() {
       description: 'List documents in the knowledge base, optionally filtered by type or tag. Superseded (retired) notes are excluded unless include_superseded is set.',
       schema: {
         type: z.string().optional().describe('Filter by document type (e.g. text, markdown, code, pdf)'),
-        tag: z.string().optional().describe('Filter by tag'),
+        tag: z.string().optional().describe('Filter by tag. Matches whole tags; comma-separate to require several at once.'),
         limit: z.number().optional().default(50).describe('Maximum number of results to return'),
         include_superseded: z.boolean().optional().default(false).describe('Include notes marked superseded (retired). Off by default.'),
       },
@@ -665,10 +665,7 @@ export function getToolDefinitions() {
             'SELECT note_type, COUNT(*) as count FROM vault_files WHERE note_type IS NOT NULL GROUP BY note_type ORDER BY count DESC'
           ).all();
 
-          const byDomain = db.prepare(`
-            SELECT tags, COUNT(*) as count FROM documents
-            WHERE tags != '' GROUP BY tags ORDER BY count DESC LIMIT 15
-          `).all();
+          const byDomain = tagCounts(10);
 
           // Parity with the wakeup-hook briefing: superseded notes drop out of
           // "recent". LEFT JOIN keeps vault files with no linked document.
@@ -688,7 +685,7 @@ export function getToolDefinitions() {
             health: getHealth({ recordBacklog: true }),
             by_type: byType,
             ...(showTier ? { by_tier: byTier, tier_meaning: TIER_MEANING } : {}),
-            top_domains: byDomain.slice(0, 10),
+            top_domains: byDomain,
             recent_entries: showTier ? recent : recent.map(({ tier, ...rest }) => rest),
             hint: `Use kb_search(query, tags) for keyword search, kb_search_smart(query) for conceptual queries, kb_context(query) for token-efficient browsing, kb_fact_query(entity) for temporal facts.${showTier ? ` A ${DEFAULT_TIER} note is a lead, not a finding — kb_promote one when a session confirms it.` : ''}`,
           };
