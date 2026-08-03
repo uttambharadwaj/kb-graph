@@ -12,12 +12,16 @@ export const KB_MCP_SERVER_CONFIG = {
   args: [KB_ENTRYPOINT_PATH, 'mcp'],
 };
 
+// Absent and unreadable are different answers. Treating both as "empty config"
+// means one bad parse rewrites the file as nothing but our own entry, and
+// ~/.claude.json holds the user's whole Claude Code configuration.
 function readJson(path) {
   if (!existsSync(path)) return {};
+  const raw = readFileSync(path, 'utf-8');
   try {
-    return JSON.parse(readFileSync(path, 'utf-8'));
-  } catch {
-    return {};
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${path} is not valid JSON (${err.message}). Refusing to overwrite it.`);
   }
 }
 
@@ -50,14 +54,40 @@ export function parseRegisterArgs(args = []) {
   return [...new Set(agents)];
 }
 
-export function registerAgents(agents, homeDir = homedir()) {
+// Where a config currently points, or null if this agent has no registration
+// yet. The entrypoint is the whole question: everything else in the entry is
+// derived from it.
+function registeredEntrypoint(config) {
+  const args = config?.mcpServers?.[KB_MCP_SERVER_NAME]?.args;
+  return Array.isArray(args) ? args[0] ?? null : null;
+}
+
+/**
+ * Registering is idempotent from the checkout that already owns the config, and
+ * refuses from any other one.
+ *
+ * The command derives its target from wherever it was invoked, so running it
+ * from a second checkout silently repoints every agent at that copy — and a
+ * checkout is a thing people delete. A worktree pruned after its pull request
+ * merges would take three agents' knowledge base down with it, with the cause a
+ * long way from the symptom.
+ *
+ * Every agent comes back with an outcome, so a caller cannot mistake a refusal
+ * for a write it simply didn't look at.
+ */
+export function registerAgents(agents, homeDir = homedir(), { force = false } = {}) {
   return agents.map(agent => {
     const path = getAgentConfigPath(agent, homeDir);
-    mkdirSync(join(path, '..'), { recursive: true });
     const config = readJson(path);
+    const from = registeredEntrypoint(config);
+    if (from !== null && from !== KB_ENTRYPOINT_PATH && !force) {
+      return { agent, path, written: false, from, to: KB_ENTRYPOINT_PATH };
+    }
+
+    mkdirSync(join(path, '..'), { recursive: true });
     if (!config.mcpServers) config.mcpServers = {};
     config.mcpServers[KB_MCP_SERVER_NAME] = KB_MCP_SERVER_CONFIG;
     writeFileSync(path, JSON.stringify(config, null, 2));
-    return { agent, path };
+    return { agent, path, written: true, from, to: KB_ENTRYPOINT_PATH };
   });
 }

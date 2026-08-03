@@ -36,8 +36,9 @@ const COMMANDS = {
     run: a => import('../src/cli/migrate.js').then(m => m.runMigrateCli(a)),
   },
   register: {
-    summary: 'Register MCP server with Claude/Codex/Gemini',
+    summary: 'Register MCP server with Claude/Codex/Gemini (--force to move an existing registration)',
     valueEq: ['--agents'],
+    boolean: ['--force'],
     run: a => import('../src/cli/register.js').then(m => m.register(a)),
   },
   ingest: {
