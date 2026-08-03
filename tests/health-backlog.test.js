@@ -5,6 +5,7 @@ import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { getDb, getHealth, getMeta } from '../src/db.js';
+import { JOBS, staleAfterHours } from '../src/jobs.js';
 
 const summaryWarning = (health) => health.warnings.find(w => w.includes('summaries'));
 
@@ -54,5 +55,41 @@ describe('backlog warnings fire on growth, not on existence', () => {
     assert.ok(summaryWarning(getHealth()), 'a read-only call still reports growth');
     assert.strictEqual(getMeta('backlog_summaries').value, before,
       'only a session boundary may re-baseline; otherwise the comparison measures how often health was polled');
+  });
+});
+
+// A tolerance chosen independently of the cadence it watches will drift wider
+// than it. The harvest's was 48h against a 24h period, so one dead night was
+// indistinguishable from a night that worked and the briefing read OK through
+// it — the exact failure the heartbeat exists to prevent.
+describe('staleness tolerance is derived from the period', () => {
+  // The promise is about loops where one missed run is a real event. A loop
+  // that ticks every five minutes is not one of those: the 1h floor is
+  // deliberate flap-damping, and reporting a single skipped tick would produce
+  // a warning nobody reads — which is how the useful ones stop being read too.
+  it('leaves one skipped run reportable for every loop slower than an hour', () => {
+    const reportable = JOBS.filter(job => job.periodHours >= 1);
+    assert.deepStrictEqual(reportable.map(j => j.name), ['harvest', 'synthesis'],
+      'a new slow loop must be considered here rather than inherit a default');
+    for (const job of reportable) {
+      const tolerance = staleAfterHours(job.periodHours);
+      assert.ok(tolerance > job.periodHours, `${job.name}: tolerance must clear one normal period`);
+      assert.ok(tolerance < job.periodHours * 2,
+        `${job.name}: ${tolerance}h against a ${job.periodHours}h period hides a missed run`);
+    }
+  });
+
+  it('damps a sub-hourly loop instead, so one skipped tick is not news', () => {
+    const fast = JOBS.filter(job => job.periodHours < 1);
+    assert.deepStrictEqual(fast.map(j => j.name), ['reindex']);
+    assert.ok(staleAfterHours(fast[0].periodHours) >= 1);
+  });
+
+  // Slack absorbs a scheduler firing late — calendar jobs have been seen an
+  // hour behind — without letting a 5-minute loop cry on one skipped tick.
+  it('floors the slack at an hour and caps it at six', () => {
+    assert.strictEqual(staleAfterHours(24), 30);
+    assert.strictEqual(staleAfterHours(24 * 7), 174);
+    assert.ok(Math.abs(staleAfterHours(5 / 60) - 1.083) < 0.01);
   });
 });
