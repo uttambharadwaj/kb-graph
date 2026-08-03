@@ -311,10 +311,10 @@ export function getToolDefinitions() {
 
     {
       name: 'kb_supersede',
-      description: 'Mark a note as superseded (meaningfully replaced) so it drops out of search, briefings, and current-state recall while staying reachable via kb_read and its replacement pointer. Superseded is NOT deleted. Optionally record the replacement note and a reason; pass unset to restore the note.',
+      description: 'Mark a note as superseded (meaningfully replaced) so it drops out of search, briefings, and current-state recall while staying reachable via kb_read and its replacement pointer. Superseded is NOT deleted. Optionally record the replacement note and a reason; pass unset to restore the note. Reach for this when the replacement already exists, or when a note is simply wrong and nothing replaces it. If you are about to WRITE the replacement, use kb_write with supersedes instead — it retires the old note and points it at the new one in a single call, so the pointer is never a guess.',
       schema: {
         id: z.number().int().describe('ID of the note to supersede'),
-        replacement_id: z.number().int().optional().describe('ID of the note that replaces it (records a pointer for the kb_read banner)'),
+        replacement_id: z.number().int().optional().describe('ID of the note that replaces it (records a pointer for the kb_read banner). Must already exist — do not predict the id of a note you are about to write, since ids are shared with concurrent sessions and a wrong guess usually still resolves. Use kb_write with supersedes for that.'),
         reason: z.string().optional().describe('Why it was superseded — shown in the kb_read banner'),
         unset: z.boolean().optional().default(false).describe('Clear supersession, restoring the note to current-state recall'),
       },
@@ -324,8 +324,14 @@ export function getToolDefinitions() {
           if (!doc) {
             return { content: [{ type: 'text', text: `Error: Document with ID ${id} not found.` }], isError: true };
           }
+          // Name the replacement, don't just number it. An id is checked to
+          // exist, which is not the same as being the right one — in a dense id
+          // space a guessed id almost always resolves, to somebody else's note.
+          // The title is what tells the caller the pointer landed where they meant.
+          const replacement = doc.superseded_by ? getDocument(doc.superseded_by) : null;
+          const by = replacement ? ` by #${replacement.id} "${replacement.title}"` : '';
           const state = doc.superseded_at
-            ? `superseded ${doc.superseded_at}${doc.superseded_by ? ` by #${doc.superseded_by}` : ''}${doc.superseded_reason ? ` (${doc.superseded_reason})` : ''}`
+            ? `superseded ${doc.superseded_at}${by}${doc.superseded_reason ? ` (${doc.superseded_reason})` : ''}`
             : 'restored to current-state recall';
           return { content: [{ type: 'text', text: `#${id} "${doc.title}" ${state}` }] };
         } catch (err) {
