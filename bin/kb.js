@@ -69,6 +69,10 @@ const COMMANDS = {
     summary: 'Read-path coverage: how much of the KB has ever been retrieved',
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
+  'hint-probe': {
+    summary: 'Replay every prompt the hint has seen against the current scorer; diff two runs to grade a change',
+    run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),
+  },
   'wakeup-hook': {
     summary: 'Print compact KB briefing (for SessionStart hooks)',
     run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),

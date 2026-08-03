@@ -257,10 +257,25 @@ kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to mana
 kb status              Stats and server status
 ```
 
-That is the set you reach for by hand. `kb --help` lists all 37, including the
+That is the set you reach for by hand. `kb --help` lists all 38, including the
 hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
-`retrieval-report`).
+`retrieval-report`, `hint-probe`).
+
+`kb hint-probe` is the one to reach for before changing how the prompt hint
+scores. It replays every prompt the hint has really been asked about — the meter
+already stores them — and prints one stable line per prompt, so two runs diff:
+
+```
+kb hint-probe > before.txt
+# change the scorer
+kb hint-probe > after.txt
+diff before.txt after.txt
+```
+
+A fixture cannot settle this on its own. Its off-topic probes are topical misses;
+the prompts that must decline in real use are conversational filler, which shares
+vocabulary with note prose and with nothing in note titles.
 
 Every command answers `--help` by printing usage and doing nothing else, and
 rejects a flag it does not recognize rather than running with defaults.
