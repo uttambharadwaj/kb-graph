@@ -221,11 +221,14 @@ before(() => {
 
 // A subject is recalled when the hint surfaces either of its notes: someone
 // asking about leap seconds is served by whichever of the pair comes back.
+// `label` names the probe rather than the subject, so a failure says which of
+// the two notes was being asked about — reporting the subject's first note for
+// every miss both misattributes and prints the same title twice.
 function recall(probes) {
   const missed = [];
-  for (const { prompt, subject } of probes) {
+  for (const { prompt, subject, label } of probes) {
     const titles = new Set(subject.notes.map(([title]) => title));
-    if (!relevantNotes(prompt).some(hit => titles.has(hit.title))) missed.push(subject.notes[0][0]);
+    if (!relevantNotes(prompt).some(hit => titles.has(hit.title))) missed.push(label);
   }
   return { rate: (probes.length - missed.length) / probes.length, missed };
 }
@@ -243,7 +246,7 @@ describe('hint recall', () => {
   // content, that is not a precision win.
   it('surfaces a note from a prompt that is its own body', (t) => {
     const probes = SUBJECTS.flatMap(subject =>
-      subject.notes.map(([, body]) => ({ prompt: body, subject })));
+      subject.notes.map(([title, body]) => ({ prompt: body, subject, label: title })));
     const result = recall(probes);
     // Printed on success too: a floor with unknown slack above it is a floor
     // nobody can tell has nearly been reached.
@@ -263,7 +266,7 @@ describe('hint recall', () => {
   // leaves one probe of headroom, deliberately: the fixture is deterministic, so
   // a change that costs a probe is a real change and wants looking at.
   it('surfaces a note from a prompt that raises the subject without quoting it', (t) => {
-    const probes = SUBJECTS.map(subject => ({ prompt: subject.ask, subject }));
+    const probes = SUBJECTS.map(subject => ({ prompt: subject.ask, subject, label: subject.tags }));
     const result = recall(probes);
     t.diagnostic(report(result));
     assert.ok(result.rate >= 0.30, report(result));
