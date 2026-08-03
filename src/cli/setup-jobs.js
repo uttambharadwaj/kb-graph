@@ -3,12 +3,10 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
 import { LOGS_DIR } from '../paths.js';
+import { JOBS } from '../jobs.js';
 
-export const JOBS = [
-  { name: 'harvest', args: ['bin/kb.js', 'harvest'], schedule: { calendar: { Hour: 3, Minute: 30 } }, onCalendar: '*-*-* 03:30:00' },
-  { name: 'reindex', args: ['bin/kb.js', 'vault', 'reindex'], schedule: { interval: 300 } },
-  { name: 'synthesis', args: ['bin/weekly-synthesis.js'], schedule: { calendar: { Weekday: 0, Hour: 4, Minute: 0 } }, onCalendar: 'Sun *-*-* 04:00:00' },
-];
+export { JOBS };
+
 
 function command(job, { nodeBin, kbRoot }) {
   const [entry, ...rest] = job.args;

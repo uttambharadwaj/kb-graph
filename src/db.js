@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { statSync } from 'fs';
 import { DB_PATH } from './paths.js';
 import { normalizeTagString } from './tags.js';
+import { STALE_AFTER } from './jobs.js';
 import {
   TIERS, DEFAULT_TIER, REF_MAX_CHARS,
   assertTier, byScoreThenTier, normalizeRef, RANK_BUCKET, resolveTier, sourceFamily, tierForSource, tierRank,
@@ -839,11 +840,14 @@ export function getHealth({ recordBacklog = false } = {}) {
     }),
   ].filter(Boolean);
   warnings.push(...growth);
+  // Every tolerance is one period plus slack (src/jobs.js), so a loop that
+  // skips a single run is always reportable. Hand-picked numbers let the
+  // harvest's grow to twice its period, which made one dead night invisible.
   const reindexAge = ageHours(reindex);
-  if (reindexAge === null || reindexAge > 1) warnings.push(`reindex heartbeat ${reindexAge === null ? 'never recorded' : Math.round(reindexAge) + 'h old'} — check com.kb.reindex launchd job`);
-  if (harvestAge === null || harvestAge > 48) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);
+  if (reindexAge === null || reindexAge > STALE_AFTER.reindex) warnings.push(`reindex heartbeat ${reindexAge === null ? 'never recorded' : Math.round(reindexAge) + 'h old'} — check com.kb.reindex launchd job`);
+  if (harvestAge === null || harvestAge > STALE_AFTER.harvest) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);
   const synthAge = ageHours(synthesis);
-  if (synthAge === null || synthAge > 192) warnings.push(`synthesis ${synthAge === null ? 'never recorded' : Math.round(synthAge / 24) + 'd ago'} — check com.kb.synthesis launchd job`);
+  if (synthAge === null || synthAge > STALE_AFTER.synthesis) warnings.push(`synthesis ${synthAge === null ? 'never recorded' : Math.round(synthAge / 24) + 'd ago'} — check com.kb.synthesis launchd job`);
 
   return {
     embeddings: `${embedded}/${docs}`,
