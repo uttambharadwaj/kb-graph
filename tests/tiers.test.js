@@ -560,7 +560,11 @@ describe('hybrid merge ranks each group on the scale it actually carries', () =>
 // binary, and two sha-shaped runs that resolve nowhere.
 describe('a reference has to resolve, not just look like one', () => {
   const REPO = process.cwd();
-  const HEAD = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO }).toString().trim();
+  // Full sha, not short: a bare run of digits is a date or a ticket number far
+  // more often than a commit, so the shape rule wants a hex letter — and about
+  // one short sha in twenty-five has none. CI drew 0964875 and this test failed
+  // on the shape check before resolution ever ran.
+  const HEAD = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO }).toString().trim();
 
   const verified = (ref, cwd = REPO) => assertTier({ tier: 'verified', ref, cwd });
 
@@ -591,7 +595,10 @@ describe('a reference has to resolve, not just look like one', () => {
   });
 
   // The whole vault is re-read on a schedule, so the pure path has to stay pure
-  // or every reindex spawns a git process per note.
+  // or every reindex spawns a git process per note. This is also why the shape
+  // rule cannot be relaxed for references that resolve: the reindex re-applies
+  // shape alone, so anything accepted only by resolution would silently drop
+  // back to the floor on the next pass.
   it('does not resolve on the silent path a reindex uses', () => {
     assert.strictEqual(resolveTier({ tier: 'verified', ref: 'deadbeef' }).tier, 'verified');
   });
