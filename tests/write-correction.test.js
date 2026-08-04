@@ -53,6 +53,15 @@ describe('correcting a note through kb_write', () => {
     assert.notStrictEqual(retired.superseded_by, oldId, 'and must never point at itself');
   });
 
+  // The id the caller cites has to be the one the note actually got — a
+  // plausible-looking number in the response reads exactly like a right one.
+  it('names the new note\'s own id, not only its neighbours\'', async () => {
+    const res = await write({ title: 'A note that has to name its own id', content: 'Body.' });
+    assert.strictEqual(res.isError, false, res.text);
+    const id = getDb().prepare('SELECT id FROM documents WHERE title = ?').get('A note that has to name its own id').id;
+    assert.match(res.text, new RegExp(`^Note #${id} saved to `));
+  });
+
   // Asserted against the source, because the only remaining way to throw here
   // is the database itself failing mid-statement — which a test can fake but
   // not honestly reproduce. What matters is structural: once the file is on
@@ -64,7 +73,7 @@ describe('correcting a note through kb_write', () => {
     const handler = src.slice(src.indexOf("name: 'kb_write'"));
     const postWrite = handler.slice(
       handler.indexOf('const result = await writeNote('),
-      handler.indexOf('return { content: [{ type: \'text\', text: `Note saved to'),
+      handler.indexOf('return { content: [{ type: \'text\', text: `Note${idNote} saved to'),
     );
     assert.ok(postWrite.length > 0, 'failed to locate the kb_write handler body');
     assert.match(postWrite, /catch \(err\) \{\s*supersedeNote = `; WARNING: the note was written/,

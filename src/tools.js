@@ -315,7 +315,10 @@ function defineTools() {
           // The neighbours land as JSON below the line, not folded into it: the
           // caller that has to act on them is a model, and an id it has to
           // parse out of prose is an id it can get wrong.
-          return { content: [{ type: 'text', text: `Note saved to ${result.path} as ${result.tier}${result.status}${relatedNote}${supersedeNote}${renderNearNeighbors(result)}` }] };
+          // The new note's own id, not just its neighbours': a caller citing
+          // "KB #N" beside the write otherwise guesses N or pays a search.
+          const idNote = result.docId ? ` #${result.docId}` : '';
+          return { content: [{ type: 'text', text: `Note${idNote} saved to ${result.path} as ${result.tier}${result.status}${relatedNote}${supersedeNote}${renderNearNeighbors(result)}` }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
