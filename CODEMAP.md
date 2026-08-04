@@ -240,7 +240,7 @@ bin/
 | hint-recall.test.js | 336 | - | The opposing force to hint-relevance.test.js. |
 | hint-relevance.test.js | 149 | - | The prompt-hint surface used to fire on 100% of prompts — 94 of 94 logged |
 | hooks-retrieval.test.js | 196 | - | Exercises wakeup-hook.js and prompt-hint.js as real subprocesses (they |
-| ingest.test.js | 87 | - | PF-3189: ingested documents had no vault file, and the reindex job — which |
+| ingest.test.js | 87 | - | Ingested documents had no vault file, and the reindex job — which |
 | inverse-fold.test.js | 201 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | mcp-supervisor.test.js | 377 | MARKER, MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
 | migration-check.test.js | 178 | - | A KB_DIR and bus home nothing else shares. Neither database exists until a |
