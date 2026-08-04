@@ -41,6 +41,8 @@ Before creating an entry, call `kb_check_duplicate` with **the exact body you ar
 
 If a similar entry exists and is right, skip. If it's outdated, supersede it **first** and then write — `kb_write` refuses a near-duplicate of a live note, and a correction is by construction a near-duplicate of what it corrects.
 
+The check is not the last word. A write that is accepted still comes back with `near_notes` when live notes sit close to it, and you are the only reader who has both texts: if what you just wrote contradicts or replaces one of them, `kb_supersede` it with a reason. Left alone, both stay live and later recall returns the two of them with nothing to say which is current.
+
 ## Step 3: Filter ruthlessly
 
 Keep only if YES to at least one:

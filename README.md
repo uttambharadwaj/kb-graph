@@ -314,6 +314,18 @@ content in the middle of a bulk run — losing data you asked to keep is worse
 than storing something twice. The asymmetry is deliberate; the count of skipped
 files comes back in the result.
 
+Surviving the check does not mean landing on new ground. When an accepted note
+lands close to a live one — nearer than a note merely worth linking to, still
+under the line that would have refused it — the write reports the neighbours it
+found (`near_notes`: id, title, score, at most three) with one instruction: if
+the new note contradicts or replaces one, call `kb_supersede` with that note's
+id and a reason. Nothing is classified here and no model runs; at write time a
+contradiction and an agreement look identical, and the caller is the one
+holding both notes. Contradictions used to sit side by side unresolved because
+nobody knew there was anything to resolve. `kb_check_duplicate` reports the
+same neighbours on a not-a-duplicate verdict, so the pre-check and the write
+still agree.
+
 ## Schema changes
 
 `kb migrate` is the only command that changes the knowledge base or message bus

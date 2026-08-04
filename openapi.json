@@ -418,7 +418,32 @@
                   "properties": {
                     "id": { "type": "integer" },
                     "title": { "type": "string" },
-                    "created_at": { "type": "string", "format": "date-time" }
+                    "path": { "type": "string", "description": "Vault path the note was written to" },
+                    "related": {
+                      "type": "array",
+                      "description": "Live notes this one was linked to",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "integer" },
+                          "title": { "type": "string" },
+                          "score": { "type": "number" }
+                        }
+                      }
+                    },
+                    "near_notes": {
+                      "type": "array",
+                      "description": "Present only when a live note already covers this ground closely: the nearest such notes, at most three. Read with next_step.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "integer" },
+                          "title": { "type": "string" },
+                          "score": { "type": "number" }
+                        }
+                      }
+                    },
+                    "next_step": { "type": "string", "description": "What to do about near_notes if this note contradicts or replaces one of them" }
                   }
                 }
               }

@@ -25,7 +25,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 | kb_read | Full document by ID. After kb_context says which ones are worth it. |
 | kb_list | Enumerate documents by type or tag when you are browsing, not searching. |
 | kb_tunnels | Which domains a tag connects to, or the bridge between two — cross-domain exploration. |
-| kb_write | Capture your own conclusion, decision, lesson or research so the next session has it. Takes a tier; verified needs a commit, PR or test reference. |
+| kb_write | Capture your own conclusion, decision, lesson or research so the next session has it. Takes a tier; verified needs a commit, PR or test reference. Its result names live notes on the same ground — resolve a contradiction with kb_supersede instead of leaving both. |
 | kb_ingest | Ingest raw text you were handed and do not want to reformat. |
 | kb_check_duplicate | Before writing, when you suspect the KB already says this. Pass the exact body. |
 | kb_supersede | A note has been meaningfully replaced — retire it from recall, keep it readable. |

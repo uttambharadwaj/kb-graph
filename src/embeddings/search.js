@@ -42,6 +42,42 @@ export function duplicatesIn(similar, threshold = DUP_THRESHOLD) {
     }));
 }
 
+// The floor above which a note the KB accepted is worth telling the writer
+// about. Above RELATED_MIN (0.55), where two notes are merely worth linking, so
+// a bare relative stays quiet; DUP_THRESHOLD is the ceiling and not a choice —
+// nothing at or above it is ever accepted, so there is nothing there to report.
+export const NEAR_FLOOR = 0.6;
+export const NEAR_K = 3;
+
+/**
+ * The live notes an accepted note lands beside, and the one action that
+ * resolves them.
+ *
+ * At write time a note that contradicts a live note looks exactly like one that
+ * agrees with it, and this does not try to tell them apart — no model runs here.
+ * It hands the caller, an LLM holding both notes, the neighbours it would
+ * otherwise never learn existed; the judgment stays where it already lives.
+ *
+ * Self-gating: returns {} when there is nothing worth saying, so every surface
+ * spreads it unconditionally and a write onto clean ground stays quiet. Shared
+ * so kb_write's accept and kb_check_duplicate's non-duplicate verdict cannot
+ * describe the same neighbourhood differently — that drift shipped once.
+ */
+export function nearNeighborSignal(similar, { threshold = DUP_THRESHOLD } = {}) {
+  // Ceiling is the caller's own duplicate line, so a candidate is reported as a
+  // duplicate or as a neighbour, never as both and never as neither.
+  const near = similar.filter((s) => s.score >= NEAR_FLOOR && s.score < threshold).slice(0, NEAR_K);
+  if (!near.length) return {};
+  return {
+    near_notes: near.map((s) => ({
+      id: s.document_id,
+      title: s.title,
+      score: Math.round(s.score * 100) / 100,
+    })),
+    next_step: 'These live notes already cover this ground. If this note contradicts or replaces one, call kb_supersede with that note\'s id and a reason.',
+  };
+}
+
 // Brute-force cosine similarity — works for <2000 notes.
 // If vault exceeds 2000 notes, consider sqlite-vss extension for ANN search.
 export async function semanticSearch(query, { limit = 10, project, type, includeSuperseded = false } = {}) {
@@ -126,10 +162,15 @@ export async function similarDocs(content, { limit = 10, includeSuperseded = fal
  * point in the space and predicts nothing about the write that follows.
  */
 export async function checkDuplicate(content, { threshold = DUP_THRESHOLD } = {}) {
-  const matches = duplicatesIn(await similarDocs(content, { limit: 50 }), threshold);
+  const similar = await similarDocs(content, { limit: 50 });
+  const matches = duplicatesIn(similar, threshold);
   return {
     is_duplicate: matches.length > 0,
     matches: matches.slice(0, 5),
+    // Only beside a not-a-duplicate verdict, which is what makes this the
+    // pre-check for the write it precedes: the write returns early on a
+    // refusal, so it never reports neighbours either.
+    ...(matches.length ? {} : nearNeighborSignal(similar, { threshold })),
   };
 }
 
