@@ -7,8 +7,8 @@
 // frontmatter, and per-surface copies of the condition drift.
 
 import { execFileSync } from 'child_process';
-import { existsSync } from 'fs';
-import { resolve } from 'path';
+import { existsSync, readdirSync } from 'fs';
+import { isAbsolute, join, relative, resolve, sep } from 'path';
 
 export const TIER = {
   VERIFIED: 'verified',   // a fix landed or a test proves it — requires a reference
@@ -187,6 +187,41 @@ export function referenceIn(ref) {
   return flat.split(' ').some(tokenIsReference) ? flat : null;
 }
 
+// process.cwd() is wherever the MCP server happened to be launched from — in
+// the deployed case, a workspace directory one level above every git repo,
+// where no commit sha and no file path ever resolves. KB_REPO_ROOTS names
+// the roots to search instead; unset, the search is exactly the old
+// cwd-only behaviour, so nothing already working changes.
+export function repoRoots() {
+  const raw = (process.env.KB_REPO_ROOTS || '').trim();
+  if (!raw) return [process.cwd()];
+  const roots = raw.split(':').map(r => r.trim()).filter(Boolean);
+  return roots.length ? roots : [process.cwd()];
+}
+
+// `.git` marks a repo whether it's the usual directory or the file a worktree
+// checkout leaves behind — existence is the only thing that matters here.
+function isGitRepo(dir) {
+  return existsSync(join(dir, '.git'));
+}
+
+// A configured root that is itself a repo is searched directly. One that
+// isn't is a workspace: its immediate subdirectory repos are searched
+// instead, since a directory holding many repos side by side is the shape
+// KB_REPO_ROOTS exists to name.
+function reposUnder(root) {
+  if (isGitRepo(root)) return [root];
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter(e => e.isDirectory()).map(e => join(root, e.name)).filter(isGitRepo);
+}
+
+const searchDirs = (roots) => roots.flatMap(reposUnder);
+
 // Shape is not evidence. A UUID tail, a hex constant printed by a binary and
 // the word `deadbeef` are all sha-shaped and name nothing — and a citation that
 // resolves nowhere reads as the verification, which is the exact failure the
@@ -196,14 +231,26 @@ export function referenceIn(ref) {
 // note is being written from, a test file on disk. A pull request lives on a
 // host this code knows nothing about, so it is left to its shape — and `#42` is
 // structured enough that it is not produced by accident the way hex is.
-function tokenResolves(token, cwd) {
+//
+// `dir` is omitted for the shape-only pass over PR/URL tokens, which needs no
+// filesystem at all; every other token is unresolved without one.
+function tokenResolves(token, dir) {
   const t = token.replace(TOKEN_EDGES, '');
   if (PR_URL.test(t) || PR_NUMBER.test(t)) return true;
-  if (FILE_PATH.test(t) && TEST_PART.test(t)) return existsSync(resolve(cwd, t));
+  if (!dir) return false;
+  if (FILE_PATH.test(t) && TEST_PART.test(t)) {
+    // Guard the resolved path, not the token: a `..` segment or a leading
+    // `/` both normalize away inside resolve(), so only a target still
+    // inside `dir` afterward counts as reachable from it.
+    const target = resolve(dir, t);
+    const rel = relative(dir, target);
+    const escapes = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+    return !escapes && existsSync(target);
+  }
   const sha = LABELLED_SHA.test(t) ? t.split(/[:=]/)[1] : t;
   try {
     // argv, not a shell, and the token is hex by construction.
-    execFileSync('git', ['-C', cwd, 'cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' });
+    execFileSync('git', ['-C', dir, 'cat-file', '-e', `${sha}^{commit}`], { stdio: 'ignore' });
     return true;
   } catch {
     // "Cannot check" and "does not resolve" get the same answer on purpose:
@@ -214,12 +261,20 @@ function tokenResolves(token, cwd) {
 }
 
 // The reference if at least one token in it both looks like a citation and
-// resolves. Costs a `git cat-file` per sha, so this is the write path's gate
-// and never the reindex's.
-export function resolvedReferenceIn(ref, cwd = process.cwd()) {
+// resolves against one of `roots` (or one of their immediate subdirectory
+// repos). Costs a `git cat-file` per sha per repo searched, so this is the
+// write path's gate and never the reindex's. First repo that resolves wins;
+// no caching, since the scan is a handful of stat calls and writes are rare.
+export function resolvedReferenceIn(ref, roots = repoRoots()) {
   const flat = normalizeRef(ref);
   if (!flat) return null;
-  return flat.split(' ').some(t => tokenIsReference(t) && tokenResolves(t, cwd)) ? flat : null;
+  const tokens = flat.split(' ').filter(tokenIsReference);
+  if (!tokens.length) return null;
+  if (tokens.some(t => tokenResolves(t))) return flat; // PR/URL: shape only, no repo needed
+  for (const dir of searchDirs(roots)) {
+    if (tokens.some(t => tokenResolves(t, dir))) return flat;
+  }
+  return null;
 }
 
 // --- resolution -------------------------------------------------------------
@@ -251,7 +306,7 @@ export function resolveTier({ tier, ref = null } = {}) {
  * the sweep wrote is the single most likely thing a later session confirms —
  * 36% of the store arrived that way — so kb_promote must be able to raise it.
  */
-export function assertTier({ tier, ref = null, provenance = null, cwd = process.cwd() } = {}) {
+export function assertTier({ tier, ref = null, provenance = null, roots = repoRoots() } = {}) {
   if (tier != null && !TIERS.includes(tier)) {
     throw new Error(`Unknown tier "${tier}" — expected one of ${TIERS.join(', ')}.`);
   }
@@ -271,10 +326,16 @@ export function assertTier({ tier, ref = null, provenance = null, cwd = process.
   }
   // Second half of the same question. Shape got it this far; this asks whether
   // the thing named is real, which is what the writer was claiming to have.
-  if (resolved.tier === TIER.VERIFIED && !resolvedReferenceIn(ref, cwd)) {
+  if (resolved.tier === TIER.VERIFIED && !resolvedReferenceIn(ref, roots)) {
+    // Name what was actually searched: the repos found under each configured
+    // root, or the roots themselves when none resolved to a repo at all — a
+    // silently empty list would be a less honest refusal than the single
+    // cwd this replaced.
+    const dirs = searchDirs(roots);
+    const tried = dirs.length ? dirs : roots;
     throw new Error(
       `Tier "${TIER.VERIFIED}" needs a reference that resolves, and "${normalizeRef(ref)}" ` +
-      `names nothing reachable from ${cwd} — no such commit, no such file. ` +
+      `names nothing reachable from any of: ${tried.join(', ')} — no such commit, no such file. ` +
       `Cite something checkable from here, or write "${TIER.OBSERVED}" with what you saw.`
     );
   }
