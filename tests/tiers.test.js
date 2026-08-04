@@ -1,16 +1,17 @@
 // Epistemic tiers: what a note claims, what it had to show for the claim, and
 // whether an agent reading it back can tell the difference.
 import './helpers/tmp-kb.js';
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { execFileSync } from 'child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, statSync } from 'fs';
 import { dirname, join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 
 import {
   TIER, TIERS, DEFAULT_TIER, REF_MAX_CHARS,
-  assertTier, byScoreThenTier, coerceTier, referenceIn, resolveTier, SCORE_BUCKET, sourceFamily, tierForSource, tierLabel, tierRank,
+  assertTier, byScoreThenTier, coerceTier, referenceIn, repoRoots, resolveTier, SCORE_BUCKET, sourceFamily, tierForSource, tierLabel, tierRank,
 } from '../src/tiers.js';
 import { getToolDefinitions } from '../src/tools.js';
 import { backfillTiers, getDb, getDocument, insertDocument, preferConfirmed, promoteDocumentTier, searchDocuments } from '../src/db.js';
@@ -566,7 +567,7 @@ describe('a reference has to resolve, not just look like one', () => {
   // on the shape check before resolution ever ran.
   const HEAD = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO }).toString().trim();
 
-  const verified = (ref, cwd = REPO) => assertTier({ tier: 'verified', ref, cwd });
+  const verified = (ref, root = REPO) => assertTier({ tier: 'verified', ref, roots: [root] });
 
   for (const ref of ['deadbeef', 'b9e5e41c6d4758bf', 'dfe347b233c4', 'ab8aa3cce']) {
     it(`refuses a sha-shaped reference that names nothing: ${ref}`, () => {
@@ -601,5 +602,118 @@ describe('a reference has to resolve, not just look like one', () => {
   // back to the floor on the next pass.
   it('does not resolve on the silent path a reindex uses', () => {
     assert.strictEqual(resolveTier({ tier: 'verified', ref: 'deadbeef' }).tier, 'verified');
+  });
+});
+
+// The MCP server's cwd is wherever it was launched, and in the deployed case
+// that is a workspace one level above every git repo — where no commit sha
+// and no file path ever resolved. KB_REPO_ROOTS names the roots to search.
+describe('KB_REPO_ROOTS: verifying against configured roots, not just cwd', () => {
+  let work;
+  const GIT_ID = ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com'];
+
+  function initRepo(dir) {
+    mkdirSync(dir, { recursive: true });
+    execFileSync('git', [...GIT_ID, 'init', '-q'], { cwd: dir });
+  }
+
+  // Returns the sha of the commit it makes.
+  function commit(dir, relPath, content) {
+    writeFileSync(join(dir, relPath), content);
+    execFileSync('git', [...GIT_ID, 'add', '.'], { cwd: dir });
+    execFileSync('git', [...GIT_ID, 'commit', '-q', '-m', 'fixture commit'], { cwd: dir });
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+  }
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'kb-repo-roots-'));
+    delete process.env.KB_REPO_ROOTS;
+  });
+
+  afterEach(() => {
+    delete process.env.KB_REPO_ROOTS;
+  });
+
+  it('leaves cwd-only behaviour untouched when the env var is unset', () => {
+    assert.deepStrictEqual(repoRoots(), [process.cwd()]);
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: process.cwd() }).toString().trim();
+    assert.strictEqual(assertTier({ tier: 'verified', ref: head }).tier, 'verified');
+  });
+
+  it('resolves a sha via a configured repo root', () => {
+    const repo = join(work, 'repo');
+    initRepo(repo);
+    const sha = commit(repo, 'a.txt', 'hello');
+    process.env.KB_REPO_ROOTS = repo;
+    assert.strictEqual(assertTier({ tier: 'verified', ref: sha }).tier, 'verified');
+  });
+
+  it('resolves a sha via an immediate-subdirectory repo of a non-repo root', () => {
+    const workspace = join(work, 'workspace');
+    mkdirSync(workspace, { recursive: true });
+    const repo = join(workspace, 'inner-repo');
+    initRepo(repo);
+    const sha = commit(repo, 'a.txt', 'hello');
+    process.env.KB_REPO_ROOTS = workspace; // workspace itself is not a repo
+    assert.strictEqual(assertTier({ tier: 'verified', ref: sha }).tier, 'verified');
+  });
+
+  it('resolves a relative file path against a configured root', () => {
+    const repo = join(work, 'repo-with-test');
+    initRepo(repo);
+    mkdirSync(join(repo, 'tests'), { recursive: true });
+    writeFileSync(join(repo, 'tests', 'thing.test.js'), '// fixture');
+    process.env.KB_REPO_ROOTS = repo;
+    assert.strictEqual(assertTier({ tier: 'verified', ref: 'tests/thing.test.js' }).tier, 'verified');
+  });
+
+  it('counts a worktree-style .git FILE as a repo', () => {
+    const main = join(work, 'main');
+    initRepo(main);
+    const sha = commit(main, 'a.txt', 'hello');
+    const wt = join(work, 'wt');
+    execFileSync('git', [...GIT_ID, 'worktree', 'add', '-q', '--detach', wt, 'HEAD'], { cwd: main });
+    assert.ok(statSync(join(wt, '.git')).isFile(), 'fixture must actually be worktree-shaped, or this proves nothing');
+    process.env.KB_REPO_ROOTS = wt;
+    assert.strictEqual(assertTier({ tier: 'verified', ref: sha }).tier, 'verified');
+  });
+
+  it('still refuses an unresolvable ref, and names every root it tried', () => {
+    const repoA = join(work, 'repo-a');
+    const repoB = join(work, 'repo-b');
+    initRepo(repoA);
+    initRepo(repoB);
+    process.env.KB_REPO_ROOTS = `${repoA}:${repoB}`;
+    assert.throws(() => assertTier({ tier: 'verified', ref: 'deadbeef' }), (err) => {
+      assert.match(err.message, /names nothing reachable from any of:/);
+      assert.ok(err.message.includes(repoA), 'must name the first root tried');
+      assert.ok(err.message.includes(repoB), 'must name the second root tried');
+      return true;
+    });
+  });
+
+  // Family fix, not instance: any `..`-bearing or absolute file-path token must
+  // stay confined to the configured root, however it is spelled.
+  it('does not let a traversal payload in the file-path branch escape the configured root', () => {
+    const outside = join(work, 'outside');
+    mkdirSync(join(outside, 'tests'), { recursive: true });
+    writeFileSync(join(outside, 'tests', 'secret.test.js'), '// must not be reachable');
+
+    const repo = join(work, 'confined-repo');
+    initRepo(repo);
+    process.env.KB_REPO_ROOTS = repo;
+
+    const payloads = [
+      '../outside/tests/secret.test.js',
+      '../../outside/tests/secret.test.js',
+      join(outside, 'tests', 'secret.test.js'), // absolute path, bypassing the root entirely
+    ];
+    for (const payload of payloads) {
+      assert.throws(
+        () => assertTier({ tier: 'verified', ref: payload }),
+        /names nothing reachable/,
+        `must not resolve outside the configured root: ${payload}`,
+      );
+    }
   });
 });
