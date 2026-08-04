@@ -70,7 +70,7 @@ const COMMANDS = {
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
   'surface-report': {
-    summary: 'Per-tool demand, failures and latency, plus where the duplicate threshold really sits',
+    summary: 'Per-tool and per-model-caller demand, failures and latency, plus where the duplicate threshold really sits',
     run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),
   },
   'hint-probe': {
