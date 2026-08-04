@@ -11,15 +11,15 @@ import {
   vocabularyRejection,
 } from './predicates.js';
 
-// Re-exported: defined here before the registry moved into its own module, and
-// tools.js, the fold-inverses migration and the tests still import it from this
-// path. The registry's other names have no importer here and are not aliased.
-export { canonicalTriple } from './predicates.js';
-
 // Auto-capture: turn a raw work conversation / session transcript into durable
 // subject-predicate-object facts, with consolidation (dedup + retire-on-contradiction).
 // The facts table already gives us dedup (addFact) and temporal invalidation, which is
 // exactly mem0's consolidation step — so v1 targets triples, not prose notes.
+
+// Re-exported: defined here before the registry moved into its own module, and
+// tools.js, the fold-inverses migration and the tests still import it from this
+// path. The registry's other names have no importer here and are not aliased.
+export { canonicalTriple } from './predicates.js';
 
 // The list the prompt renders, straight from predicates.json — spelling it
 // again here would let what the model is asked for drift from what the write
