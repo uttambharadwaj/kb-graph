@@ -9,6 +9,7 @@ import { join } from 'path';
 process.env.KB_DIR = mkdtempSync(join(tmpdir(), 'kb-vocab-'));
 
 const { canonicalTriple, consolidate, EXTRACT_PROMPT } = await import('../src/extract.js');
+const { inVocabulary } = await import('../src/predicates.js');
 const { queryFact } = await import('../src/facts.js');
 const { getToolDefinitions } = await import('../src/tools.js');
 
@@ -169,7 +170,7 @@ describe('predicate vocabulary canonicalization', () => {
     const spellings = [
       ...Object.keys(registry.aliases), ...Object.values(registry.aliases),
       ...Object.keys(registry.inverses), ...Object.values(registry.inverses),
-      ...registry.preferred, ...registry.single_valued,
+      ...registry.vocabulary, ...registry.single_valued,
       'is_source_of_truth_for', 'deploys_to', 'blocked-by', 'MERGED INTO', "doesn't_send",
     ];
     for (const p of spellings) {
@@ -178,13 +179,30 @@ describe('predicate vocabulary canonicalization', () => {
     }
   });
 
-  // The prompt asks for a vocabulary and the canonicaliser folds onto one. Two
+  // The prompt asks for a vocabulary and the write boundary enforces one. Two
   // hand-maintained copies of that list drift, and the drift is silent: the model
-  // is asked for a predicate nothing folds, or folds onto one it was never told
-  // to prefer.
+  // is asked for a predicate the boundary refuses, or never told about one it
+  // would have accepted.
   it('asks the model for exactly the vocabulary the registry names', () => {
-    for (const predicate of registry.preferred) {
+    for (const predicate of registry.vocabulary) {
       assert.ok(EXTRACT_PROMPT.includes(predicate), `prompt never mentions ${predicate}`);
+    }
+  });
+
+  // The examples carry more weight than the rules — a few-shot output showing a
+  // predicate the boundary refuses teaches the model to lose facts, and the
+  // compound spellings the old examples used are the exact shape of the
+  // singleton tail this vocabulary exists to close.
+  it('emits no predicate its own examples could not store', () => {
+    // The Output: lines only. The schema sketch at the top of the prompt uses
+    // "..." as a placeholder for every field, which is not a predicate anyone is
+    // being taught to emit.
+    const examples = EXTRACT_PROMPT.split('\n')
+      .filter(line => line.startsWith('Output:'))
+      .flatMap(line => [...line.matchAll(/"predicate"\s*:\s*"([^"]+)"/g)].map(m => m[1]));
+    assert.ok(examples.length >= 10, `only found ${examples.length} example predicates to check`);
+    for (const predicate of examples) {
+      assert.ok(inVocabulary(predicate), `example teaches "${predicate}", which the write boundary refuses`);
     }
   });
 

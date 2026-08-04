@@ -3,7 +3,13 @@ import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './f
 import { runClaudeJSON } from './claude-cli.js';
 import { hashInput, logExtraction } from './extract-meter.js';
 import { groundExtraction, isIsoDate } from './grounding.js';
-import { PREFERRED, canonicalPredicate, canonicalTriple, retiresOnContradiction } from './predicates.js';
+import {
+  VOCABULARY,
+  canonicalPredicate,
+  canonicalTriple,
+  retiresOnContradiction,
+  vocabularyRejection,
+} from './predicates.js';
 
 // Re-exported: defined here before the registry moved into its own module, and
 // tools.js, the fold-inverses migration and the tests still import it from this
@@ -15,9 +21,11 @@ export { canonicalTriple } from './predicates.js';
 // The facts table already gives us dedup (addFact) and temporal invalidation, which is
 // exactly mem0's consolidation step — so v1 targets triples, not prose notes.
 
-// The list the prompt asks for. predicates.json owns the names — spelling them
-// again here would let the list the model is given drift from the list the
-// canonicaliser folds onto.
+// The list the prompt renders, straight from predicates.json — spelling it
+// again here would let what the model is asked for drift from what the write
+// boundary accepts. Sorted so the prompt is byte-stable across runs, which is
+// what makes it cacheable.
+const VOCABULARY_LIST = [...VOCABULARY].sort().join(', ');
 
 export const EXTRACT_PROMPT = `You are a Memory Extractor for an engineering knowledge base. Read a work conversation or session transcript and extract durable facts as subject-predicate-object triples for a temporal knowledge graph.
 
@@ -42,7 +50,8 @@ Rules:
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: uses, depends_on, defaults_to — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- Prefer these predicates when one fits, so the same relationship is always the same edge: ${PREFERRED.join(', ')}. Invent one only when none of them says it.
+- The predicate vocabulary is CLOSED. Use one of these and nothing else: ${VOCABULARY_LIST}. A predicate outside the list is refused at the write boundary and the fact is dropped, so inventing one loses it. If none of them fits, pick the nearest that is still true, or put the assertion in "skipped" saying which predicate you wanted.
+- Never build a compound predicate out of a sentence (merge_to_main_deploys_to, tracks_revert_of, migration_proposed_in). Decompose it onto listed predicates instead, one fact each.
 - A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
 - A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
@@ -426,6 +435,18 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // consolidate without going through that filter at all.
     const factValidFrom = isIsoDate(f.valid_from) ? f.valid_from : validFrom;
 
+    // The closed vocabulary, checked after the fold and before anything is
+    // written. Reported rather than coerced: the nearest listed predicate is a
+    // guess, and a guessed edge is indistinguishable from a stated one once it
+    // is a row. The caller gets the candidates and decides — widen the list, or
+    // re-state the fact. Silently dropping it here is the one thing that must
+    // not happen, since a caller with no `skipped` entry has been told the
+    // extraction was complete.
+    const rejection = vocabularyRejection(pred, raw.predicate);
+    if (rejection) {
+      skipped.push({ fact: f, ...rejection });
+      continue;
+    }
 
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
     // canonicalPredicate on the stored predicate too: rows written before an alias was
@@ -603,8 +624,19 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
       // Candidates are shown post-split, post-alias and post-direction, since that is the triple
       // consolidation will write — previewing the raw predicate would disagree
       // with the commit for exactly the drift this preview exists to expose.
-      const candidates = facts.flatMap(splitListObject)
-        .map(f => (f?.subject && f?.predicate && f?.object ? canonicalTriple(f) : f));
+      // The vocabulary is applied here for the same reason: a candidate the
+      // commit is going to refuse is not a candidate, and listing it makes the
+      // preview a promise the commit breaks. It moves to skipped carrying the
+      // same rejection the commit would have produced.
+      const candidates = [];
+      const refused = [];
+      for (const raw of facts.flatMap(splitListObject)) {
+        if (!raw?.subject || !raw?.predicate || !raw?.object) { candidates.push(raw); continue; }
+        const f = canonicalTriple(raw);
+        const rejection = vocabularyRejection(f.predicate, raw.predicate);
+        if (rejection) refused.push({ fact: f, ...rejection });
+        else candidates.push(f);
+      }
       // Previewed too: the whole point of a self-contradicting batch is that its
       // retirements land invisibly at commit time, and a preview that showed only
       // the candidates would be the last place to catch it before they do.
@@ -612,7 +644,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
         dry_run: true,
         candidates,
         conflicts: findSingleValuedConflicts(facts),
-        skipped: notExtracted,
+        skipped: [...refused, ...notExtracted],
         preview_key: key,
       };
     }

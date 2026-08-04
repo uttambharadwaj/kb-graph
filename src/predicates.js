@@ -23,10 +23,14 @@ const BUILTIN_PATH = new URL('./predicates.json', import.meta.url);
 const builtin = readJSON(BUILTIN_PATH);
 const override = readJSON(join(KB_DIR, 'predicates.json'));
 
+// Where to go to widen the list. Named in every rejection, because the whole
+// value of a closed vocabulary is that hitting the wall sends you to one file.
+export const VOCABULARY_FILE = 'src/predicates.json (or <KB_DIR>/predicates.json to extend per install)';
+
 // Every predicate that may be stored. `preferred` is the older name for this
 // key and still merges in, so an install that set one keeps working.
 const declared = source => [...(source?.vocabulary || []), ...(source?.preferred || [])];
-export const PREFERRED = [...declared(builtin), ...declared(override)];
+const VOCABULARY_NAMES = [...declared(builtin), ...declared(override)];
 
 // Own keys only. These maps are keyed by whatever the extractor emitted, and a
 // plain object answers `toString` and `constructor` with a function — which
@@ -152,7 +156,7 @@ for (const p of override?.many_valued || []) {
 // the ticket's real lifecycle value to store it.
 const CANONICAL_BY_LEMMA = Object.create(null);
 for (const name of [
-  ...PREFERRED,
+  ...VOCABULARY_NAMES,
   ...Object.keys(PREDICATE_ALIASES),
   ...Object.values({ ...builtin?.aliases, ...override?.aliases }),
   ...Object.values({ ...builtin?.inverses, ...override?.inverses }),
@@ -252,4 +256,106 @@ export function canonicalTriple(f) {
     && !NAMES_WORK_ITEM.test(String(t.object).trim())
     ? { ...t, subject: t.object, object: t.subject }
     : t;
+}
+
+// ---------------------------------------------------------------------------
+// The closed vocabulary.
+// ---------------------------------------------------------------------------
+
+// What may be stored, after folding. Every way the registry has of naming a
+// predicate counts as declaring one, not just the vocabulary list: an install
+// that marks a predicate single-valued or work-item-shaped plainly means to
+// store it, and every alias and inverse TARGET has to be storable or the fold
+// would produce exactly the rows the check then refuses — a config trap with no
+// symptom but a full `skipped` list.
+// Inverse SOURCES are then removed. canonicalTriple always rewrites those to
+// the other direction, so listing one would advertise a predicate as storable
+// that can never actually be stored.
+// An override can only widen this. Nothing removes a predicate from it, because
+// a vocabulary that shrinks under an install's config would refuse rows that
+// install had already written.
+export const VOCABULARY = new Set(
+  [
+    ...VOCABULARY_NAMES,
+    ...(builtin?.single_valued || []), ...(override?.single_valued || []),
+    ...(builtin?.work_item_object || []), ...(override?.work_item_object || []),
+    ...Object.values({ ...builtin?.aliases, ...override?.aliases }),
+    ...Object.values({ ...builtin?.inverses, ...override?.inverses }),
+  ].map(canonicalPredicate).filter(p => !Object.hasOwn(PREDICATE_INVERSES, p)),
+);
+
+export const inVocabulary = predicate => VOCABULARY.has(canonicalPredicate(predicate));
+
+// Character bigrams, for the "did you mean" list. Deliberately not a fold: this
+// runs only after a predicate has already been refused, so a wrong guess costs a
+// reader one bad suggestion rather than a wrong edge in the graph.
+const bigrams = (s) => {
+  const out = new Set();
+  for (let i = 0; i < s.length - 1; i += 1) out.add(s.slice(i, i + 2));
+  return out;
+};
+
+// Dice coefficient, plus a bonus for sharing the leading verb — which is where
+// the meaning of these names lives, so `merged_somewhere` should suggest the
+// merged_* family ahead of a closer-spelled stranger.
+function similarity(a, b) {
+  if (a === b) return 1;
+  const [ga, gb] = [bigrams(a), bigrams(b)];
+  let shared = 0;
+  for (const g of ga) if (gb.has(g)) shared += 1;
+  const dice = (ga.size + gb.size) ? (2 * shared) / (ga.size + gb.size) : 0;
+  const head = s => s.split('_')[0];
+  return dice + (stem(head(a)) === stem(head(b)) ? 0.5 : 0);
+}
+
+// The listed predicates nearest to one that was refused. Sorted by name at equal
+// score so a rejection message is reproducible — a suggestion list that reorders
+// between runs reads as the vocabulary having changed.
+export function nearestPredicates(predicate, limit = 3) {
+  const target = rawPred(predicate);
+  return [...VOCABULARY]
+    .map(name => ({ name, score: similarity(target, name) }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map(c => c.name);
+}
+
+// Both write paths reach the check holding an already-folded predicate, so
+// `asWritten` is how the spelling someone actually typed survives to the
+// message. Without it a caller is told about a word they never wrote: the copula
+// strip and the separator fold run before any list is consulted, so
+// "is yeeted into" is refused as "yeeted_into" and searching the list for the
+// first finds nothing.
+export class PredicateNotInVocabularyError extends Error {
+  constructor(predicate, asWritten = predicate) {
+    const canonical = canonicalPredicate(predicate);
+    const nearest = nearestPredicates(canonical);
+    super(
+      `Predicate "${canonical}" is not in the knowledge base's closed vocabulary`
+      + `${canonical === String(asWritten) ? '' : ` (folded from "${asWritten}")`}.`
+      + ` Nearest listed predicates: ${nearest.join(', ')}.`
+      + ` Use one of those, or add "${canonical}" to the "vocabulary" list in ${VOCABULARY_FILE}.`
+      + ' The vocabulary is closed on purpose: an unlisted predicate silently splits every query'
+      + ' and every retirement that should have matched it.'
+    );
+    this.name = 'PredicateNotInVocabularyError';
+    this.predicate = canonical;
+    this.nearest = nearest;
+  }
+}
+
+// The one rejection decision, so the two write paths render one verdict rather
+// than each deciding for itself. kb_extract turns this into a `skipped` entry
+// and kb_fact_add throws it; a second copy of the test is how they drift.
+// Returns null when the predicate is storable.
+export function vocabularyRejection(predicate, asWritten = predicate) {
+  if (inVocabulary(predicate)) return null;
+  const canonical = canonicalPredicate(predicate);
+  return {
+    reason: 'predicate_not_in_vocabulary',
+    predicate: canonical,
+    ...(canonical === String(asWritten) ? {} : { as_written: asWritten }),
+    nearest: nearestPredicates(canonical),
+    vocabulary_file: VOCABULARY_FILE,
+  };
 }

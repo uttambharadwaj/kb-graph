@@ -12,6 +12,7 @@ import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './wr
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
+import { inVocabulary, PredicateNotInVocabularyError } from './predicates.js';
 import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
 import { processNewClippings } from './classify/processor.js';
 import { reviewDestructiveAction } from './safety/review.js';
@@ -716,7 +717,7 @@ function defineTools() {
 
     {
       name: 'kb_fact_add',
-      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
+      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The predicate vocabulary is CLOSED: once folded, a predicate outside it is refused with an error naming the nearest listed predicates and the file the list lives in. Use one of those, or widen the list on purpose — do not reach for a different predicate just because it is accepted. The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
       schema: {
         subject: z.string().describe('The entity doing/being something'),
         predicate: z.string().describe('The relationship (e.g. "uses", "depends_on", "decided", "owns")'),
@@ -729,9 +730,14 @@ function defineTools() {
       // live rows for one relationship that no query joins and no retirement can
       // supersede — and it re-opens that gap after every migration closes it.
       // The response reports the triple as stored, not as asked for.
+      // The vocabulary is enforced here too, and as an error rather than a
+      // quiet skip: someone hand-writing a fact is present to read the reply,
+      // and the reply has to send them to the list rather than let them retry
+      // with a predicate that is merely accepted.
       handler: async ({ subject, predicate, object, valid_from, source }) => {
         try {
           const t = canonicalTriple({ subject, predicate, object });
+          if (!inVocabulary(t.predicate)) throw new PredicateNotInVocabularyError(t.predicate, predicate);
           const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
@@ -742,7 +748,7 @@ function defineTools() {
 
     {
       name: 'kb_extract',
-      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued AND the subject names one state-bearing thing — a ticket or issue id (tkt-4821 status "in_review" -> "done"). A repo, project or person accumulates instead, so "knowledge-base-server status X" never retires "status Y"; retire those by hand with kb_fact_invalidate. Cumulative predicates (owns, chose, shipped_via) always keep both. Where one call asserts two objects for the same single-valued pair, nothing is retired — the call gives no order for them — and the pair comes back in "conflicts" for you to resolve. Assertions the extractor chose not to record come back in "skipped" with a reason, and so does every triple the filter refused: a triple whose subject or object the text never names is not written ("ungrounded: ..."), and a valid_from the text never states is replaced by the observation date and reported ("date_ungrounded: ...") rather than corrected silently. Input past 12,000 characters is not examined and comes back there too, as "input_truncated" with the count — call again with the remainder if it matters. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
+      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued AND the subject names one state-bearing thing — a ticket or issue id (tkt-4821 status "in_review" -> "done"). A repo, project or person accumulates instead, so "knowledge-base-server status X" never retires "status Y"; retire those by hand with kb_fact_invalidate. Cumulative predicates (owns, chose, shipped_via) always keep both. Where one call asserts two objects for the same single-valued pair, nothing is retired — the call gives no order for them — and the pair comes back in "conflicts" for you to resolve. Assertions the extractor chose not to record come back in "skipped" with a reason, and so does every triple the filter refused: a triple whose subject or object the text never names is not written ("ungrounded: ..."), and a valid_from the text never states is replaced by the observation date and reported ("date_ungrounded: ...") rather than corrected silently. The predicate vocabulary is also CLOSED: a fact whose predicate is outside it comes back as "predicate_not_in_vocabulary", with the nearest listed predicates and the file to widen. Those are never coerced onto a near match and never silently dropped; a dry run reports them the same way, so its candidate list is exactly what a commit will write. Input past 12,000 characters is not examined and comes back there too, as "input_truncated" with the count — call again with the remainder if it matters. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
       schema: {
         text: z.string().describe('The conversation or session transcript to extract facts from'),
         source: z.string().optional().describe('Provenance for the facts (e.g. "debrief:2026-06-24", "session:<id>")'),
