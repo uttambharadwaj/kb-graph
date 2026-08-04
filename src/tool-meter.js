@@ -18,7 +18,7 @@ const ERROR_MAX_CHARS = 200;
 // Never let telemetry break a tool call: insert failures are swallowed so the
 // caller still gets its result, but logged loudly since a silent failure here
 // means the meter quietly goes blind — same contract as retrieval.js.
-export function logToolCall({ tool, ok, durationMs, resultChars = null, error = null, session = resolveSessionId() }) {
+function logToolCall({ tool, ok, durationMs, resultChars = null, error = null, session = resolveSessionId() }) {
   try {
     getDb().prepare(
       'INSERT INTO tool_calls (tool, ok, duration_ms, result_chars, error, session) VALUES (?, ?, ?, ?, ?, ?)'
