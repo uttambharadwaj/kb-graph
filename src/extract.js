@@ -189,7 +189,10 @@ export async function extractFacts(text) {
         // rejects without a value (runClaude drops stdout unless the exit was
         // clean), so no partial output survives to be batched alongside the
         // retry's and read as a single-valued conflict.
-        return await runClaudeJSON(prompt, { timeout: CHUNK_TIMEOUT_MS });
+        // Also lands a row in model_calls (model-meter.js) per chunk call;
+        // logExtraction below aggregates the extract-specific shape that
+        // generic table doesn't carry (input hash, per-chunk chars, conflicts).
+        return await runClaudeJSON(prompt, { timeout: CHUNK_TIMEOUT_MS, caller: 'extract' });
       } catch (err) {
         failure = err;
         console.error(`kb_extract: chunk ${i + 1}/${chunks.length} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${err.message}`);

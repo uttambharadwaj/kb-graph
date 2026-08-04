@@ -34,7 +34,7 @@ Source path: ${sourcePath}
 ${content.slice(0, 4000)}`;
 
   try {
-    const classification = await runClaudeJSON(prompt);
+    const classification = await runClaudeJSON(prompt, { caller: 'classifier' });
     return {
       success: true,
       ...classification,

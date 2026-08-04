@@ -73,7 +73,7 @@ export async function consolidateProject(vaultPath, project, sessions, { dryRun 
 
   const prompt = `${STATE_PROMPT}\n\n# Existing state note\n${existingState || '(none yet)'}\n\n# New session records (oldest first)\n${sessionBlocks}\n\n# End of input\nReturn ONLY the updated state note markdown now.`;
 
-  const stdout = await runClaude(prompt, { model: STATE_MODEL, timeout: 240000 });
+  const stdout = await runClaude(prompt, { model: STATE_MODEL, timeout: 240000, caller: 'state' });
   const body = (JSON.parse(stdout).result || '').trim();
   if (!body) throw new Error('state merge returned empty');
 

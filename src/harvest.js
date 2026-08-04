@@ -223,7 +223,7 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
   let notes = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      ({ notes = [] } = await runClaudeJSON(lessonsPrompt, { timeout: 120000 }));
+      ({ notes = [] } = await runClaudeJSON(lessonsPrompt, { timeout: 120000, caller: 'harvest' }));
       break;
     } catch (err) {
       console.error(`  lessons pass attempt ${attempt} failed: ${err.message}`); // transient CLI exits happen unattended

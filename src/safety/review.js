@@ -63,7 +63,7 @@ ${kbContext || 'No relevant past incidents found.'}`;
 
 async function askModel(model, prompt) {
   try {
-    return { ...await runClaudeJSON(prompt, { model, timeout: REVIEW_TIMEOUT_MS }), model };
+    return { ...await runClaudeJSON(prompt, { model, timeout: REVIEW_TIMEOUT_MS, caller: 'safety-review' }), model };
   } catch (err) {
     return noVerdict(model, err.message);
   }
