@@ -400,6 +400,34 @@ export const MIGRATIONS = [{
 
     CREATE INDEX IF NOT EXISTS idx_write_decisions_doc ON write_decisions(doc_id);
   `),
+}, {
+  version: 13,
+  // The tool meter (v11) covers the 26 MCP tools; nothing metered the model
+  // subprocess calls underneath them -- classification, summarization, safety
+  // review, harvest, state, extraction -- until one of them hung for 1800s with
+  // nothing to show for it. Logged from the single site every caller funnels
+  // through (runClaude in claude-cli.js), so a caller added later cannot ship
+  // dark by forgetting a log line. extractions (v7) still owns the
+  // extract-specific shape (chunk counts, input hash); this is the surface-wide
+  // twin every caller gets for free, extract included -- see the comment at its
+  // runClaudeJSON call site in extract.js for where the two rows meet.
+  name: 'model call metering',
+  applied: db => hasTable(db, 'model_calls'),
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS model_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      caller TEXT NOT NULL,
+      model TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      error TEXT,
+      prompt_chars INTEGER NOT NULL,
+      response_chars INTEGER,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_model_calls_caller_created ON model_calls(caller, created_at);
+  `),
 }];
 
 // Bring a database up to the schema this code needs. `kb migrate` and tests are

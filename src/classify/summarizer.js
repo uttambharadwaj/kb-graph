@@ -19,7 +19,7 @@ Title: ${title}
 ${content.slice(0, 3000)}`;
 
   try {
-    return { success: true, ...(await runClaudeJSON(prompt)) };
+    return { success: true, ...(await runClaudeJSON(prompt, { caller: 'summarizer' })) };
   } catch (err) {
     return { success: false, error: err.message, summary: title, key_topics: [] };
   }

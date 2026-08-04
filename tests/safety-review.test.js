@@ -36,16 +36,28 @@ chmodSync(fake, 0o755);
 process.env.CLAUDE_PATH = fake;
 process.env.KB_REVIEW_TIMEOUT_MS = '400';
 const { reviewDestructiveAction, multiModelReview } = await import('../src/safety/review.js');
+const { getDb } = await import('../src/db.js');
+
+const modelCalls = () => getDb().prepare("SELECT * FROM model_calls WHERE caller = 'safety-review' ORDER BY id").all();
 
 describe('safety review verdicts', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
   beforeEach(() => { delete process.env.FAKE_CLAUDE; });
 
-  it('passes a real verdict through', async () => {
+  // Through the real caller, not the logger directly: this is the review
+  // module's own runClaudeJSON call in askModel, proving the 'safety-review'
+  // label actually reaches runClaude rather than just existing in the source.
+  it('passes a real verdict through, and meters the call that produced it', async () => {
     process.env.FAKE_CLAUDE = 'ok';
     const result = await reviewDestructiveAction('restart a container');
     assert.equal(result.safe, true);
     assert.equal(result.risk_level, 'low');
+
+    const row = modelCalls().at(-1);
+    assert.strictEqual(row.model, result.model);
+    assert.strictEqual(row.ok, 1);
+    assert.strictEqual(row.error, null);
+    assert.ok(row.response_chars > 0);
   });
 
   // The whole point of the gate: a reviewer that never answered must not be
@@ -55,6 +67,10 @@ describe('safety review verdicts', () => {
     const result = await reviewDestructiveAction('destroy instance 12345');
     assert.equal(result.safe, false);
     assert.equal(result.risk_level, 'unknown');
+
+    const row = modelCalls().at(-1);
+    assert.strictEqual(row.ok, 0);
+    assert.match(row.error, /timed out/);
   });
 
   it('names the timeout rather than a bare exit code', async () => {
@@ -70,6 +86,10 @@ describe('safety review verdicts', () => {
     assert.match(result.reasoning, /exited 3/);
     assert.match(result.reasoning, /model backend unreachable/);
     assert.doesNotMatch(result.reasoning, /timed out/);
+
+    const row = modelCalls().at(-1);
+    assert.strictEqual(row.ok, 0);
+    assert.match(row.error, /exited 3/);
   });
 
   it('blocks when the reviewer answers with something that is not a verdict', async () => {

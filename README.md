@@ -262,11 +262,16 @@ hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
 `retrieval-report`, `hint-probe`, `surface-report`).
 
-`kb surface-report` answers two questions the store could not answer about
+`kb surface-report` answers three questions the store could not answer about
 itself. Which tools does anyone actually call — including the ones nobody has
 called at all, named rather than counted, because the case for removing a tool
-is which one it is. And where the duplicate threshold really sits: every write
-records its nearest existing note and that note's score, accepted or refused.
+is which one it is. Which model subprocess calls underneath them are slow or
+failing, broken down by caller (extraction, classification, summarization,
+safety review, harvest, state, weekly synthesis) with failure rate, p50/p90
+duration, and characters in/out — the calls are the expensive, hang-prone
+surface, and until this section every one of them but extraction was dark.
+And where the duplicate threshold really sits: every write records its
+nearest existing note and that note's score, accepted or refused.
 
 ```
 kb surface-report

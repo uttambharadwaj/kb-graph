@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { onChildDone } from './child-exit.js';
+import { logModelCall } from './model-meter.js';
 
 // Shared "run the local claude CLI in print mode, get JSON back" helper.
 // Reuses the OAuth session — no API key needed. Factored out of classify/classifier.js
@@ -31,7 +32,12 @@ export const modelEnv = () => ({
 // Read where it is set, so the two cannot drift apart.
 export const isBatchCall = () => process.env.KB_BATCH === '1';
 
-export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = {}) {
+// `caller` identifies who is asking, for the model_calls meter (model-meter.js)
+// below — required, not defaulted, so a new call site cannot go dark by
+// forgetting to pass one.
+export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000, caller } = {}) {
+  if (!caller) throw new Error('runClaude requires a caller label');
+  const promptChars = prompt.length;
   return new Promise((resolve, reject) => {
     const started = Date.now();
     const proc = spawn(CLAUDE_PATH, [
@@ -56,8 +62,24 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = 
     proc.stdout.on('data', d => { stdout += d; });
     proc.stderr.on('data', d => { stderr += d; });
 
+    // One place every settle path (success, non-zero exit, timeout, the
+    // orphan-flush path in child-exit.js, and a spawn error below) runs
+    // through, so metering cannot drift out of parity with the outcomes it
+    // describes. Never changes what gets resolved/rejected. Once-guarded:
+    // a failed spawn can emit 'error' AND still fire the close path, and a
+    // double reject is a no-op where a double meter row is a wrong count.
+    let logged = false;
+    const finish = (ok, { responseChars = null, error = null } = {}) => {
+      if (logged) return;
+      logged = true;
+      logModelCall({ caller, model, ok, durationMs: Date.now() - started, promptChars, responseChars, error });
+    };
+
     onChildDone(proc, (code, signal) => {
-      if (code === 0) return resolve(stdout);
+      if (code === 0) {
+        finish(true, { responseChars: stdout.length });
+        return resolve(stdout);
+      }
       const elapsed = Date.now() - started;
       // spawn's timeout kills with SIGTERM; the claude shim surfaces that as
       // exit 143 (128+15). Name the timeout instead of a bare exit code.
@@ -65,9 +87,14 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000 } = 
       const what = timedOut
         ? `claude timed out after ${elapsed}ms (limit ${timeout}ms)`
         : `claude exited ${code ?? `signal ${signal}`}`;
-      reject(new Error(`${what}: ${stderr}`));
+      const err = new Error(`${what}: ${stderr}`);
+      finish(false, { error: err.message });
+      reject(err);
     });
-    proc.on('error', reject);
+    proc.on('error', err => {
+      finish(false, { error: String(err?.message || err) });
+      reject(err);
+    });
     // If the child dies before reading stdin, the write EPIPEs — swallow it;
     // the failure itself is reported by the 'close' (or 'error') handler.
     proc.stdin.on('error', () => {});

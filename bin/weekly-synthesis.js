@@ -43,7 +43,7 @@ const prompt = generateSynthesisPrompt(notes, { tunnels }) + generateAnalysisReq
 
 // Synthesis is weekly and small — worth a stronger model than the classifier default.
 const model = process.env.SYNTHESIS_MODEL || 'claude-sonnet-5';
-const stdout = await runClaude(prompt, { model, timeout: 240000 });
+const stdout = await runClaude(prompt, { model, timeout: 240000, caller: 'weekly-synthesis' });
 const synthesis = JSON.parse(stdout).result || '';
 
 if (!synthesis.trim()) {
