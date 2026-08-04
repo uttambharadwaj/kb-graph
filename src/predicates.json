@@ -1,5 +1,75 @@
 {
-  "_comment": "Predicate registry. 'single_valued' predicates auto-retire a prior object during kb_extract consolidation, but only when the subject matches 'single_valued_subjects' — cardinality is a property of (subject, predicate), not of the predicate. A ticket has one status; a repo accumulates them. Everything else keeps both objects. The subject pattern requires a separator or # before the trailing digits, so ticket and issue ids (tkt-4821, pr_#412, svc-api#59) match while names that merely end in a digit (web3, oauth2, sqlite3, es2022) do not. 'preferred' is the vocabulary the extraction prompt asks for, listed here rather than in the prompt so one file owns the predicate names; it is also part of the set an inflected spelling folds onto. 'aliases' fold synonyms onto one canonical predicate so kb_fact_query, which matches on the predicate, does not under-return across synonym silos. Spelling variance that carries no meaning is folded without a list entry: hyphens and apostrophes, and a leading copula ('is_source_of_truth_for' -> 'source_of_truth_for'). Inflection folds too, but only onto a name this file already registers ('deploys_to' -> 'deployed_to'), so an unregistered pair like 'missing'/'missed' is never merged on morphology alone. Nothing single-valued is inflectable, for the same reason no inverse touches one: an inflection of a lifecycle noun is usually a verb meaning something else, and 'tkt-42 states that retries must be bounded' folded onto 'state' would retire the ticket's real lifecycle value to store a quotation. 'inverses' fold the mirrored spelling of a relationship onto one direction, swapping subject and object — the extractor picks a direction per call, and two live rows for one relationship retire independently. Each direction here is the one the graph already uses more, and none of them are single-valued, so the fold cannot change what retires what. 'work_item_object' predicates are asymmetric in roles rather than in spelling: the thing being built goes in the object, so a subject matching 'work_item_pattern' opposite an object that does not is a swapped pair, and folds. Only predicates whose subject must be a BUILDER belong here. A ticket cannot build code, so it cannot be the subject of 'implements' — but it can perfectly well target a problem, so 'addresses', 'fixes', 'closes' and 'resolves' take a work item on either side and are not listed. 'work_item_pattern' is an unanchored token: a subject must equal it, an object need only begin with it, since a work item under a label (tkt-19_step_1) still makes the row a relationship between two work items. It excludes a leading pull-request marker because a PR is an implementer, not a work item, and takes a single word before the separator so a compound id ending in a PR number (tkt-19-repo-pr-277) is not read as one. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in, 'aliases' and 'inverses' merge with these, 'preferred' and 'work_item_object' add to these lists, and either pattern there replaces the one here.",
+  "_comment": "Predicate registry. The vocabulary is CLOSED: 'vocabulary' is the complete set of predicates that may be stored, and a write whose predicate is still not in it after folding is refused where the caller can see it — kb_extract reports it in 'skipped' with the nearest candidates, kb_fact_add errors naming this file. 'single_valued' predicates auto-retire a prior object during kb_extract consolidation, but only when the subject matches 'single_valued_subjects' — cardinality is a property of (subject, predicate), not of the predicate. A ticket has one status; a repo accumulates them. Everything else keeps both objects. The subject pattern requires a separator or # before the trailing digits, so ticket and issue ids (tkt-4821, pr_#412, svc-api#59) match while names that merely end in a digit (web3, oauth2, sqlite3, es2022) do not. 'aliases' fold synonyms onto one canonical predicate so kb_fact_query, which matches on the predicate, does not under-return across synonym silos; every alias source is a spelling of its target, never a neighbouring meaning — 'implements' and 'fixes' both name a change closing work and stay separate, because one says what was built and the other what stopped hurting. Spelling variance that carries no meaning is folded without a list entry: hyphens and apostrophes, and a leading copula ('is_source_of_truth_for' -> 'source_of_truth_for'). Inflection folds too, but only onto a name this file already registers ('deploys_to' -> 'deployed_to'), so an unregistered pair like 'missing'/'missed' is never merged on morphology alone. Nothing single-valued is inflectable, for the same reason no inverse touches one: an inflection of a lifecycle noun is usually a verb meaning something else, and 'tkt-42 states that retries must be bounded' folded onto 'state' would retire the ticket's real lifecycle value to store a quotation. 'inverses' fold the mirrored spelling of a relationship onto one direction, swapping subject and object — the extractor picks a direction per call, and two live rows for one relationship retire independently. Each direction here is the one the graph already uses more, and none of them are single-valued, so the fold cannot change what retires what. 'work_item_object' predicates are asymmetric in roles rather than in spelling: the thing being built goes in the object, so a subject matching 'work_item_pattern' opposite an object that does not is a swapped pair, and folds. Only predicates whose subject must be a BUILDER belong here. A ticket cannot build code, so it cannot be the subject of 'implements' — but it can perfectly well target a problem, so 'addresses', 'fixes', 'closes' and 'resolves' take a work item on either side and are not listed. 'work_item_pattern' is an unanchored token: a subject must equal it, an object need only begin with it, since a work item under a label (tkt-19_step_1) still makes the row a relationship between two work items. It excludes a leading pull-request marker because a PR is an implementer, not a work item, and takes a single word before the separator so a compound id ending in a PR number (tkt-19-repo-pr-277) is not read as one. Extend or override per install with <KB_DIR>/predicates.json using the same shape — 'many_valued' there removes a built-in, 'vocabulary' and the older key 'preferred' both add storable predicates, 'aliases' and 'inverses' merge with these, 'work_item_object' adds to that list, and either pattern there replaces the one here.",
+
+  "_vocabulary_comment": "Why these and not others. An open vocabulary produced a log rather than a graph: 13,090 distinct predicates over 31k facts, 10,004 of them written exactly once, and one family — 'this merged / shipped / was fixed / deployed' — spelled more than 400 ways. Under that, a predicate query returns a fraction of its matching rows and single-valued retirement stops firing the moment the next fact arrives under a different spelling. Both failures are invisible, because every row still reads as a well-formed fact on its own. Two rules decided membership. (1) Volume: a predicate the store already uses at scale is legitimate whatever we would have chosen from a blank page — 'is' and 'has' are junk-drawer relations and both are kept, because refusing a top-ten predicate routes thousands of true assertions into 'skipped' and teaches callers to reach for a wrong-but-accepted predicate instead, which corrupts the graph in a way a coarse edge does not. Splitting them is a later job with a migration behind it, not something to do by rejection. (2) Role: a slot an engineering graph needs even where the census spread it thin — 'runs_on', 'stored_in', 'talks_to', 'proposes', 'reverts', 'drops'. What earned no slot: anything whose only reader is a test, and anything compound. A compound name ('merge_to_main_deploys_to', 'tracks_revert_of', 'migration_proposed_in') is a sentence wearing a predicate's clothes, and it is what the singleton tail is made of — those decompose onto a listed predicate or they are skipped. The list is deliberately well short of a round hundred. Padding it with plausible entries nobody has written would re-open the hole it exists to close, and an unlisted predicate is not lost: it comes back with its nearest listed candidates attached, which is the signal that says whether the vocabulary or the assertion was the thing that was wrong. Note one interaction: the copula strip reduces 'is_a' to 'a' before the alias map is consulted, so the alias is written in its natural form below and resolves through that key.",
+
+  "vocabulary": [
+    "owns",
+    "authored",
+    "approved_by",
+    "reviewed_by",
+    "assigned_to",
+    "filed_for",
+
+    "status",
+    "state",
+    "review_state",
+    "ci_state",
+    "version",
+
+    "child_of",
+    "blocked_by",
+    "tracks",
+    "addresses",
+    "scoped_to",
+    "documents",
+    "proposes",
+    "chose",
+    "rejects",
+    "replaces",
+    "reverts",
+
+    "implements",
+    "fixes",
+    "resolves",
+    "merged_to",
+    "merged_via",
+    "shipped_via",
+    "deployed_to",
+
+    "uses",
+    "depends_on",
+    "calls",
+    "calls_over_http",
+    "talks_to",
+    "runs_on",
+    "stored_in",
+    "contains",
+    "includes",
+    "provides",
+    "declared_in",
+
+    "gates",
+    "gated_by",
+    "defaults_to",
+    "bypasses",
+    "excludes",
+    "enables",
+    "prevents",
+
+    "causes",
+    "breaks",
+    "supports",
+    "returns",
+    "indicates",
+    "drops",
+
+    "lacks",
+    "incompatible_with",
+    "vulnerable_to",
+    "is",
+    "has"
+  ],
   "single_valued": [
     "status",
     "state",
@@ -13,24 +83,6 @@
     "implements"
   ],
   "work_item_pattern": "(?!pr[-_ #])[a-z][a-z0-9]*[-_ #]#?\\d+",
-  "preferred": [
-    "owns",
-    "child_of",
-    "blocked_by",
-    "depends_on",
-    "shipped_via",
-    "merged_via",
-    "merged_to",
-    "deployed_to",
-    "approved_by",
-    "reviewed_by",
-    "declared_in",
-    "fixes",
-    "resolves",
-    "status",
-    "uses",
-    "calls_over_http"
-  ],
   "inverses": {
     "owned_by": "owns",
     "blocks": "blocked_by",
@@ -42,19 +94,55 @@
     "fixed_by": "fixes",
     "resolved_by": "resolves",
     "written_by": "authored",
-    "approved": "approved_by"
+    "approved": "approved_by",
+    "caused_by": "causes",
+    "root_cause": "causes"
   },
   "aliases": {
     "child_ticket_of": "child_of",
     "subtask_of": "child_of",
     "declared_by": "declared_in",
     "defined_in": "declared_in",
+    "declared_at": "declared_in",
+
+    "implemented_in": "implements",
+    "implemented_via": "implements",
+    "implemented_as": "implements",
+    "fixed_via": "fixes",
+    "fixed_with": "fixes",
+
+    "merged": "merged_to",
+    "merged_into": "merged_to",
+    "merged_at": "merged_to",
+    "merged_in": "merged_to",
+    "merged_on": "merged_to",
+    "landed_in": "merged_to",
+    "landed_on": "merged_to",
     "merged_as": "merged_via",
     "merged_via_commit": "merged_via",
-    "merged_into": "merged_to",
+
+    "shipped": "shipped_via",
     "shipped_in": "shipped_via",
+    "shipped_as": "shipped_via",
+    "deployed_via": "shipped_via",
+
+    "deployed": "deployed_to",
     "deployed_on": "deployed_to",
+    "deployed_in": "deployed_to",
+    "deployed_at": "deployed_to",
+    "deployed_as": "deployed_to",
+    "shipped_to": "deployed_to",
+    "released_to": "deployed_to",
+
+    "requires": "depends_on",
+    "needs": "depends_on",
+    "handles": "supports",
+    "missing": "lacks",
+    "supersedes": "replaces",
+    "reverted_in": "reverts",
     "authored_by": "written_by",
-    "fixed_with": "fixed_via"
+    "is_a": "is",
+    "instance_of": "is",
+    "kind_of": "is"
   }
 }

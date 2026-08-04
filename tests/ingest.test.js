@@ -35,9 +35,9 @@ Use invariants.`, 'large-pr-protocol.md');
   });
 });
 
-// PF-3189: ingested documents had no vault file, and the reindex job — which
-// only walks the vault — therefore never embedded them. They were reachable by
-// full-text search and by nothing else, permanently and without any error.
+// Ingested documents had no vault file, and the reindex job — which only walks
+// the vault — therefore never embedded them. They were reachable by full-text
+// search and by nothing else, permanently and without any error.
 describe('ingest reaches every retrieval surface', () => {
   it('embeds an ingested file, so semantic search can return it', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kb-ingest-src-'));

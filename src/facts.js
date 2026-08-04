@@ -1,4 +1,5 @@
 import { getDb } from './db.js';
+import { canonicalPredicate } from './predicates.js';
 
 // created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC
 // 'YYYY-MM-DD HH:MM:SS'. Anything compared against it has to be formatted the
@@ -86,7 +87,12 @@ export function dedupeLiveFacts(entityId = null) {
   const kept = new Set();
   let collapsed = 0;
   for (const row of rows) {
-    const key = `${row.subject}\0${row.predicate}\0${row.object}`;
+    // Grouped on the folded predicate: two rows a merge has just made identical
+    // can carry two spellings of one relationship (merged_as beside merged_via),
+    // and a raw key would call those distinct and leave the pair behind. The
+    // survivor keeps whatever spelling it was written with — rewriting it is
+    // migration 12's job, not a dedup's.
+    const key = `${row.subject}\0${canonicalPredicate(row.predicate)}\0${row.object}`;
     if (kept.has(key)) { drop.run(row.id); collapsed += 1; } else kept.add(key);
   }
   return collapsed;
@@ -119,7 +125,15 @@ export function addFact(subject, predicate, object, { validFrom, source } = {}) 
   const db = getDb();
   const subId = entityKey(subject);
   const objId = entityKey(object);
-  const pred = predicate.toLowerCase().replace(/\s+/g, '_');
+  // The fold happens at the INSERT, not only in the callers that remember to
+  // call it. Both production writers hand this an already-canonical predicate,
+  // and applying it again is free — what it buys is that a future third writer
+  // cannot mint a new spelling by forgetting. The closed-vocabulary check is
+  // deliberately NOT here: it belongs after canonicalTriple, which also folds
+  // direction, and this function is handed a subject and object in the order the
+  // caller chose. A row-repair pass writing a pre-fold spelling back through
+  // here would be refused for a predicate that is about to become canonical.
+  const pred = canonicalPredicate(predicate);
 
   // Auto-create entities
   db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(subId, subject);
@@ -209,6 +223,13 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const db = getDb();
   const subId = entityKey(subject);
   const objId = entityKey(object);
+  // Deliberately the weak normalization, not canonicalPredicate: this has to
+  // name a row that already EXISTS, and consolidate's retirement loop passes the
+  // spelling it read off that row. A row written before migration 12 still
+  // carries a pre-fold predicate, and folding the argument here would look up a
+  // spelling the row does not have and silently retire nothing. Callers naming a
+  // fact from outside (kb_fact_invalidate) canonicalize first, which is the
+  // other half of the same rule: match what is stored.
   const pred = predicate.toLowerCase().replace(/\s+/g, '_');
   const endDate = ended || new Date().toISOString().split('T')[0];
 

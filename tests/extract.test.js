@@ -59,7 +59,21 @@ case "$prompt" in
     ],
     skipped: [],
   })}' ;;
-  *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'b', object: 'c' }] })}' ;;
+  *LEGACY_NO_SKIPPED*) echo '${envelope({ facts: [{ subject: 'a', predicate: 'uses', object: 'c' }] })}' ;;
+  *OFF_VOCAB_PREVIEW*) echo '${envelope({
+    facts: [
+      { subject: 'preview_job', predicate: 'yeets', object: 'state_notes' },
+      { subject: 'preview_job', predicate: 'owns', object: 'state_notes' },
+    ],
+    skipped: [],
+  })}' ;;
+  *OFF_VOCAB*) echo '${envelope({
+    facts: [
+      { subject: 'nightly_job', predicate: 'yeets', object: 'state_notes' },
+      { subject: 'nightly_job', predicate: 'owns', object: 'state_notes' },
+    ],
+    skipped: [],
+  })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
     skipped: [{ assertion: 'CodeRabbit raised a Major finding', reason: 'resolved in the same PR' }],
@@ -78,6 +92,27 @@ const currentObject = (subject, predicate) =>
   queryFact(subject, { direction: 'outgoing' })
     .filter(r => r.current && r.predicate === predicate)
     .map(r => r.object);
+
+// A row exactly as an older build left it. addFact folds the predicate now, so
+// it can no longer produce a pre-alias spelling however it is called — and a
+// test that seeds through it is testing the fold, not the thing it says it is.
+// Straight SQL is the only way left to put a stale spelling in the table.
+const legacyFact = (subject, predicate, object, validFrom) => {
+  const db = getDb();
+  const [subId, objId] = [entityKey(subject), entityKey(object)];
+  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(subId, subject);
+  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(objId, object);
+  db.prepare(
+    'INSERT INTO facts (id, subject, predicate, object, valid_from, source) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(`legacy_${subId}_${predicate}_${objId}`, subId, predicate, objId, validFrom, 'seed');
+};
+
+// Both ends of every triple the OFF_VOCAB stubs emit have to appear in the
+// text: the grounding filter runs before consolidation, so an ungrounded
+// triple would be dropped for the wrong reason and never reach the
+// vocabulary check these tests are about.
+const OFF_VOCAB_PREVIEW_TEXT =
+  'OFF_VOCAB_PREVIEW the preview job yeets state notes, and the preview job owns state notes';
 
 describe('kb_extract consolidation', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
@@ -432,7 +467,8 @@ describe('kb_extract consolidation', () => {
 
   it('matches a row stored under a pre-alias spelling', () => {
     // Written before pinned_at was aliased, so the graph holds the old spelling.
-    addFact('pf-8001', 'pinned_at', 'v1', { validFrom: '2026-07-01', source: 'seed' });
+    legacyFact('pf-8001', 'pinned_at', 'v1', '2026-07-01');
+    assert.deepStrictEqual(currentObject('pf-8001', 'pinned_at'), ['v1'], 'seed did not store the stale spelling');
 
     const res = consolidate(
       [{ subject: 'pf-8001', predicate: 'pinned_to', object: 'v2' }],
@@ -450,7 +486,8 @@ describe('kb_extract consolidation', () => {
     // merged_as/merged_via is the shipped alias pair, and merged_via is
     // many-valued — so normalisation has to hold for the duplicate check too,
     // not just for retirement, or the same commit lands twice.
-    addFact('pf-8002', 'merged_as', 'commit aaa1111', { validFrom: '2026-07-01', source: 'seed' });
+    legacyFact('pf-8002', 'merged_as', 'commit aaa1111', '2026-07-01');
+    assert.strictEqual(currentObject('pf-8002', 'merged_as').length, 1, 'seed did not store the stale spelling');
 
     const res = consolidate(
       [{ subject: 'pf-8002', predicate: 'merged_via', object: 'commit aaa1111' }],
@@ -503,7 +540,7 @@ describe('kb_extract consolidation', () => {
 
   it('leaves a prose object with commas whole', () => {
     const res = consolidate(
-      [{ subject: 'metronome', predicate: 'calculates', object: 'recharge_to, minus current balance' }],
+      [{ subject: 'metronome', predicate: 'returns', object: 'recharge_to, minus current balance' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
@@ -584,6 +621,42 @@ describe('kb_extract consolidation', () => {
 
     assert.strictEqual(res.added.length, 0);
     assert.match(res.skipped[0].reason, /chunk_failed/);
+  });
+
+  // Through kbExtract, not consolidate: the rejection has to survive the layer
+  // that merges consolidation's skips with the extractor's own, or it is
+  // reported nowhere the caller of the tool can see it.
+  it('surfaces an off-vocabulary predicate in the tool\'s own skipped list', async () => {
+    const res = await kbExtract(
+      'OFF_VOCAB the nightly job yeets state notes, and the nightly job owns state notes',
+      { source: 'test', observationDate: '2026-06-24' },
+    );
+
+    assert.strictEqual(res.added.length, 1, 'wrote a predicate outside the vocabulary');
+    const skip = res.skipped.find(s => s.reason === 'predicate_not_in_vocabulary');
+    assert.ok(skip, `rejection never reached the caller: ${JSON.stringify(res.skipped)}`);
+    assert.strictEqual(skip.predicate, 'yeets');
+    assert.ok(skip.nearest.length > 0);
+  });
+
+  // A preview listing a candidate the commit refuses is a preview that lies, and
+  // it lies in the direction that matters: someone reviewing a dry run before
+  // committing sees the fact and believes it landed.
+  it('previews only the candidates the commit will actually write', async () => {
+    const preview = await kbExtract(OFF_VOCAB_PREVIEW_TEXT, { source: 'test', observationDate: '2026-06-25', dryRun: true });
+
+    assert.deepStrictEqual(preview.candidates.map(c => c.predicate), ['owns']);
+    assert.ok(
+      preview.skipped.some(s => s.reason === 'predicate_not_in_vocabulary' && s.predicate === 'yeets'),
+      `refused candidate vanished instead of moving to skipped: ${JSON.stringify(preview.skipped)}`,
+    );
+
+    const committed = await kbExtract(OFF_VOCAB_PREVIEW_TEXT, { source: 'test', observationDate: '2026-06-25' });
+    assert.deepStrictEqual(
+      committed.added.map(f => f.predicate),
+      preview.candidates.map(c => c.predicate),
+      'the commit wrote something other than what was previewed',
+    );
   });
 
   it('reports missing accounting rather than an empty skipped list', async () => {

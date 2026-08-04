@@ -3,8 +3,8 @@
 > Generated: 2026-08-04
 
 ## Quick Stats
-- **Files:** 169
-- **Total lines:** 26,050
+- **Files:** 179
+- **Total lines:** 29,008
 
 ## Architecture Overview
 ```
@@ -52,7 +52,7 @@ bin/
 | cron-capture.sh | 30 | - | !/bin/bash |
 | generate-codemap.js | 170 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
-| kb.js | 239 | - | bin/kb.js — CLI entry point. |
+| kb.js | 249 | - | bin/kb.js — CLI entry point. |
 | post-sync.sh | 31 | - | !/bin/bash |
 | weekly-synthesis.js | 57 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
@@ -64,11 +64,12 @@ bin/
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | child-exit.js | 40 | onChildDone | When a spawned child is finished, for callers that need its output. |
-| claude-cli.js | 97 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
-| db.js | 994 | MIGRATIONS, insertDocument, updateDocument, deleteDocument, STOP_WORDS... | Our own model subprocesses, by the opening words of what we send them. |
+| claude-cli.js | 124 | modelEnv, isBatchCall, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| db.js | 1148 | MIGRATIONS, insertDocument, updateDocument, deleteDocument, STOP_WORDS... | Our own model subprocesses, by the opening words of what we send them. |
 | extract-meter.js | 40 | hashInput, logExtraction | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
-| extract.js | 778 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
-| facts.js | 285 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| extract.js | 664 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, extractFacts... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| facts.js | 306 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
+| grounding.js | 201 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate, dateStatedIn... | Grounding: the extractor asserts things its source text never states — |
 | harvest.js | 389 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, isPrintModeTranscript, harvestsPrintModeSessions... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, and |
 | hint-relevance.js | 146 | tokenize, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | ingest.js | 193 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
@@ -76,21 +77,24 @@ bin/
 | mcp-http.js | 137 | mcpHttpHandler, mcpGetHandler | - |
 | mcp-supervisor.js | 351 | superviseMcpServer | How often a held swap asks again. Short because asking is free unless |
 | mcp.js | 51 | start | Allow direct execution |
+| meters.js | 186 | METER_TABLES, EMPTY_REPLY_CHARS, PRUNE_EXCLUDED, PRUNABLE_TABLES, meterGrowth... | Retention for the five meter tables (retrievals, extractions, tool_calls, |
 | migration-gate.js | 106 | runMigrationCheck, createMigrationGate | Does the code on disk need a migration the databases have not had? |
 | migration-targets.js | 38 | MIGRATION_TARGETS, migrationsFor | Which databases have migrations, and where the lists that define them live. |
+| model-meter.js | 25 | logModelCall | One row per model subprocess call. Logged from the single site every caller |
 | paths.js | 18 | KB_DIR, FILES_DIR, LOGS_DIR, DB_PATH, CONFIG_PATH... | Job logs live with the data, not in /tmp. A weekly job's log sits untouched |
+| predicates.js | 362 | VOCABULARY_FILE, canonicalPredicate, SINGLE_VALUED, PREDICATE_INVERSES, inverseTargetOf... | The predicate registry and the one canonicaliser every write path folds |
 | restart-on-change.js | 81 | SOURCE_FILE, restartOnSourceChange | predicates.json is read once at import like any module, so it is source for |
 | retrieval.js | 109 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, isKbNudge... | Read-path telemetry: the write path has always been logged (documents, |
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
 | server.js | 219 | start | - |
 | state.js | 136 | freshSessionsByProject, consolidateProject, runConsolidateState, runConsolidateStateCli | Knowledge vs state: lessons and decisions are immutable and accumulate; |
 | tags.js | 40 | splitTags, normalizeTagString, getTagAliasMap, canonicalTag, tagSpellings | Tag helpers. Deliberately does not import db.js (db.js imports this module). |
-| tiers.js | 283 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
+| tiers.js | 344 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
 | tool-meter.js | 61 | readToolResult, metered | One row per MCP tool call. `retrievals` covers what was read and |
-| tools.js | 890 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tools.js | 899 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | tunnels.js | 141 | tagNeighbors, tunnel, aliasCandidatePair, strongestTunnels | Cross-domain tunnels: tag co-occurrence + entity co-mentions. |
 | write-meter.js | 22 | logWriteDecision | One row per write decision: what the closest existing note was, how close, |
-| write-note.js | 156 | RELATED_MIN, RELATED_K, renderRelatedSection, insertDocLinks, relatedForDoc... | Shared note-writing path: dedup, frontmatter, related-links, index. |
+| write-note.js | 172 | RELATED_MIN, RELATED_K, renderRelatedSection, nearNeighborFields, renderNearNeighbors... | Shared note-writing path: dedup, frontmatter, related-links, index. |
 
 ## src/bus/
 
@@ -129,14 +133,15 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| canonicalize-entities.js | 230 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
+| canonicalize-entities.js | 234 | canonicalizeEntities, auditCanonicalEntities, runCanonicalizeEntitiesCli | One-time (re-runnable) migration for entities stored under a spelling |
 | flags.js | 112 | UsageError, wantsHelp, assertKnownFlags, showHelp, acceptFlags... | `--help` must print help and do nothing else, and a mistyped flag must not be |
 | fold-inverses.js | 129 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows stored under a spelling |
 | hint-probe.js | 58 | hintProbe, runHintProbeCli | Replay every prompt the hint has actually been asked about, against the |
 | ingest-cli.js | 39 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
 | mcp-register.js | 94 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, KB_MCP_SERVER_CONFIG, getAgentConfigPath... | Absent and unreadable are different answers. Treating both as "empty config" |
-| migrate.js | 84 | runMigrateCli | The only path in the codebase that executes DDL. Everything else verifies. |
+| meters-cli.js | 61 | runMetersPruneCli | `kb meters prune` — the only place these five tables lose a row. No |
+| migrate.js | 91 | runMigrateCli | The only path in the codebase that executes DDL. Everything else verifies. |
 | prompt-hint.js | 107 | HOOK_ERROR_LOG, recordHookFailure, deliver, promptHint | UserPromptSubmit hook: when the user's prompt is actually about something the |
 | register.js | 35 | register | - |
 | retrieval-report.js | 162 | retrievalReport, runRetrievalReportCli | Surface lists are constants, not input, but binding them keeps the SQL |
@@ -148,7 +153,7 @@ bin/
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
-| surface-report.js | 94 | runSurfaceReportCli | What the two newest meters have to say: which tools anyone actually calls, |
+| surface-report.js | 247 | surfaceReport, runSurfaceReportCli | What the newest meters have to say: which tools anyone actually calls, |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
 | tier-cli.js | 29 | runTierCli | `kb tier` — the standing of what is stored, and the backfill that derives it |
 | vault-cli.js | 20 | vaultReindex | - |
@@ -159,7 +164,7 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | embed.js | 99 | embeddableBody, storeEmbedding, generateEmbedding, embeddingToBuffer, bufferToEmbedding... | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
-| search.js | 180 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, semanticSearch, similarDocs... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
+| search.js | 221 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, NEAR_FLOOR, NEAR_K... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
 
 ## src/middleware/
 
@@ -222,30 +227,35 @@ bin/
 | autobind.test.js | 196 | - | - |
 | bus.test.js | 1592 | - | - |
 | child-exit.test.js | 33 | - | - |
-| claude-cli.test.js | 76 | - | Fake claude binaries so these tests need no network and run in ms. |
-| cli-inert.test.js | 247 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
+| claude-cli.test.js | 161 | - | Fake claude binaries so these tests need no network and run in ms. |
+| cli-inert.test.js | 249 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
 | db-connect-guard.test.js | 40 | - | Runs in its own process so KB_DIR can point somewhere disposable before |
 | db.test.js | 45 | - | - |
 | dedup-agreement.test.js | 109 | - | - |
-| entity-canonicalization.test.js | 268 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract-context.test.js | 67 | - | - |
-| extract-eval.test.js | 207 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
+| entity-canonicalization.test.js | 283 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract-context.test.js | 190 | - | A qualifier that lands in a different chunk from its claim is not merely |
+| extract-eval.test.js | 216 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract-meter.test.js | 148 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract.test.js | 837 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 913 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | fact-query-cap.test.js | 118 | - | Above the 200 ceiling on purpose: with a smaller fixture, an assertion that |
 | fold-inverses.test.js | 304 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| harvest.test.js | 363 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| grounding.test.js | 347 | - | Points KB_DIR and the vault at throwaway dirs — must come before anything |
+| harvest.test.js | 376 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | health-backlog.test.js | 96 | - | The briefing carried "202 notes missing summaries" unchanged for weeks. A |
 | hint-probe.test.js | 50 | - | - |
 | hint-recall.test.js | 336 | - | The opposing force to hint-relevance.test.js. |
 | hint-relevance.test.js | 149 | - | The prompt-hint surface used to fire on 100% of prompts — 94 of 94 logged |
 | hooks-retrieval.test.js | 196 | - | Exercises wakeup-hook.js and prompt-hint.js as real subprocesses (they |
-| ingest.test.js | 87 | - | Ingested documents had no vault file, and the reindex job — which |
+| ingest.test.js | 87 | - | Ingested documents had no vault file, and the reindex job — which only walks |
 | inverse-fold.test.js | 201 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| mcp-supervisor.test.js | 377 | MARKER, MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
+| mcp-supervisor.test.js | 406 | MARKER, MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
+| meter-retention.test.js | 217 | - | pruneMeters(table: 'tool_calls') deletes from the whole table, so a test |
 | migration-check.test.js | 178 | - | A KB_DIR and bus home nothing else shares. Neither database exists until a |
 | migration-gate.test.js | 163 | MIGRATIONS | A KB_DIR and bus home nothing else shares. Neither database exists until a |
-| predicate-vocabulary.test.js | 276 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| near-neighbors.test.js | 216 | - | The audience for this response is a model, so what it has to parse is what is |
+| predicate-closed-vocabulary.test.js | 260 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
+| predicate-fold-migration.test.js | 190 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
+| predicate-vocabulary.test.js | 294 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | qualifier-prefix.test.js | 78 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | register.test.js | 140 | - | The registration outlives the shell that wrote it. A Homebrew Cellar path |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
@@ -253,7 +263,7 @@ bin/
 | retrieval-surfaces.test.js | 233 | - | Every read surface, counted rather than inspected. The meter's failure mode |
 | retrieval.test.js | 129 | - | - |
 | runtime-node.test.js | 95 | - | Homebrew's Cellar path names one patch release. Persisting it into a job, |
-| safety-review.test.js | 89 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
+| safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | schema-migrations.test.js | 296 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | setup-env-preserve.test.js | 9 | - | - |
 | setup-hooks.test.js | 140 | - | tests/setup-hooks.test.js |
@@ -266,7 +276,7 @@ bin/
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 142 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
 | tier-annotation.test.js | 80 | - | A tier printed on every row is a tier that tells the reader nothing. Every |
-| tiers.test.js | 606 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
+| tiers.test.js | 720 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
 | tools.test.js | 192 | - | A tool nothing points at is one no agent has a reason to call, which is |
 | tunnels.test.js | 132 | - | - |
 | upload-path-traversal.test.js | 33 | - | tests/upload-path-traversal.test.js |

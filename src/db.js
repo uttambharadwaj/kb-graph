@@ -8,6 +8,7 @@ import {
   assertTier, byScoreThenTier, normalizeRef, RANK_BUCKET, resolveTier, sourceFamily, tierForSource, tierRank,
 } from './tiers.js';
 import { logRetrievalResults } from './retrieval.js';
+import { canonicalPredicate } from './predicates.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 
 let db = null;
@@ -401,6 +402,41 @@ export const MIGRATIONS = [{
     CREATE INDEX IF NOT EXISTS idx_write_decisions_doc ON write_decisions(doc_id);
   `),
 }, {
+  version: 12,
+  // Rows stored before the predicate vocabulary closed still carry whatever
+  // spelling the extractor happened to pick that run — 13,090 distinct
+  // predicates over 31k facts, 10,004 of them used exactly once. Writes fold
+  // now, but a stored row does not fold itself, and until it does the next
+  // mention of the same relationship lands on the canonical edge while the old
+  // one sits beside it: invisible to the dedup, invisible to the retirement that
+  // should have superseded it, and still reading as a true fact. That makes this
+  // part of the change rather than a follow-up to it.
+  //
+  // Predicate spelling only. Direction is the fold-inverses migration's job
+  // (`kb fold-inverses`), and doing it in both places would swap every mirrored
+  // row twice.
+  name: 'fold stored predicates onto the closed vocabulary',
+  // The cheap half of the plan: if no distinct predicate folds, nothing folds,
+  // and the merge below only ever fires on a collision a fold caused — so the
+  // two agree exactly without this reading 31k rows on every connect.
+  applied: db => !hasTable(db, 'facts') || predicatesNeedingFold(db).length === 0,
+  preview: (db) => {
+    const { rewrite, drop } = planPredicateFold(db);
+    const onto = new Set(rewrite.map(r => r.predicate)).size;
+    return `${rewrite.length} rows fold onto ${onto} predicates, ${drop.length} duplicate rows merge`;
+  },
+  up: (db) => {
+    const { rewrite, drop } = planPredicateFold(db);
+    const dropRow = db.prepare('DELETE FROM facts WHERE id = ?');
+    const setPredicate = db.prepare('UPDATE facts SET predicate = ? WHERE id = ?');
+    // Duplicates first. Nothing depends on the order — facts carries no unique
+    // index on the triple — but leaving the row that is about to disappear
+    // un-rewritten keeps the two lists disjoint, which is what makes the preview
+    // counts add up to what runs.
+    for (const id of drop) dropRow.run(id);
+    for (const { id, predicate } of rewrite) setPredicate.run(predicate, id);
+  },
+}, {
   version: 13,
   // The tool meter (v11) covers the 26 MCP tools; nothing metered the model
   // subprocess calls underneath them -- classification, summarization, safety
@@ -464,6 +500,61 @@ export const MIGRATIONS = [{
     CREATE UNIQUE INDEX IF NOT EXISTS uq_meter_rollups_bucket ON meter_rollups(table_name, day, dim);
   `),
 }];
+
+// The stored spellings that are not their own canonical form. One column, no
+// row bodies: this runs on every connect, through pendingMigrations.
+function predicatesNeedingFold(db) {
+  return db.prepare('SELECT DISTINCT predicate FROM facts').pluck().all()
+    .filter(p => canonicalPredicate(p) !== p);
+}
+
+/**
+ * What migration 12 will do, as two disjoint lists of row ids.
+ *
+ * Rows that land on the same (subject, predicate, object) once folded are the
+ * same fact written twice, and addFact would have refused the second — so the
+ * earliest survives whole and the rest are dropped, which keeps the survivor's
+ * source attached to its own date.
+ *
+ * Two restrictions, both in the do-no-harm direction. Only LIVE rows merge: a
+ * retired row and a live one under the same triple are a state that ended and
+ * came back, and collapsing them would delete history rather than a duplicate.
+ * And a collision merges only where the fold caused it — two rows already
+ * identical before this ran are a pre-existing duplicate that dedupeLiveFacts
+ * owns, and claiming them here would put rows in `drop` that `applied` cannot
+ * see, so the migration would report itself pending forever.
+ */
+function planPredicateFold(db) {
+  // ORDER BY is load-bearing: the first row to claim a triple is the one kept,
+  // so it has to be the earliest. NULL sorts first here, matching queryFact's
+  // as-of test and dedupeLiveFacts. id breaks ties, because a plan that depends
+  // on the order SQLite happened to return is not one you can dry-run.
+  const rows = db.prepare(
+    'SELECT id, subject, predicate, object, valid_to FROM facts ORDER BY valid_from, id'
+  ).all();
+
+  const rewrite = new Map();
+  const liveByTriple = new Map();
+  for (const row of rows) {
+    const folded = canonicalPredicate(row.predicate);
+    if (folded !== row.predicate) rewrite.set(row.id, folded);
+    if (row.valid_to !== null) continue;
+    const key = `${row.subject}\0${folded}\0${row.object}`;
+    if (!liveByTriple.has(key)) liveByTriple.set(key, []);
+    liveByTriple.get(key).push(row.id);
+  }
+
+  const drop = [];
+  for (const ids of liveByTriple.values()) {
+    if (ids.length < 2 || !ids.some(id => rewrite.has(id))) continue;
+    for (const id of ids.slice(1)) {
+      drop.push(id);
+      rewrite.delete(id);
+    }
+  }
+
+  return { rewrite: [...rewrite].map(([id, predicate]) => ({ id, predicate })), drop };
+}
 
 // Bring a database up to the schema this code needs. `kb migrate` and tests are
 // the only callers — connecting verifies instead, so that no ordinary command

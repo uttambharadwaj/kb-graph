@@ -13,13 +13,26 @@ delete process.env.KB_HARVEST_FACTS;    // a host that opted in must not fail th
 // real CLI. Set before importing: claude-cli reads CLAUDE_PATH once. One reply
 // answers both prompts — no lessons, one fact — and the fact carries a call
 // counter so every call contributes a distinct row rather than a duplicate.
+// The counter picks a predicate from the vocabulary rather than minting one per
+// call: an unlisted predicate is refused at the write boundary now, and a
+// per-call-unique predicate is the exact shape the closed vocabulary exists to
+// stop. Subject and object stay as the transcript words them, or the grounding
+// filter drops the triple before consolidation ever sees it.
 const stub = join(tmp, 'claude-stub');
 const counter = join(tmp, 'calls');
 writeFileSync(stub, [
   '#!/bin/sh',
   'cat > /dev/null',
   `n=$(cat ${counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counter}`,
-  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"billing service\\\\",\\\\"predicate\\\\":\\\\"noted_%s\\\\",\\\\"object\\\\":\\\\"payments team\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$n"`,
+  // Long enough that no two harvest runs in this file reuse one: 8 chunks a run
+  // (MAX_CONCURRENT_CALLS) plus a lessons call, three runs. A repeat would land
+  // as a duplicate and the fact count would stop moving for the wrong reason.
+  'set -- owns uses contains provides includes supports tracks documents calls'
+    + ' talks_to runs_on stored_in depends_on gates gated_by defaults_to bypasses'
+    + ' excludes enables prevents causes breaks returns indicates drops lacks'
+    + ' replaces reverts proposes chose rejects addresses',
+  'shift $(( (n - 1) % 32 )); p=$1',
+  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"billing service\\\\",\\\\"predicate\\\\":\\\\"%s\\\\",\\\\"object\\\\":\\\\"payments team\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$p"`,
 ].join('\n') + '\n');
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
