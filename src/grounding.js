@@ -17,13 +17,40 @@ export const normalizeForGrounding = s =>
 // becomes ..._pointing). Stemming both sides means an over-eager fold can only
 // ever accept more, never drop a name the text really used. Short tokens are
 // left alone: "ga" and "ids" have nothing to strip and everything to lose.
+// Nominalising suffixes, stripped before the inflectional fold below. The
+// extractor turns the text's verbs into nouns when it coins a name — "sessions
+// failing" comes back as ..._session_failures, "completing the hook" as
+// ..._completion — and inflection alone does not close that: "failing" folds to
+// "fail" while "failures" folds to "failur". Both sides get the same treatment,
+// so this can only ever accept more, never drop a name the text really used.
+const DERIVATIONAL = /(?:ures?|ions?|ities|ity|ments?|ances?|ences?|ness)$/;
+
 const stemToken = (t) => {
   if (t.length < 5) return t;
-  const base = t.replace(/(?:ing|ed|es|s)$/, '');
+  const deriv = t.replace(DERIVATIONAL, '');
+  const base = (deriv.length >= 4 ? deriv : t).replace(/(?:ing|ed|es|s)$/, '');
   return (base.length >= 3 ? base : t).replace(/e$/, '');
 };
 
-const tokensOf = s => normalizeForGrounding(s).split(' ').filter(Boolean).map(stemToken);
+const wordsOf = s => normalizeForGrounding(s).split(' ').filter(Boolean);
+const tokensOf = s => wordsOf(s).map(stemToken);
+
+// The text's tokens, plus each adjacent pair run together. The extractor closes
+// the compounds the text writes open or hyphenated ("pre-warming" back as
+// `..._prewarming`), and those are the same word, not a second entity — so the
+// text side carries both spellings rather than the claim side guessing where to
+// split. Pairs never cross a sentence, or "the data. base is locked" would hand
+// out "database", a name neither sentence contains.
+const SENTENCE = /[.!?;:\n]+/;
+const textTokensOf = (s) => {
+  const out = new Set();
+  for (const sentence of String(s ?? '').split(SENTENCE)) {
+    const words = wordsOf(sentence);
+    words.forEach(w => out.add(stemToken(w)));
+    for (let i = 0; i + 1 < words.length; i++) out.add(stemToken(words[i] + words[i + 1]));
+  }
+  return out;
+};
 
 // Skip reasons, spelled once: tests and any downstream filter share these
 // prefixes rather than re-typing them. Both are about grounding, so neither can
@@ -112,6 +139,17 @@ const isObjectGrounded = (value, ctx) => {
   return isGrounded(raw, ctx);
 };
 
+// Which words of a rejected name the text does not have. Without this the
+// report reads "X not in source text" for an X the text mostly contains, and
+// the reader goes looking for the wrong thing — the whole cost of the incident
+// that produced the category-noun rule was ten such reasons, each true of one
+// word and false of the name it named.
+const missing = (values, { textTokens }) => {
+  const words = values.flatMap(v => wordsOf(v));
+  const gap = [...new Set(words.filter(w => !textTokens.has(stemToken(w))))];
+  return gap.length ? ` — no ${gap.map(w => `"${w}"`).join(', ')} in it` : '';
+};
+
 const assertionOf = f => `${f.subject} ${f.predicate} ${f.object}`;
 
 /**
@@ -147,7 +185,7 @@ function groundValidFrom(claimed, text, observationDate) {
 export function groundTriples(facts, text, { observationDate } = {}) {
   const ctx = {
     text: String(text ?? ''),
-    textTokens: new Set(tokensOf(text)),
+    textTokens: textTokensOf(text),
     textRefs: referencesIn(text),
   };
   const fallbackDate = observationDate || new Date().toISOString().split('T')[0];
@@ -168,7 +206,8 @@ export function groundTriples(facts, text, { observationDate } = {}) {
       skipped.push({
         assertion: assertionOf(fact),
         fact,
-        reason: `${UNGROUNDED_REASON_PREFIX}${ungrounded.join(' and ')} not in source text`,
+        reason: `${UNGROUNDED_REASON_PREFIX}${ungrounded.join(' and ')} not in source text`
+          + missing([fact.subject, fact.object], ctx),
       });
       continue;
     }
