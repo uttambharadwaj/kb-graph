@@ -111,7 +111,7 @@ describe('grounding extracted triples in the source text', () => {
       ], text, {});
 
       assert.deepStrictEqual(res.facts.map(f => f.object), ['svc-b', 'svc-b']);
-      assert.deepStrictEqual(reasons(res), [`${UNGROUNDED_REASON_PREFIX}object "tkt-404" not in source text`]);
+      assert.deepStrictEqual(reasons(res), [`${UNGROUNDED_REASON_PREFIX}object "tkt-404" not in source text — no "tkt", "404" in it`]);
     });
 
     it('says nothing about an empty batch', () => {
@@ -122,7 +122,7 @@ describe('grounding extracted triples in the source text', () => {
     it('names both sides when both are ungrounded', () => {
       const res = groundTriples([triple('svc-z', 'depends_on', 'svc-y')], text, {});
       assert.deepStrictEqual(reasons(res), [
-        `${UNGROUNDED_REASON_PREFIX}subject "svc-z" and object "svc-y" not in source text`,
+        `${UNGROUNDED_REASON_PREFIX}subject "svc-z" and object "svc-y" not in source text — no "z", "y" in it`,
       ]);
     });
 
@@ -169,9 +169,103 @@ describe('grounding extracted triples in the source text', () => {
       });
     }
 
+    // A real incident capture lost every causal fact it carried, each over a
+    // single token — a category noun the extractor hung off a phrase the text
+    // does state, or a compound the text writes hyphenated. Its text, abridged
+    // only by dropping whole sentences.
+    const incident = 'The cause was stealth browser sessions failing on the Tetra data plane: '
+      + 'WADL\'s combined resolver returned 400 "No instance template with name tetra-stealth-fed7059431d7" '
+      + 'from the AWS resolver and the bare-metal fallback. '
+      + 'Root cause: the Tetra instance template for the stealth browser profile fails its cold-host prepare step '
+      + 'with "Browser did not become ready within 10000ms". '
+      + 'The initial root-cause analysis posted by TinyIgor was refuted. '
+      + 'Aleks proposed fixing this permanently by pre-warming the stealth template in provision.sh in the '
+      + 'aws-control-tetra repo and completing the ASG lifecycle hook only after successful provisioning.';
+
+    for (const [subject, object, why] of [
+      ['tetra stealth instance template', 'stealth browser session failures', 'failing -> failures'],
+      ['stealth_browser_profile', 'cold_host_provisioning_failure', 'fails -> failure'],
+      ['aleks', 'asg_lifecycle_hook_post_provisioning_completion', 'completing -> completion'],
+      ['aleks', 'stealth_profile_prewarming_in_provision_sh', 'pre-warming -> prewarming, mid-name'],
+      ['aleks', 'provision_sh_stealth_template_prewarming', 'pre-warming -> prewarming, in last place'],
+    ]) {
+      it(`grounds ${JSON.stringify(object)} (${why})`, () => {
+        const res = groundTriples([triple(subject, 'causes', object)], incident, {});
+        assert.deepStrictEqual(reasons(res), []);
+      });
+    }
+
+    // The other half of that capture stays rejected, and should: the text has no
+    // word of these families at all. What changed is that the report now names
+    // the word it is missing instead of calling the whole compound absent from a
+    // text that contains all but one of its words.
+    for (const [object, absent] of [
+      ['400 no instance template error', 'error'],
+      ['cold_host_prepare_timeout', 'timeout'],
+      ['stealth_profile_unavailability', 'unavailability'],
+    ]) {
+      it(`rejects ${JSON.stringify(object)} and says the text has no ${JSON.stringify(absent)}`, () => {
+        const res = groundTriples([triple('aws resolver', 'returns', object)], incident, {});
+        assert.deepStrictEqual(reasons(res), [
+          `${UNGROUNDED_REASON_PREFIX}object ${JSON.stringify(object)} not in source text — no "${absent}" in it`,
+        ]);
+      });
+    }
+
+    // Two rejected drafts of the above got these wrong, so they are pinned. The
+    // first let any long word stand in last position; the second replaced that
+    // with a closed list of category nouns. Both swapped the last noun of a
+    // phrase the text does state, which is how an environment, a datastore or an
+    // outcome gets inverted while every other word still checks out. Nothing
+    // here is a morphological variant of anything in its text, so nothing here
+    // may be grounded by it.
+    for (const [subject, object, text, why] of [
+      ['eva', 'eva production', 'eva staging is live and healthy.', 'staging is not production'],
+      ['checkout', 'vault service production', 'the vault service sandbox handles the checkout.', 'nor at the end of a longer stated phrase'],
+      ['eva', 'eva postgres', 'eva uses mysql.', 'mysql is not postgres'],
+      ['migration', 'primary replica', 'the migration ran on the primary.', 'a replica is not a kind of primary'],
+      ['change', 'pasha dudka', 'pasha approved the change.', 'a surname is not implied by a first name'],
+      ['deploy', 'deploy failure', 'the deploy succeeded.', 'succeeded is not a failure'],
+      ['the', 'cold host prepare failure', 'the cold host prepare step succeeded.', 'nor with three stated words in front of it'],
+      ['the', 'stealth browser profile outage', 'the stealth browser profile is healthy.', 'healthy is not an outage'],
+      ['aws resolver', 'aws resolver 200 error', 'the aws resolver returned 200 for every request.', '200 is not an error'],
+      ['svc-z', 'live', 'svc-a depends on svc-b.', 'a discriminator is not a variant'],
+      ['postgres', 'live', 'the store is mysql.', 'a one-token name has no stated part left'],
+    ]) {
+      it(`still rejects ${JSON.stringify(object === 'live' ? subject : object)}: ${why}`, () => {
+        const res = groundTriples([triple(subject, 'status', object)], `${text} it is live.`, {});
+        assert.strictEqual(reasons(res).length, 1, `accepted a substitution: ${JSON.stringify(res.facts)}`);
+        assert.ok(reasons(res)[0].startsWith(UNGROUNDED_REASON_PREFIX), reasons(res)[0]);
+      });
+    }
+
+    // Running two words together is only sound inside one sentence. Across a
+    // full stop it invents a name neither sentence holds.
+    it('does not run a pair together across a sentence boundary', () => {
+      const res = groundTriples([triple('lock', 'holds', 'database')], 'open the data. base is locked.', {});
+      assert.deepStrictEqual(reasons(res), [
+        `${UNGROUNDED_REASON_PREFIX}object "database" not in source text — no "database" in it`,
+      ]);
+    });
+
     it('keeps two references with different numbers apart', () => {
       const res = groundTriples([triple('pr #123', 'status', 'open')], 'pr #539 is open.', {});
-      assert.deepStrictEqual(reasons(res), [`${UNGROUNDED_REASON_PREFIX}subject "pr #123" not in source text`]);
+      assert.deepStrictEqual(reasons(res), [
+        `${UNGROUNDED_REASON_PREFIX}subject "pr #123" not in source text — no "123" in it`,
+      ]);
+    });
+
+    // The reason has to name the word that is actually absent. Ten rejections
+    // reading "X not in source text" for an X the text mostly contained is what
+    // sent the last reader looking for the wrong thing.
+    it('names the words the text does not have, not the whole name', () => {
+      const res = groundTriples(
+        [triple('aws resolver', 'returns', 'gateway timeout error')],
+        'the aws resolver returned 400.', {});
+      assert.deepStrictEqual(reasons(res), [
+        `${UNGROUNDED_REASON_PREFIX}object "gateway timeout error" not in source text`
+        + ' — no "gateway", "timeout", "error" in it',
+      ]);
     });
   });
 
@@ -195,7 +289,7 @@ describe('grounding extracted triples in the source text', () => {
         {},
       );
 
-      assert.deepStrictEqual(reasons(res), [`${UNGROUNDED_REASON_PREFIX}object "2026-07-28" not in source text`]);
+      assert.deepStrictEqual(reasons(res), [`${UNGROUNDED_REASON_PREFIX}object "2026-07-28" not in source text — no "07" in it`]);
     });
 
     it('accepts a date-valued object the text does state', () => {
@@ -285,7 +379,7 @@ describe('grounding extracted triples in the source text', () => {
 
       assert.deepStrictEqual(res.added.map(f => `${f.subject}|${f.predicate}|${f.object}`), ['svc-a|depends_on|svc-b']);
       assert.deepStrictEqual(res.skipped.map(s => s.reason), [
-        `${UNGROUNDED_REASON_PREFIX}object "tkt-909" not in source text`,
+        `${UNGROUNDED_REASON_PREFIX}object "tkt-909" not in source text — no "tkt", "909" in it`,
       ]);
       // and nothing reached the graph under the invented name
       assert.deepStrictEqual(queryFact('tkt-909', { direction: 'both' }), []);
