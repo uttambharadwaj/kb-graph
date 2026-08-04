@@ -2,7 +2,9 @@ import { execFileSync } from 'child_process';
 import { readdirSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { runMigrationCheck } from '../migration-gate.js';
 import { SOURCE_FILE } from '../restart-on-change.js';
+import { MIGRATE_COMMAND } from '../schema.js';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DAY_MS = 86400000;
@@ -100,6 +102,22 @@ export function staleServers(psOutput, mtimeOf = sourceMtime) {
   return { stale, unknown };
 }
 
+/**
+ * What to do about the servers this found.
+ *
+ * Reconnecting is the answer only when the reload could have happened at all.
+ * A supervised child is deliberately older than src/ while a database is behind
+ * this code — the supervisor holds the swap rather than start a child that
+ * cannot open it — and reconnecting there tears down the server that is still
+ * working and restarts into exactly the error being held off.
+ */
+export function staleRemedy(behind) {
+  if (!behind) return 'Reconnect each of those sessions (/mcp in Claude Code) to pick up the current code.';
+  return `A database is behind this checkout, so a supervised reload is held on purpose:\n  ${behind}\n\n`
+    + `Run \`${MIGRATE_COMMAND}\`: every held reload then finishes by itself, with no reconnect. `
+    + 'Reconnecting first only restarts into the same error.';
+}
+
 export function runStaleServersCli() {
   const ps = execFileSync('ps', ['-eo', 'pid,ppid,lstart,args'], { encoding: 'utf8' });
   const { stale, unknown } = staleServers(ps);
@@ -124,7 +142,8 @@ export function runStaleServersCli() {
   }
   // Servers from before the supervisor shipped reload nothing on their own, so
   // reconnecting is what retires them. A supervised server reaching this list
-  // means its own reload is not working, which reconnecting also fixes.
+  // means its own reload either is not working or is being held — and those two
+  // want opposite things done about them.
   reportUnknown();
-  console.log('\nReconnect each of those sessions (/mcp in Claude Code) to pick up the current code.');
+  console.log(`\n${staleRemedy(runMigrationCheck().summary)}`);
 }

@@ -8,4 +8,5 @@ superviseMcpServer({
   watchDir: process.env.KB_TEST_WATCH_DIR,
   debounceMs: 20,
   idlePollMs: 10,
+  migrationRecheckMs: Number(process.env.KB_TEST_RECHECK_MS) || undefined,
 });

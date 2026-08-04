@@ -1,5 +1,7 @@
+import './helpers/tmp-kb.js';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
+import { spawn } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -7,6 +9,9 @@ import { fileURLToPath } from 'url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+import { MIGRATIONS as KB_MIGRATIONS } from '../src/db.js';
+import { seedDb, shortOf } from './helpers/migrations.js';
 
 const HELPERS = join(dirname(fileURLToPath(import.meta.url)), 'helpers');
 const FIXTURE = join(HELPERS, 'supervisor-fixture.mjs');
@@ -34,33 +39,75 @@ async function until(condition, what) {
 
 const clients = [];
 const dirs = [];
+const strays = [];
 
 afterEach(async () => {
   while (clients.length) await clients.pop().close().catch(() => {});
+  while (strays.length) strays.pop().kill();
   while (dirs.length) rmSync(dirs.pop(), { recursive: true, force: true });
 });
 
-async function harness({ marker = 'one' } = {}) {
+const BEHIND = shortOf(KB_MIGRATIONS);
+
+// The supervisor asks whether the databases are behind before it swaps, so a
+// harness needs an install of its own. Never the developer's: with theirs, the
+// whole file would pass or fail on whether they had run `kb migrate` lately.
+function install({ behind = false } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-supervisor-kb-'));
+  dirs.push(dir);
+  const db = join(dir, 'kb', 'kb.db');
+  seedDb(db, behind ? BEHIND.applied : KB_MIGRATIONS);
+  return {
+    db,
+    // KB_BUS_HOME points at a directory nothing creates: an absent database is
+    // a fresh install, which the gate treats as current.
+    env: { KB_DIR: join(dir, 'kb'), KB_BUS_HOME: join(dir, 'bus'), KB_BUS_DB_PATH: '' },
+  };
+}
+
+function watched({ marker = 'one' } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kb-supervisor-'));
   dirs.push(dir);
   // node --check only rejects broken ESM inside a type:module package, and the
   // marker has to import as ESM too.
   writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
   const markerPath = join(dir, 'marker.js');
-  const flagPath = join(dir, 'flag');
   const setMarker = (value) => writeFileSync(markerPath, `export const MARKER = ${JSON.stringify(value)};\n`);
   setMarker(marker);
+  return { dir, markerPath, setMarker, flagPath: join(dir, 'flag') };
+}
+
+function supervisorEnv({ dir, markerPath, flagPath }, kb, recheckMs) {
+  return {
+    ...process.env,
+    ...kb.env,
+    KB_TEST_CHILD: CHILD,
+    KB_TEST_WATCH_DIR: dir,
+    KB_TEST_MARKER: markerPath,
+    KB_TEST_FLAG: flagPath,
+    ...(recheckMs ? { KB_TEST_RECHECK_MS: String(recheckMs) } : {}),
+  };
+}
+
+async function harness({ marker = 'one', behind = false, recheckMs } = {}) {
+  const tree = watched({ marker });
+  const kb = install({ behind });
 
   const client = new Client({ name: 'supervisor-test', version: '1.0.0' });
   clients.push(client);
-  await client.connect(new StdioClientTransport({
+  const transport = new StdioClientTransport({
     command: process.execPath,
     args: [FIXTURE],
-    env: { ...process.env, KB_TEST_CHILD: CHILD, KB_TEST_WATCH_DIR: dir, KB_TEST_MARKER: markerPath, KB_TEST_FLAG: flagPath },
-    // The park test spawns children that are meant to die; their stack traces
-    // are not test failures.
-    stderr: 'ignore',
-  }));
+    env: supervisorEnv(tree, kb, recheckMs),
+    // Collected rather than ignored: the swap gate reports itself here, and the
+    // park test spawns children that are meant to die, whose stack traces are
+    // not test failures and should not reach the runner's output either.
+    stderr: 'pipe',
+  });
+  await client.connect(transport);
+  let noise = '';
+  transport.stderr?.setEncoding('utf8');
+  transport.stderr?.on('data', (chunk) => { noise += chunk; });
 
   const call = async (name, options) => {
     const res = await client.callTool({ name, arguments: {} }, undefined, options);
@@ -69,7 +116,15 @@ async function harness({ marker = 'one' } = {}) {
   // FSEvents replays the writes made just before the watcher registered, so the
   // setup above can trigger one swap. Let it pass before anything is measured.
   await settle(QUIET_MS);
-  return { dir, client, call, setMarker, raiseFlag: () => writeFileSync(flagPath, '') };
+  return {
+    dir: tree.dir,
+    db: kb.db,
+    client,
+    call,
+    setMarker: tree.setMarker,
+    stderr: () => noise,
+    raiseFlag: () => writeFileSync(tree.flagPath, ''),
+  };
 }
 
 describe('mcp supervisor', () => {
@@ -189,5 +244,133 @@ describe('mcp supervisor', () => {
     // poll has to tolerate the refusal rather than treat it as the verdict.
     setMarker('five');
     await until(async () => (await call('whoami').catch(() => null))?.split(':')[1] === 'five', 'the session to come back by itself');
+  });
+
+  // The failure this gate exists for: new code carrying a migration is checked
+  // out, the swap happens anyway, and the replacement refuses to open the
+  // database — so every call fails until someone runs `kb migrate`. Held, the
+  // old child goes on answering, which is what "no downtime" has to mean here.
+  it('holds the swap while a database is behind, and keeps answering from the old child', async () => {
+    // A re-check every 25ms rather than the usual second: whatever lets a held
+    // swap slip through gets dozens of chances to do it during this test.
+    const { call, setMarker, stderr } = await harness({ behind: true, recheckMs: 25 });
+    const serving = await call('whoami');
+    assert.match(serving, /^\d+:one:supervisor-test:ready$/);
+
+    setMarker('two');
+    // The hold announcing itself is the window opening — a fixed sleep here
+    // would be measuring the machine, not the supervisor.
+    await until(async () => stderr().includes('reload held'), 'the swap to be held');
+
+    const said = stderr();
+    const missing = BEHIND.pending[0];
+    assert.match(said, new RegExp(`${missing.version}\\. ${missing.name}`), 'the pending migration is not named');
+    assert.match(said, /kb migrate/, 'the remedy is not named');
+
+    // Answers, not liveness: a process that is up but failing every call is the
+    // outage this is meant to prevent.
+    for (let i = 0; i < 8; i += 1) {
+      assert.strictEqual(await call('whoami'), serving, 'the swap went through, or a new child answered');
+      await settle(25);
+    }
+    assert.strictEqual(stderr().match(/reload held/g).length, 1, 'the same reason was announced more than once');
+  });
+
+  // The other half: a held swap has to finish on its own, or the operator has
+  // traded an outage for a reload that needs a reconnect to collect.
+  it('finishes the held swap once the database catches up, with nothing else to trigger it', async () => {
+    const { call, db, setMarker, stderr } = await harness({ behind: true, recheckMs: 25 });
+    const before = await call('whoami');
+
+    setMarker('two');
+    await until(async () => stderr().includes('reload held'), 'the swap to be held');
+
+    // The operator migrates, and nothing touches the source tree afterwards.
+    seedDb(db, KB_MIGRATIONS);
+
+    const after = await until(async () => {
+      const seen = await call('whoami');
+      return seen.split(':')[1] === 'two' ? seen : null;
+    }, 'the held swap to finish by itself');
+    assert.notStrictEqual(after.split(':')[0], before.split(':')[0], 'the same process cannot be serving new code');
+    assert.strictEqual(after.split(':').slice(1).join(':'), 'two:supervisor-test:ready');
+  });
+
+  // The gate is on the swap path, so it must be invisible to a reload that has
+  // no migration in it — including a second one, which is where a verdict
+  // cached too eagerly would show up.
+  it('leaves an ordinary swap alone', async () => {
+    const { call, setMarker, stderr } = await harness({ recheckMs: 25 });
+    const first = await call('whoami');
+
+    setMarker('two');
+    const second = await until(async () => {
+      const seen = await call('whoami');
+      return seen.split(':')[1] === 'two' ? seen : null;
+    }, 'the first swap');
+
+    setMarker('three');
+    const third = await until(async () => {
+      const seen = await call('whoami');
+      return seen.split(':')[1] === 'three' ? seen : null;
+    }, 'the second swap');
+
+    assert.strictEqual(new Set([first, second, third].map(a => a.split(':')[0])).size, 3, 'each swap must be a new process');
+    assert.doesNotMatch(stderr(), /reload held/);
+    assert.doesNotMatch(stderr(), /pre-check did not run/);
+  });
+
+  // Holding needs something to hold on to. Parked, there is no child, and a
+  // supervisor that held anyway would sit with `child` null and no swap coming
+  // — every call would land on nothing and take the session down for good.
+  it('swaps rather than holds when there is no child left to keep', async () => {
+    const { call, dir, setMarker, stderr } = await harness({ behind: true, recheckMs: 25 });
+    assert.match(await call('whoami'), /^\d+:one:/);
+
+    // A checkout that is both broken and behind: held, so the broken file is
+    // never loaded and the running child never notices.
+    writeFileSync(join(dir, 'marker.js'), "throw new Error('half-written');\nexport const MARKER = 'broken';\n");
+    await until(async () => stderr().includes('reload held'), 'the swap to be held');
+    assert.match(await call('whoami'), /^\d+:one:/, 'a held swap must leave the running child alone');
+
+    // Now the child dies on its own account. Its replacements load the broken
+    // file and die too, until the supervisor parks with no child at all.
+    await assert.rejects(call('boom'), /exited mid-call/);
+    await until(async () => {
+      const failed = await call('whoami').then(() => null, (err) => err);
+      return failed && /not running/.test(String(failed)) ? failed : null;
+    }, 'calls to be refused while parked');
+
+    // Repairing the tree brings the session back even though the database is
+    // still behind — the replacement is better than the nothing it replaces.
+    setMarker('five');
+    await until(async () => (await call('whoami').catch(() => null))?.split(':')[1] === 'five', 'the session to come back');
+  });
+
+  // A held swap leaves a timer armed and a child running. Ending the client's
+  // pipe has to take both down: a supervisor outliving its session would hold
+  // the database open with nobody left to talk to it.
+  it('shuts down cleanly while a swap is held', async () => {
+    const tree = watched();
+    const kb = install({ behind: true });
+    const supervisor = spawn(process.execPath, [FIXTURE], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: supervisorEnv(tree, kb, 25),
+    });
+    strays.push(supervisor);
+    let noise = '';
+    supervisor.stderr.setEncoding('utf8');
+    supervisor.stderr.on('data', (chunk) => { noise += chunk; });
+    const exited = new Promise((resolve) => supervisor.on('exit', (code, signal) => resolve({ code, signal })));
+
+    await settle(QUIET_MS);
+    tree.setMarker('two');
+    await until(async () => noise.includes('reload held'), 'the swap to be held');
+
+    supervisor.stdin.end();
+    assert.deepStrictEqual(
+      await Promise.race([exited, settle(DEADLINE_MS).then(() => 'still running')]),
+      { code: 0, signal: null },
+    );
   });
 });

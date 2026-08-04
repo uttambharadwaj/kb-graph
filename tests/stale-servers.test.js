@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const { staleServers, sourceMtime } = await import('../src/cli/stale-servers.js');
+const { staleServers, sourceMtime, staleRemedy } = await import('../src/cli/stale-servers.js');
 
 const CUTOFF = Date.parse('Wed Jul 29 22:43:07 2026');
 const at = () => CUTOFF;
@@ -129,5 +129,23 @@ describe('staleServers', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('staleRemedy', () => {
+  it('says reconnect when nothing is holding the reload back', () => {
+    const advice = staleRemedy(null);
+    assert.match(advice, /Reconnect/);
+    assert.doesNotMatch(advice, /kb migrate/);
+  });
+
+  // Reconnecting during a held reload kills the server that is still working
+  // and restarts into the error the hold exists to avoid, so the advice has to
+  // change with the reason — a server held on purpose is not a broken one.
+  it('says migrate, not reconnect, when a database is behind', () => {
+    const advice = staleRemedy('knowledge base  /kb.db  behind by 1: 12. late');
+    assert.match(advice, /12\. late/);
+    assert.match(advice, /kb migrate/);
+    assert.match(advice, /Reconnecting first only restarts into the same error/);
   });
 });

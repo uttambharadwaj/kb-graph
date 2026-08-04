@@ -5,6 +5,7 @@
 
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import { acceptFlags, runEntryPoint, wantsHelp } from '../src/cli/flags.js';
+import { PENDING_EXIT } from '../src/schema.js';
 import 'dotenv/config';
 
 await lockPreferredNodeRuntime(import.meta.url);
@@ -31,8 +32,8 @@ const COMMANDS = {
     run: () => import('../src/mcp-supervisor.js').then(m => m.superviseMcpServer()),
   },
   migrate: {
-    summary: 'Apply pending database schema migrations (--dry-run to preview)',
-    boolean: ['--dry-run'],
+    summary: `Apply pending database schema migrations (--dry-run to preview, --check to exit ${PENDING_EXIT} when a database is behind)`,
+    boolean: ['--dry-run', '--check'],
     run: a => import('../src/cli/migrate.js').then(m => m.runMigrateCli(a)),
   },
   register: {
