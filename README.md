@@ -380,6 +380,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
 | `KB_TICKET_REGEX` | No | `(?<=^\|[/_])[a-z]{2,6}-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name. The default deliberately accepts any short prefix so autobind works unconfigured; it will also match same-shaped directory names like `node-22`, so set this to something exact if that bothers you |
+| `KB_REPO_ROOTS` | No | `process.cwd()` | Colon-separated absolute paths searched to verify a `verified`-tier commit sha or file-path reference. The server's cwd is often a workspace directory sitting one level above every git repo, where nothing ever resolves — set this to that workspace and each immediate subdirectory that is a git repo is searched too |
 
 ## Running as a service
 
