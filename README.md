@@ -255,14 +255,15 @@ kb entity-merge        Merge two entity aliases in the fact store
 kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
+kb meters prune        Delete old meter rows (--keep-days N required, --dry-run to preview)
 ```
 
-That is the set you reach for by hand. `kb --help` lists all 39, including the
+That is the set you reach for by hand. `kb --help` lists all 40, including the
 hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
-`retrieval-report`, `hint-probe`, `surface-report`).
+`retrieval-report`, `hint-probe`, `surface-report`, `meters prune`).
 
-`kb surface-report` answers three questions the store could not answer about
+`kb surface-report` answers four questions the store could not answer about
 itself. Which tools does anyone actually call — including the ones nobody has
 called at all, named rather than counted, because the case for removing a tool
 is which one it is. Which model subprocess calls underneath them are slow or
@@ -270,8 +271,12 @@ failing, broken down by caller (extraction, classification, summarization,
 safety review, harvest, state, weekly synthesis) with failure rate, p50/p90
 duration, and characters in/out — the calls are the expensive, hang-prone
 surface, and until this section every one of them but extraction was dark.
-And where the duplicate threshold really sits: every write records its
-nearest existing note and that note's score, accepted or refused.
+Where the duplicate threshold really sits: every write records its nearest
+existing note and that note's score, accepted or refused. And, in METER
+GROWTH, how fast each of the five meter tables itself is growing — row count,
+age of the oldest row, rows/day over the trailing week, and estimated bytes —
+because none of them is ever pruned automatically and two are too new to have
+a defensible retention window yet.
 
 ```
 kb surface-report
@@ -283,6 +288,27 @@ the threshold looks exactly like one written into empty space, so the report
 buckets accepted writes by how close they came and shows how many in each band
 were later superseded. A band that was mostly retired is a band the threshold
 should have caught.
+
+`kb meters prune --keep-days N` deletes meter rows older than N days, and
+refuses to run without `--keep-days` — the point of METER GROWTH above is to
+measure a rate before anyone picks a window, so there is no built-in default
+to fall back on. `--dry-run` prints per-table would-delete counts and deletes
+nothing; `--table <name>` scopes a run to one table. There is no scheduler —
+pruning is an operator action, on purpose, until the growth numbers justify
+turning it into a routine one.
+
+Two of the five meter tables, `tool_calls` and `write_decisions`, delete
+safely: some of their readers (`kb surface-report`'s tool demand and
+write-decision bands) aggregate over all time, so a prune folds the rows it is
+about to delete into a `meter_rollups` table first, in the same transaction as
+the delete, and those readers merge raw and rolled-up rows back together —
+the numbers they print are identical before and after a prune. `extractions`
+has no reader anywhere in the codebase today, so it deletes with nothing to
+preserve. `retrievals` and `model_calls` are refused outright, including with
+an explicit `--table`: `retrieval-report`/`hint-probe` need raw prompt text
+and per-document history over all time, and `surface-report`'s model-call
+p50/p90 need the full duration distribution — neither fits in a compact
+day-bucketed rollup, and there is no safe way to prune around that.
 
 `kb hint-probe` is the one to reach for before changing how the prompt hint
 scores. It replays every prompt the hint has really been asked about — the meter

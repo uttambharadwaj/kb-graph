@@ -16,7 +16,7 @@ const KB_COMMANDS = [
   'start', 'stop', 'mcp', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
   'retrieval-report', 'wakeup-hook', 'prompt-hint', 'link-backfill', 'stale-servers',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
-  'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault',
+  'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
   'bus-send', 'bus-read', 'bus-status', 'bus-session', 'bus-agent', 'bus-agentd',
   'bus-hook', 'bus-bind', 'bus-unbind', 'bus-hook-current', 'bus-notifier',
 ];
@@ -138,6 +138,8 @@ describe('a mistyped flag stops the command instead of running with defaults', (
     [['vault', 'reindex', '--no-embedings'], /Unknown flag: --no-embedings/],
     [['harvest', '--since-hours', '26'], /--since-hours needs a value/],
     [['register', '--agents', 'claude'], /--agents needs a value/],
+    [['meters', 'prune'], /refuses to run without --keep-days/],
+    [['meters', 'prune', '--keep-days', '7', '--table', 'model_calls'], /Refusing to prune model_calls/],
     [['nosuchcommand'], /Unknown command: nosuchcommand/],
   ];
 

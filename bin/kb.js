@@ -73,6 +73,16 @@ const COMMANDS = {
     summary: 'Per-tool and per-model-caller demand, failures and latency, plus where the duplicate threshold really sits',
     run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),
   },
+  meters: {
+    summary: "'meters prune --keep-days <N>' deletes old rows from the meter tables that can be pruned safely (--dry-run to preview, --table to scope to one)",
+    args: 'prune',
+    value: ['--keep-days', '--table'],
+    boolean: ['--dry-run'],
+    run: a => {
+      if (a[0] !== 'prune') { console.error(usageFor('meters')); process.exit(2); }
+      return import('../src/cli/meters-cli.js').then(m => m.runMetersPruneCli(a.slice(1)));
+    },
+  },
   'hint-probe': {
     summary: 'Replay every prompt the hint has seen against the current scorer; diff two runs to grade a change',
     run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),
