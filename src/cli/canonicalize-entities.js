@@ -14,12 +14,16 @@
 // and leave behind the duplicate live triples a merge creates.
 import { getDb } from '../db.js';
 import { canonicalEntityId, entityKey, dedupeLiveFacts } from '../facts.js';
+import { canonicalPredicate } from '../predicates.js';
 
 // The triple identity a merge can collide on, for predicting what
 // dedupeLiveFacts will collapse. Retired rows are excluded there and here: a
 // retired row is history, and dropping it loses the record of when the
 // relationship stopped being stated that way.
-const tripleKey = f => `${f.subject}\0${f.predicate}\0${f.object}`;
+// The predicate folds here because it folds there. This is a prediction of
+// another function's grouping, so any rule the two do not share shows up as a
+// dry run that promised one number and an --apply that did something else.
+const tripleKey = f => `${f.subject}\0${canonicalPredicate(f.predicate)}\0${f.object}`;
 
 // The spelling the graph actually uses, so the merged node displays the name
 // most of its facts were written under. Ties break on the id for determinism —

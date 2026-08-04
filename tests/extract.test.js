@@ -79,6 +79,20 @@ const currentObject = (subject, predicate) =>
     .filter(r => r.current && r.predicate === predicate)
     .map(r => r.object);
 
+// A row exactly as an older build left it. addFact folds the predicate now, so
+// it can no longer produce a pre-alias spelling however it is called — and a
+// test that seeds through it is testing the fold, not the thing it says it is.
+// Straight SQL is the only way left to put a stale spelling in the table.
+const legacyFact = (subject, predicate, object, validFrom) => {
+  const db = getDb();
+  const [subId, objId] = [entityKey(subject), entityKey(object)];
+  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(subId, subject);
+  db.prepare('INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)').run(objId, object);
+  db.prepare(
+    'INSERT INTO facts (id, subject, predicate, object, valid_from, source) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(`legacy_${subId}_${predicate}_${objId}`, subId, predicate, objId, validFrom, 'seed');
+};
+
 describe('kb_extract consolidation', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
@@ -432,7 +446,8 @@ describe('kb_extract consolidation', () => {
 
   it('matches a row stored under a pre-alias spelling', () => {
     // Written before pinned_at was aliased, so the graph holds the old spelling.
-    addFact('pf-8001', 'pinned_at', 'v1', { validFrom: '2026-07-01', source: 'seed' });
+    legacyFact('pf-8001', 'pinned_at', 'v1', '2026-07-01');
+    assert.deepStrictEqual(currentObject('pf-8001', 'pinned_at'), ['v1'], 'seed did not store the stale spelling');
 
     const res = consolidate(
       [{ subject: 'pf-8001', predicate: 'pinned_to', object: 'v2' }],
@@ -450,7 +465,8 @@ describe('kb_extract consolidation', () => {
     // merged_as/merged_via is the shipped alias pair, and merged_via is
     // many-valued — so normalisation has to hold for the duplicate check too,
     // not just for retirement, or the same commit lands twice.
-    addFact('pf-8002', 'merged_as', 'commit aaa1111', { validFrom: '2026-07-01', source: 'seed' });
+    legacyFact('pf-8002', 'merged_as', 'commit aaa1111', '2026-07-01');
+    assert.strictEqual(currentObject('pf-8002', 'merged_as').length, 1, 'seed did not store the stale spelling');
 
     const res = consolidate(
       [{ subject: 'pf-8002', predicate: 'merged_via', object: 'commit aaa1111' }],

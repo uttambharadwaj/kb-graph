@@ -210,6 +210,21 @@ describe('canonicalize-entities migration', () => {
     assert.equal(live[0].source, 'earlier');
   });
 
+  // The dry-run count is computed by a different function than the collapse it
+  // predicts, so any grouping rule the two do not share is a run that promised
+  // one number and did something else. A predicate fold is such a rule.
+  it('counts a collapse across two spellings of one predicate before it happens', () => {
+    legacyFact('spelling-probe', 'merged_as', 'commit_beef111', { validFrom: '2026-03-02' });
+    legacyFact('spelling_probe', 'merged_via', 'commit_beef111', { validFrom: '2026-03-01' });
+
+    const predicted = run({ apply: false });
+    assert.equal(predicted.duplicates_collapsed, 1, 'dry run did not see the duplicate the fold creates');
+
+    const applied = run({ apply: true });
+    assert.equal(applied.duplicates_collapsed, 1, 'apply collapsed a different number than the dry run promised');
+    assert.equal(queryFact('spelling probe', { direction: 'outgoing' }).filter(f => f.current).length, 1);
+  });
+
   it('keeps a retired row beside the live one it now matches', () => {
     legacyFact('retired-probe', 'status', 'shipped', { validFrom: '2026-01-01' });
     getDb().prepare("UPDATE facts SET valid_to = '2026-02-01' WHERE subject = 'retired-probe'").run();
