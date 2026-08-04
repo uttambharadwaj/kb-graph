@@ -9,6 +9,10 @@
 // baseline before they can start.
 
 export const MIGRATE_COMMAND = 'kb migrate';
+// `kb migrate --check` exits with this when a database is behind the code, so a
+// script — or the MCP supervisor's reload gate — can tell "you need to migrate"
+// from the 1 that every other kind of failure exits with.
+export const PENDING_EXIT = 3;
 
 export class SchemaOutOfDateError extends Error {
   constructor({ label, path, pending }) {
