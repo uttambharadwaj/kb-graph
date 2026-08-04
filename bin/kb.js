@@ -69,6 +69,10 @@ const COMMANDS = {
     summary: 'Read-path coverage: how much of the KB has ever been retrieved',
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
+  'surface-report': {
+    summary: 'Per-tool demand, failures and latency, plus where the duplicate threshold really sits',
+    run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),
+  },
   'hint-probe': {
     summary: 'Replay every prompt the hint has seen against the current scorer; diff two runs to grade a change',
     run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),

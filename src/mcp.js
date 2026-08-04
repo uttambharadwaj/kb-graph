@@ -20,7 +20,7 @@ export async function start() {
     }
   };
 
-  // Register all tools from shared definitions
+  // Register all tools from shared definitions (already metered — see tools.js).
   for (const tool of getToolDefinitions()) {
     server.tool(tool.name, tool.description, tool.schema, track(tool.handler));
   }

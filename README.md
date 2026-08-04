@@ -257,10 +257,27 @@ kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to mana
 kb status              Stats and server status
 ```
 
-That is the set you reach for by hand. `kb --help` lists all 38, including the
+That is the set you reach for by hand. `kb --help` lists all 39, including the
 hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
-`retrieval-report`, `hint-probe`).
+`retrieval-report`, `hint-probe`, `surface-report`).
+
+`kb surface-report` answers two questions the store could not answer about
+itself. Which tools does anyone actually call — including the ones nobody has
+called at all, named rather than counted, because the case for removing a tool
+is which one it is. And where the duplicate threshold really sits: every write
+records its nearest existing note and that note's score, accepted or refused.
+
+```
+kb surface-report
+```
+
+The refusals were never the blind spot — a refusal announces itself to the
+caller who has to deal with it. The accepts are. A note written at a hair under
+the threshold looks exactly like one written into empty space, so the report
+buckets accepted writes by how close they came and shows how many in each band
+were later superseded. A band that was mostly retired is a band the threshold
+should have caught.
 
 `kb hint-probe` is the one to reach for before changing how the prompt hint
 scores. It replays every prompt the hint has really been asked about — the meter
