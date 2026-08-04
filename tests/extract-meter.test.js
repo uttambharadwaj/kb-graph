@@ -46,7 +46,7 @@ describe('kb_extract instrumentation', () => {
   after(() => rmSync(tmp, { recursive: true, force: true }));
 
   it('logs a record for a successful call', async () => {
-    const text = 'a single short chunk that extracts cleanly, no markers here.';
+    const text = 'svc-basic depends on svc-target in a single short chunk, no markers here.';
     const res = await kbExtract(text, { source: 'meter-test' });
 
     assert.strictEqual(res.added.length, 1);
@@ -68,7 +68,7 @@ describe('kb_extract instrumentation', () => {
   });
 
   it('logs a record for a dry-run call', async () => {
-    const text = 'a dry run should still be metered, even though nothing is written.';
+    const text = 'svc-basic depends on svc-target; a dry run is still metered, though nothing is written.';
     const res = await kbExtract(text, { source: 'meter-test', dryRun: true });
 
     assert.strictEqual(res.dry_run, true);
@@ -82,7 +82,7 @@ describe('kb_extract instrumentation', () => {
   // The hash and shape metrics must not depend on the call finishing cleanly —
   // that is the whole point of routing the log through a finally.
   it('logs a record for a call that throws', async () => {
-    const text = 'this call fails during consolidation, after extraction already ran.';
+    const text = 'svc-basic depends on svc-target, and this call fails during consolidation.';
 
     await assert.rejects(
       () => kbExtract(text, { source: 'meter-test', observedAt: 'not-a-real-date' }),
@@ -106,7 +106,7 @@ describe('kb_extract instrumentation', () => {
     // Two sentences, individually under the 250-char chunk width but combined
     // well over it, so chunkForExtract splits them at the sentence boundary
     // into exactly two chunks (see chunkForExtract's own tests in extract.test.js).
-    const goodSentence = `SURVIVOR_CHUNK ${'x'.repeat(185)}.`;
+    const goodSentence = `SURVIVOR_CHUNK svc-survivor depends on svc-target ${'x'.repeat(150)}.`;
     const deadSentence = `PERMA_DEAD_CHUNK ${'y'.repeat(100)}.`;
     const text = `${goodSentence} ${deadSentence}`;
 
@@ -131,7 +131,7 @@ describe('kb_extract instrumentation', () => {
   // it reads as the cache hit it is. Both directions in one test so neither
   // value can be hardcoded and pass.
   it('marks a replayed commit as from_preview and a fresh call as not', async () => {
-    const previewText = 'a preview-then-commit flow, replayed rather than re-extracted.';
+    const previewText = 'svc-basic depends on svc-target: a preview-then-commit flow, replayed not re-extracted.';
     await kbExtract(previewText, { source: 'meter-test', dryRun: true });
     await kbExtract(previewText, { source: 'meter-test' }); // commits by replaying the preview above
 
@@ -139,7 +139,7 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(replayRow.dry_run, 0);
     assert.strictEqual(replayRow.from_preview, 1, 'a commit that reused a preview must record it');
 
-    const freshText = 'a totally unrelated call with no preview to reuse at all.';
+    const freshText = 'svc-basic depends on svc-target in a call with no preview to reuse at all.';
     await kbExtract(freshText, { source: 'meter-test' });
     const freshRow = rowFor(freshText);
     assert.strictEqual(freshRow.from_preview, 0, 'a call that extracted fresh must not claim it replayed one');

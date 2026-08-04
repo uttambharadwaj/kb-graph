@@ -19,7 +19,7 @@ writeFileSync(stub, [
   '#!/bin/sh',
   'cat > /dev/null',
   `n=$(cat ${counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counter}`,
-  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"tkt-%s\\\\",\\\\"predicate\\\\":\\\\"blocks\\\\",\\\\"object\\\\":\\\\"tkt-x\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$n"`,
+  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"billing service\\\\",\\\\"predicate\\\\":\\\\"noted_%s\\\\",\\\\"object\\\\":\\\\"payments team\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$n"`,
 ].join('\n') + '\n');
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;

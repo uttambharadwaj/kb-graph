@@ -410,7 +410,7 @@ describe('kb_extract consolidation', () => {
   });
 
   it('passes the extractor\'s own skips through to the caller', async () => {
-    const res = await kbExtract('...', { source: 'test', observationDate: '2026-06-24' });
+    const res = await kbExtract('pr #539 was merged as fde94d6.', { source: 'test', observationDate: '2026-06-24' });
 
     assert.strictEqual(res.added.length, 1);
     assert.strictEqual(res.skipped.length, 1);
@@ -463,11 +463,12 @@ describe('kb_extract consolidation', () => {
   });
 
   it('previews the canonical predicate, not the alias the extractor emitted', async () => {
-    const res = await kbExtract('alias me', { source: 'test', observationDate: '2026-07-29', dryRun: true });
+    const text = 'alias me: pr #888 merged as def5678';
+    const res = await kbExtract(text, { source: 'test', observationDate: '2026-07-29', dryRun: true });
 
     assert.strictEqual(res.candidates[0].predicate, 'merged_via');
     // And the commit writes that same edge, which is the promise of a preview.
-    const committed = await kbExtract('alias me', { source: 'test', observationDate: '2026-07-29' });
+    const committed = await kbExtract(text, { source: 'test', observationDate: '2026-07-29' });
     assert.strictEqual(committed.from_preview, true);
     assert.deepStrictEqual(currentObject('pr #888', 'merged_via'), ['commit def5678']);
   });
@@ -476,14 +477,15 @@ describe('kb_extract consolidation', () => {
   // the dry-run-then-commit flow the retirements it used to cause landed at
   // commit time, where nobody was looking.
   it('previews the conflict a batch is about to contradict itself with', async () => {
-    const res = await kbExtract('contradict me', { source: 'test', observationDate: '2026-07-29', dryRun: true });
+    const text = 'contradict me: pr #999 is open, and approved';
+    const res = await kbExtract(text, { source: 'test', observationDate: '2026-07-29', dryRun: true });
 
     assert.deepStrictEqual(
       res.conflicts.map(c => [c.subject, c.predicate, c.objects]),
       [['pr #999', 'status', ['open', 'approved']]],
     );
 
-    const committed = await kbExtract('contradict me', { source: 'test', observationDate: '2026-07-29' });
+    const committed = await kbExtract(text, { source: 'test', observationDate: '2026-07-29' });
     assert.deepStrictEqual(committed.invalidated, []);
     assert.deepStrictEqual(currentObject('pr #999', 'status').sort(), ['approved', 'open']);
     assert.strictEqual(committed.conflicts.length, 1);
@@ -512,8 +514,9 @@ describe('kb_extract consolidation', () => {
     const args = { source: 'test', observationDate: '2026-07-29' };
     const before = callCount();
 
-    const preview = await kbExtract('preview me', { ...args, dryRun: true });
-    const committed = await kbExtract('preview me', args);
+    const text = 'preview me: pr #777 merged as abc1234';
+    const preview = await kbExtract(text, { ...args, dryRun: true });
+    const committed = await kbExtract(text, args);
 
     assert.strictEqual(preview.dry_run, true);
     assert.strictEqual(committed.from_preview, true, 'commit re-ran the extractor');
@@ -570,7 +573,7 @@ describe('kb_extract consolidation', () => {
   // a retry that kept a dead attempt's output would feed the conflict check two
   // objects for one single-valued edge — a disagreement the model never had.
   it('does not batch a failed attempt output with its retry', async () => {
-    const res = await kbExtract('PARTIAL_THEN_OK', { source: 'test', observationDate: '2026-07-31' });
+    const res = await kbExtract('PARTIAL_THEN_OK: pr #1001 merged', { source: 'test', observationDate: '2026-07-31' });
 
     assert.deepStrictEqual(res.conflicts, [], 'a retry manufactured a single-valued conflict');
     assert.deepStrictEqual(res.added.map(f => f.object), ['merged'], 'kept the dead attempt output');
