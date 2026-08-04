@@ -353,6 +353,53 @@ export const MIGRATIONS = [{
   applied: db => !hasTable(db, 'retrievals')
     || !db.prepare(`SELECT 1 FROM (${OWN_SUBPROCESS_SESSIONS}) LIMIT 1`).get(),
   up: db => db.exec(`DELETE FROM retrievals WHERE session IN (${OWN_SUBPROCESS_SESSIONS})`),
+}, {
+  version: 11,
+  // Two meters for the surfaces that had none. `retrievals` answers what was
+  // read and `extractions` what one tool did with its input; between them sat
+  // 26 tools nobody could count calls to, and the write decision — accept or
+  // refuse this note — which recorded nothing at all unless it refused.
+  //
+  // Neither table stores arguments. The read meter already keeps query text
+  // where a query is the whole point; doing it here would make a second
+  // uncontrolled copy of every note anyone has written.
+  name: 'meters for the tool surface and the write decision',
+  applied: db => hasTable(db, 'tool_calls') && hasTable(db, 'write_decisions'),
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS tool_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tool TEXT NOT NULL,
+      ok INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL,
+      -- Length of the reply, not the reply. The only cheap stand-in for
+      -- "did this answer anything" on a tool whose result shape we don't know.
+      result_chars INTEGER,
+      error TEXT,
+      session TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_created ON tool_calls(tool, created_at);
+
+    CREATE TABLE IF NOT EXISTS write_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      -- The nearest existing note and how close it was, recorded whether or
+      -- not it crossed the threshold. The refusals were always visible; it is
+      -- the near misses that decide whether the threshold is in the right
+      -- place, and those were the rows that did not exist.
+      nearest_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+      nearest_score REAL,
+      threshold REAL NOT NULL,
+      refused INTEGER NOT NULL,
+      -- Whether the note was later retired is the outcome label this table is
+      -- collecting, and documents.superseded_at already holds it: join through
+      -- doc_id rather than keeping a second copy that can disagree.
+      doc_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_write_decisions_doc ON write_decisions(doc_id);
+  `),
 }];
 
 // Bring a database up to the schema this code needs. `kb migrate` and tests are

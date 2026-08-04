@@ -9,6 +9,7 @@ import { indexVaultFile } from './vault/indexer.js';
 import { getVaultFile, getDb } from './db.js';
 import { splitTags } from './tags.js';
 import { assertTier } from './tiers.js';
+import { logWriteDecision } from './write-meter.js';
 
 // Re-exported, not redeclared: kb_check_duplicate answers with this same value,
 // and a second copy is the drift that made the pre-check disagree with the write.
@@ -87,8 +88,14 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   // retires by design — exclude that target so it doesn't block the write.
   if (excludeId != null) similar = similar.filter(s => s.document_id !== excludeId);
 
+  // similarDocs sorts by score, so the head is the closest thing already
+  // stored. Recorded either way: a refusal was always visible in its own
+  // result, and it is the accepts — the near misses that scored just under —
+  // that say whether the threshold sits where it should.
+  const nearest = similar[0] ?? null;
   const dups = duplicatesIn(similar);
   if (dups.length) {
+    logWriteDecision({ nearest, threshold: DUP_THRESHOLD, refused: true });
     return { skipped: true, reason: 'duplicate_detected', matches: dups.slice(0, 5) };
   }
   const related = similar
@@ -136,6 +143,7 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   const docId = getVaultFile(relPath)?.document_id || null;
   if (docId) insertDocLinks(docId, related);
 
+  logWriteDecision({ nearest, threshold: DUP_THRESHOLD, refused: false, docId });
   return {
     skipped: false,
     path: relPath,

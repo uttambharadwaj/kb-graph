@@ -7,6 +7,7 @@ import { captureYouTube } from './capture/youtube.js';
 import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
+import { metered } from './tool-meter.js';
 import { writeNote, setNoteTier, relatedForDoc } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
@@ -115,7 +116,15 @@ const ADMIN_ONLY_TOOLS = new Set([
   'bus_read',
 ]);
 
+// Every tool, with its call metered. Wrapped here rather than at each call
+// site so that a tool added later is counted without anyone remembering to do
+// it — the tools nobody routes to being precisely the ones nobody would think
+// to instrument — and so MCP, HTTP and a direct call are all on one meter.
 export function getToolDefinitions() {
+  return defineTools().map(tool => ({ ...tool, handler: metered(tool.name, tool.handler) }));
+}
+
+function defineTools() {
   return [
     ...getBusToolDefinitions(),
     {
