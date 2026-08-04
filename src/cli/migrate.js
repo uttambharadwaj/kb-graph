@@ -17,7 +17,14 @@ function migrateTarget({ label, prepare, db: dbPath }, migrations, { dryRun }) {
       return;
     }
     if (dryRun) {
-      for (const migration of pending) console.log(`  pending  ${migration.version}. ${migration.name}`);
+      for (const migration of pending) {
+        console.log(`  pending  ${migration.version}. ${migration.name}`);
+        // A data migration's name says what it does, not how much of the table
+        // it touches, and "rewrites your facts" is not something to run on a
+        // count nobody was shown. Schema migrations have nothing to count and
+        // supply no preview.
+        if (migration.preview) console.log(`           ${migration.preview(db)}`);
+      }
       console.log('  (dry run — nothing written)');
       return;
     }
