@@ -128,6 +128,84 @@ const slicesOf = (text, size) => {
   return out;
 };
 
+// A qualifier is the whole difference between "X is safe" and "X is safe only
+// under Y", and a chunk boundary between the two ships the first as the entire
+// truth. The neighbour context in buildExtractPrompt cannot fix this, because
+// it marks what it shows unextractable: measured 3 of 12 runs on the fixture in
+// tests/extract-eval.test.js, the extractor read the qualifier in its context
+// block and skipped it anyway — "surrounding context provides the referent but
+// per instructions, surrounding text is context-only, not a source to mine for
+// facts", in its own words. To be extracted the qualifier has to be IN a chunk.
+const QUALIFIER_CUE = /\b(only|unless|except|as long as|so long as|provided that|caveat|temporar(?:y|ily)|for now|does not apply|doesn't apply)\b/i;
+
+// "This is temporary and tracked by TICKET-42 for revert." Its subject is a
+// pronoun, so away from its antecedent it is not extractable at all and should
+// not be — the prompt forbids pronoun subjects for good reasons. Its referent
+// is the sentence before it, so it travels with that sentence and nowhere else.
+const BACK_REFERENCE = /^\W*(this|that|these|those|it|they)\b/i;
+
+// Sentences, with each back-referencing qualifier fused onto the sentence it
+// refers back to, so the packing below can no longer cut between them. Fusing
+// is best-effort: a pair too wide for one chunk stays split rather than
+// overflowing a width every other chunk has to respect.
+const fuseAnaphoricQualifiers = (sentences, size) => sentences.reduce((units, sentence) => {
+  const prev = units[units.length - 1];
+  const fusable = prev && BACK_REFERENCE.test(sentence) && QUALIFIER_CUE.test(sentence)
+    && `${prev} ${sentence}`.length <= size;
+  if (fusable) units[units.length - 1] = `${prev} ${sentence}`;
+  else units.push(sentence);
+  return units;
+}, []);
+
+// Long enough to identify something, but still contentless. Tokens under four
+// characters are dropped before this is consulted.
+const ANCHOR_STOPWORDS = new Set([
+  'this', 'that', 'these', 'those', 'they', 'them', 'their', 'there', 'then', 'than',
+  'with', 'from', 'have', 'been', 'being', 'were', 'will', 'would', 'should', 'could',
+  'which', 'while', 'when', 'where', 'what', 'because', 'since', 'about', 'after',
+  'before', 'during', 'also', 'into', 'onto', 'over', 'some', 'such', 'same', 'both',
+  'each', 'more', 'most', 'less', 'very', 'just', 'still', 'does', 'doing', 'done',
+]);
+
+// The tokens naming WHAT is qualified. Taken from the subject side of the cue
+// only: everything after it states the condition, and routing on "single" or
+// "threaded" would move the qualifier onto claims it says nothing about.
+const anchorsOf = sentence => {
+  const cueAt = sentence.search(QUALIFIER_CUE);
+  const head = cueAt > 0 ? sentence.slice(0, cueAt) : sentence;
+  return [...new Set(head.toLowerCase().match(/[a-z][a-z0-9_-]{3,}/g) || [])]
+    .filter(token => !ANCHOR_STOPWORDS.has(token));
+};
+
+// A qualifier that names its own subject is not tied to its neighbours, so it
+// can travel to every chunk claiming something about that subject — the only
+// thing here that reaches a claim more than one chunk away.
+const attachNamedQualifiers = (chunks, sentences, size) => {
+  const attached = chunks.map(() => []);
+  // A chunk absorbs at most its own width in copies: past that the qualifier
+  // costs more of the payload than the claim it is there to protect, and
+  // payload is what bounds this whole file (see TARGET_CHUNK_CHARS above).
+  const budget = chunks.map(() => size);
+  for (const sentence of sentences) {
+    if (!QUALIFIER_CUE.test(sentence) || BACK_REFERENCE.test(sentence)) continue;
+    const anchors = anchorsOf(sentence);
+    if (!anchors.length) continue;
+    // Two anchors in common, so a single incidental shared word cannot move a
+    // qualifier onto a claim it does not qualify.
+    const needed = Math.min(2, anchors.length);
+    chunks.forEach((chunk, i) => {
+      if (chunk.includes(sentence) || sentence.length >= budget[i]) return;
+      // Matched against the chunk as it was split, never as already extended:
+      // an attached qualifier must not drag the next one in behind it.
+      const lower = chunk.toLowerCase();
+      if (anchors.filter(anchor => lower.includes(anchor)).length < needed) return;
+      attached[i].push(sentence);
+      budget[i] -= sentence.length + 1;
+    });
+  }
+  return chunks.map((chunk, i) => [chunk, ...attached[i]].join(' '));
+};
+
 export function chunkForExtract(text) {
   const sentences = text.split(/(?<=[.!?])\s+/);
 
@@ -137,12 +215,14 @@ export function chunkForExtract(text) {
     // Sentence boundaries are the preferred cut, but a transcript of code, JSON
     // or bullet lists has none — then one "sentence" is the whole window, and
     // the fan-out stops bounding anything. Cut those on width instead.
-    for (const sentence of sentences.flatMap(s => (s.length > size ? slicesOf(s, size) : [s]))) {
-      if (cur && (cur + ' ' + sentence).length > size) {
+    const units = fuseAnaphoricQualifiers(
+      sentences.flatMap(s => (s.length > size ? slicesOf(s, size) : [s])), size);
+    for (const unit of units) {
+      if (cur && (cur + ' ' + unit).length > size) {
         chunks.push(cur);
-        cur = sentence;
+        cur = unit;
       } else {
-        cur = cur ? `${cur} ${sentence}` : sentence;
+        cur = cur ? `${cur} ${unit}` : unit;
       }
     }
     if (cur.trim()) chunks.push(cur);
@@ -152,7 +232,9 @@ export function chunkForExtract(text) {
   let size = Math.max(TARGET_CHUNK_CHARS, Math.ceil(text.length / MAX_CONCURRENT_CALLS));
   let chunks = build(size);
   while (chunks.length > MAX_CONCURRENT_CALLS) chunks = build(size *= 2);
-  return chunks.length ? chunks : [text];
+  // Only once the fan-out has settled: a copy must never change how many calls
+  // go out, and the loop above counts chunks.
+  return chunks.length ? attachNamedQualifiers(chunks, sentences, size) : [text];
 }
 
 // 120s: 60s was killing calls during slow API windows (observed 2026-07-07,
@@ -207,6 +289,9 @@ export async function extractFacts(text) {
     facts: results.flatMap(r => (Array.isArray(r?.facts) ? r.facts : [])),
     // Per-chunk character counts, for kbExtract's meter (extract-meter.js) to
     // log verbatim — the shape actually sent, not a second computation of it.
+    // Sums to more than input_chars when chunkForExtract has copied a qualifier
+    // onto a claim in another chunk; the copy is real payload, so the meter
+    // should see it. The two columns were never meant to reconcile.
     chunkChars: chunks.map(c => c.length),
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
