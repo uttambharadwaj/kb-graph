@@ -65,9 +65,15 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000, cal
     // One place every settle path (success, non-zero exit, timeout, the
     // orphan-flush path in child-exit.js, and a spawn error below) runs
     // through, so metering cannot drift out of parity with the outcomes it
-    // describes. Never changes what gets resolved/rejected.
-    const finish = (ok, { responseChars = null, error = null } = {}) =>
+    // describes. Never changes what gets resolved/rejected. Once-guarded:
+    // a failed spawn can emit 'error' AND still fire the close path, and a
+    // double reject is a no-op where a double meter row is a wrong count.
+    let logged = false;
+    const finish = (ok, { responseChars = null, error = null } = {}) => {
+      if (logged) return;
+      logged = true;
       logModelCall({ caller, model, ok, durationMs: Date.now() - started, promptChars, responseChars, error });
+    };
 
     onChildDone(proc, (code, signal) => {
       if (code === 0) {
