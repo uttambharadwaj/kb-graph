@@ -10,7 +10,7 @@ import {
   getStats,
   getDb,
 } from '../db.js';
-import { writeNote } from '../write-note.js';
+import { writeNote, nearNeighborFields } from '../write-note.js';
 import { SURFACE, logRetrievalResults } from '../retrieval.js';
 
 const router = Router();
@@ -209,7 +209,7 @@ router.post('/ingest', async (req, res) => {
     const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
     const result = await writeNote(vaultPath, { title, content, type: 'capture', tags });
     if (result.skipped) return res.status(409).json(result);
-    res.status(201).json({ id: result.docId, title, path: result.path, related: result.related });
+    res.status(201).json({ id: result.docId, title, path: result.path, related: result.related, ...nearNeighborFields(result) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

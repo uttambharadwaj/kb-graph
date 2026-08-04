@@ -8,7 +8,7 @@ import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { metered } from './tool-meter.js';
-import { writeNote, setNoteTier, relatedForDoc } from './write-note.js';
+import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple } from './extract.js';
@@ -257,7 +257,7 @@ function defineTools() {
 
     {
       name: 'kb_write',
-      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces.',
+      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces. A successful write reports near_notes when live notes already cover the same ground — read them: if the note you just wrote contradicts or replaces one, retire it with kb_supersede, or the two sit side by side and later recall gets both.',
       schema: {
         title: z.string().describe('Note title'),
         content: z.string().describe('Markdown content (body text, no frontmatter needed)'),
@@ -311,7 +311,10 @@ function defineTools() {
           const relatedNote = result.related.length
             ? `; related: ${result.related.map(r => `#${r.id} ${r.title}`).join(' | ')}`
             : '';
-          return { content: [{ type: 'text', text: `Note saved to ${result.path} as ${result.tier}${result.status}${relatedNote}${supersedeNote}` }] };
+          // The neighbours land as JSON below the line, not folded into it: the
+          // caller that has to act on them is a model, and an id it has to
+          // parse out of prose is an id it can get wrong.
+          return { content: [{ type: 'text', text: `Note saved to ${result.path} as ${result.tier}${result.status}${relatedNote}${supersedeNote}${renderNearNeighbors(result)}` }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -649,7 +652,7 @@ function defineTools() {
 
     {
       name: 'kb_check_duplicate',
-      description: `Check whether content already exists in the knowledge base, using the same comparison kb_write will make. Pass the exact note body you are about to write: the write path embeds that body, so a summary or a title scores against different text and predicts nothing. Leave threshold unset to get the write's own verdict — a lower threshold reports notes kb_write will accept as merely related, and a higher one hides notes it will reject as duplicates.`,
+      description: `Check whether content already exists in the knowledge base, using the same comparison kb_write will make. Pass the exact note body you are about to write: the write path embeds that body, so a summary or a title scores against different text and predicts nothing. Leave threshold unset to get the write's own verdict — a lower threshold reports notes kb_write will accept as merely related, and a higher one hides notes it will reject as duplicates. A not-a-duplicate verdict also carries near_notes: the live notes closest to your content, the same ones the write itself will report.`,
       schema: {
         content: z.string().describe('The exact note body that will be passed to kb_write'),
         threshold: z.number().optional().default(DUP_THRESHOLD).describe(`Similarity threshold 0-1. Defaults to ${DUP_THRESHOLD}, the value kb_write uses; change it only to explore, not to pre-check a write.`),

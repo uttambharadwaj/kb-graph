@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import matter from 'gray-matter';
-import { similarDocs, duplicatesIn, DUP_THRESHOLD } from './embeddings/search.js';
+import { similarDocs, duplicatesIn, nearNeighborSignal, DUP_THRESHOLD } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
 import { getVaultFile, getDb } from './db.js';
 import { splitTags } from './tags.js';
@@ -34,6 +34,18 @@ export function renderRelatedSection(related) {
     `- [[${basename(r.vault_path || '', '.md')}]] — ${r.title} (${Math.round(r.score * 100) / 100})`
   );
   return `\n\n## Related\n${lines.join('\n')}`;
+}
+
+// The near-neighbour signal, back out of a write result. One picker, so the
+// surfaces that report it — the MCP text response, the REST body — carry the
+// fields the JSON surfaces carry rather than each assembling its own copy.
+export function nearNeighborFields({ near_notes, next_step }) {
+  return near_notes ? { near_notes, next_step } : {};
+}
+
+export function renderNearNeighbors(result) {
+  const signal = nearNeighborFields(result);
+  return signal.near_notes ? `\n${JSON.stringify(signal, null, 2)}` : '';
 }
 
 export function insertDocLinks(fromId, related, kind = 'related') {
@@ -150,6 +162,10 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
     docId,
     tier: graded.tier,
     related: related.map(r => ({ id: r.document_id, title: r.title, score: Math.round(r.score * 100) / 100 })),
+    // Computed for dedup and thrown away until now: an accepted note can still
+    // land on ground a live note already holds, and only the caller can say
+    // whether it agrees with that note or contradicts it.
+    ...nearNeighborSignal(similar),
     status: indexStatus + warning,
   };
 }
