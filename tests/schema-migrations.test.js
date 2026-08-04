@@ -66,7 +66,7 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
