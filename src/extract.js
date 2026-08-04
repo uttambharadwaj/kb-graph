@@ -5,6 +5,7 @@ import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './f
 import { runClaudeJSON } from './claude-cli.js';
 import { KB_DIR } from './paths.js';
 import { hashInput, logExtraction } from './extract-meter.js';
+import { groundExtraction, isIsoDate } from './grounding.js';
 
 // Auto-capture: turn a raw work conversation / session transcript into durable
 // subject-predicate-object facts, with consolidation (dedup + retire-on-contradiction).
@@ -36,7 +37,7 @@ const PREFERRED = [...(builtin?.preferred || []), ...(override?.preferred || [])
 export const EXTRACT_PROMPT = `You are a Memory Extractor for an engineering knowledge base. Read a work conversation or session transcript and extract durable facts as subject-predicate-object triples for a temporal knowledge graph.
 
 Return ONLY valid JSON (no markdown fencing):
-{"facts": [{"subject": "...", "predicate": "...", "object": "...", "category": "decision|architecture|gotcha|ownership|status|incident"}], "skipped": [{"assertion": "...", "reason": "..."}]}
+{"facts": [{"subject": "...", "predicate": "...", "object": "...", "category": "decision|architecture|gotcha|ownership|status|incident", "valid_from": "YYYY-MM-DD (optional)"}], "skipped": [{"assertion": "...", "reason": "..."}]}
 
 What to extract:
 - architecture: component/service relationships and protocols — (my-app, calls_over_http, auth-service)
@@ -61,6 +62,8 @@ Rules:
 - A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
 - status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive.
+- Name only what the text names. Both sides of every triple are checked against the transcript and the triple is dropped if either is absent, so a coined name must be built from words the text uses. Never assert a relationship the text does not state — no blocked_by unless something is said to block, no assigned_to unless something is said to be assigned.
+- When the text states the date of the event ("merged on July 28", "shipped 2026-07-28"), add "valid_from": "YYYY-MM-DD" to that fact — otherwise it is dated the day the transcript was read, which is not when it happened. Omit the field when the text gives no date; a date the text does not state is discarded.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
 - If nothing durable is present, return {"facts": [], "skipped": [...]}.
 
@@ -665,6 +668,11 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // Skip reports carry the folded triple, since that is what was attempted.
     const f = canonicalTriple(raw);
     const { subject, predicate: pred, object } = f;
+    // The event's own date when the text stated one, the observation date
+    // otherwise. grounding.js keeps a per-fact valid_from only where the text
+    // states it, and isIsoDate is asked again here because a caller can reach
+    // consolidate without going through that filter at all.
+    const factValidFrom = isIsoDate(f.valid_from) ? f.valid_from : validFrom;
 
     // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
     // normPred on the stored predicate too: rows written before an alias was
@@ -694,7 +702,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // that disagrees with itself still loses to what the graph learned after it,
     // and gating this on the retirement decision would write a replay of old
     // text as current the moment the batch happened to be contested.
-    const newer = contradicted.find(r => (r.valid_from && r.valid_from > validFrom)
+    const newer = contradicted.find(r => (r.valid_from && r.valid_from > factValidFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({
@@ -717,7 +725,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
       // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
       // subprocesses share one DB, so another can retire it between this read
       // and this write.
-      const res = invalidateFact(subject, stale.predicate, stale.object, { ended: validFrom });
+      const res = invalidateFact(subject, stale.predicate, stale.object, { ended: factValidFrom });
       if (res.invalidated) {
         invalidated.push({
           subject,
@@ -755,7 +763,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
 
     // pred, not predicate: the row must carry the canonical edge, or the alias
     // only ever applies to the compare and the graph keeps both spellings.
-    const res = addFact(subject, pred, object, { validFrom, source });
+    const res = addFact(subject, pred, object, { validFrom: factValidFrom, source });
     if (res.already_exists) skipped.push({ fact: f, reason: 'duplicate' });
     else added.push(res);
   }
@@ -814,7 +822,12 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // One binding for both the row and the return value below — the two must
     // never disagree about whether this call replayed a preview.
     fromPreview = !!previewed;
-    const { facts, skipped, chunkChars: shape } = previewed || await extractFacts(text);
+    // Grounded before anything else looks at them: a triple naming an entity
+    // the text never mentions, or dated a day the text never states, is filtered
+    // here (see grounding.js) rather than in consolidation, so the preview
+    // remembered below and the row eventually written are the same triple.
+    const { facts, skipped, chunkChars: shape } = previewed
+      || groundExtraction(await extractFacts(text), text, { observationDate });
     // The shape actually sent — a fresh call's own extractFacts call, or (on a
     // replay) the shape the ORIGINAL dry run sent, carried forward by
     // rememberPreview below. Never recomputed independently: a second
