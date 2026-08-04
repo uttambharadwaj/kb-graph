@@ -130,22 +130,31 @@ head-injection, which was fixed in commit b1d6832.`);
     assert.ok(mentions(facts, '22') || mentions(facts, 'dup_threshold'), 'dropped the change itself');
   });
 
-  // The chunking ticket's own case: a claim and the very next sentence that
-  // qualifies it, split onto either side of a chunk boundary by unrelated
-  // preceding text. Measured on this exact input: 1/1 dropped the qualifier
-  // before neighbours were passed as context (skipped as "pronoun with no
-  // antecedent" — the qualifying sentence never saw what "This" referred to),
-  // 1/1 recovered it after.
+  // The chunking case: a claim and the very next sentence that qualifies it,
+  // pushed onto either side of a chunk boundary by unrelated preceding text.
+  // Measured on this exact input while the boundary still separated them: 3 of
+  // 12 runs dropped the qualifier and emitted a bare "points_at", every one of
+  // them skipping the qualifier as a pronoun with no antecedent. The extractor
+  // could see the referent in its context block and would not use it — "per
+  // instructions, surrounding text is context-only, not a source to mine for
+  // facts", in its own words. Passing neighbours as context cannot fix that by
+  // construction; the qualifier has to be in the chunk.
   it('recovers a qualifier split from its claim by a chunk boundary', async () => {
     const text = 'The team spent the morning triaging billing alerts after a spike in webhook retries. '
       + 'Most of the retries turned out to be a benign side effect of a provider maintenance window. '
       + 'Production Metronome configuration points at sandbox Metronome. '
       + 'This is temporary and tracked by TICKET-42 for revert.';
     const chunks = chunkForExtract(text);
-    assert.notStrictEqual(
+    // The premise of the case, and what makes it deterministic: the chunker
+    // fuses the pair, so one chunk carries both. Asserted here so a chunker
+    // change that splits them again is reported as the cause rather than
+    // showing up as a model that went flaky. Deterministic coverage of the
+    // same property lives in tests/extract-context.test.js.
+    assert.ok(chunks.length > 1, 'fixture no longer splits at all — re-pad it');
+    assert.strictEqual(
       chunks.findIndex(c => c.includes('This is temporary')),
       chunks.findIndex(c => c.includes('Production Metronome configuration')),
-      'fixture no longer splits the claim from its qualifier onto different chunks — re-pad it',
+      'the chunker split the claim from its qualifier again',
     );
 
     const { facts } = await extractFacts(text);
