@@ -9,6 +9,7 @@ import { fileURLToPath } from 'url';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
 
 import { MIGRATIONS as KB_MIGRATIONS } from '../src/db.js';
 import { seedDb, shortOf } from './helpers/migrations.js';
@@ -48,6 +49,22 @@ afterEach(async () => {
 });
 
 const BEHIND = shortOf(KB_MIGRATIONS);
+
+const HANDSHAKE_ID = 0;
+// For the one test that spawns the supervisor itself and so cannot use the SDK
+// client: StdioClientTransport owns the process it starts, and its close() ends
+// stdin and then force-kills a couple of seconds later — which is exactly the
+// failure that test exists to catch.
+const HANDSHAKE = JSON.stringify({
+  jsonrpc: '2.0',
+  id: HANDSHAKE_ID,
+  method: 'initialize',
+  params: {
+    protocolVersion: LATEST_PROTOCOL_VERSION,
+    capabilities: {},
+    clientInfo: { name: 'supervisor-test', version: '1.0.0' },
+  },
+});
 
 // The supervisor asks whether the databases are behind before it swaps, so a
 // harness needs an install of its own. Never the developer's: with theirs, the
@@ -361,9 +378,21 @@ describe('mcp supervisor', () => {
     let noise = '';
     supervisor.stderr.setEncoding('utf8');
     supervisor.stderr.on('data', (chunk) => { noise += chunk; });
+    let answered = '';
+    supervisor.stdout.setEncoding('utf8');
+    supervisor.stdout.on('data', (chunk) => { answered += chunk; });
     const exited = new Promise((resolve) => supervisor.on('exit', (code, signal) => resolve({ code, signal })));
 
-    await settle(QUIET_MS);
+    // A handshake rather than a sleep, because the supervisor arms its watcher
+    // in the same synchronous pass that starts it reading stdin: an answer here
+    // is proof the watch is live. The other tests get that edge from
+    // client.connect. A fixed wait races the few hundred ms this process spends
+    // importing, and a marker written before the watch exists is seen by
+    // nothing at all — no swap, no hold, and nothing to say why.
+    supervisor.stdin.write(`${HANDSHAKE}\n`);
+    await until(async () => answered.includes('\n'), 'the supervisor to answer the handshake');
+    assert.strictEqual(JSON.parse(answered.split('\n')[0]).id, HANDSHAKE_ID, 'that is not the handshake being answered');
+
     tree.setMarker('two');
     await until(async () => noise.includes('reload held'), 'the swap to be held');
 
