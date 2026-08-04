@@ -236,7 +236,8 @@ See [docs/message-bus.md](docs/message-bus.md) for wiring.
 kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
 kb mcp                 MCP stdio server (what your agents connect to)
-kb migrate             Apply pending schema migrations (--dry-run to preview)
+kb migrate             Apply pending schema migrations (--dry-run to preview,
+                       --check to exit 3 when a database is behind)
 kb register            Register MCP with Claude Code / Codex / Gemini
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
@@ -370,6 +371,19 @@ Upgrading is therefore: pull, `kb migrate`, restart. Running `kb migrate` when
 nothing is pending prints `up to date` and writes nothing, so it is safe to keep
 in a deploy script unconditionally. Skipping it when a migration *is* pending
 costs you a startup failure that names the fix, not a half-migrated database.
+
+`kb migrate --check` answers the same question read-only and says so in its exit
+code: `0` when every database is current, `3` when one is behind, and it prints
+which migrations are missing. For gating a script, prefer it over `kb status` —
+that also exits non-zero when the knowledge base is behind, but with the plain
+`1` it uses for any other failure, and it never looks at the message bus.
+
+An MCP session picks up new code without a restart, and that includes new code
+carrying a migration: the supervisor checks before it replaces its child, and if
+the database is behind it keeps the running server answering rather than swapping
+in one that cannot open the database. It says so once, on stderr, and finishes
+the reload by itself once you have run `kb migrate` — no reconnect. Pull, then
+migrate whenever you get to it; the session is not waiting on you.
 
 `kb migrate` covers both databases, and they are located by different variables:
 pointing it somewhere disposable takes `KB_DIR` **and** `KB_BUS_HOME`. `KB_DIR`

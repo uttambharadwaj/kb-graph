@@ -2,10 +2,16 @@ import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/sdk/shared/p
 import { spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { createMigrationGate } from './migration-gate.js';
 import { restartOnSourceChange } from './restart-on-change.js';
+import { MIGRATE_COMMAND } from './schema.js';
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), 'mcp.js');
 const IDLE_POLL_MS = 250;
+// How often a held swap asks again. Short because asking is free unless
+// something moved — a migration should be picked up about as fast as a source
+// change is.
+const MIGRATION_RECHECK_MS = 1000;
 // Taken from the client's own default rather than restated: past its timeout a
 // request will never be awaited, and counting it as in-flight would block every
 // reload. A copy would drift silently the first time the SDK changed it.
@@ -65,6 +71,14 @@ function onLines(stream, handle) {
  * change to .env, which is read once by the CLI entry point and reaches children
  * only as inherited environment. All three still need a real reconnect.
  *
+ * A swap is held, not attempted, when the code on disk carries a migration the
+ * database has not had: the replacement would refuse to open it and the session
+ * would lose every tool until someone ran `kb migrate`, which is the outage
+ * this file exists to prevent. The child's fail-closed guard stays exactly as
+ * it is — this only moves the discovery to the one moment when nothing has been
+ * killed yet. Boot does not go through it: an install with no database is not
+ * behind, it is empty, and the child bootstraps it.
+ *
  * Deliberately no pause/resume backpressure between the two pipes. Both SDK ends
  * honour it, so this process is the one that buffers — but only ever one message
  * per direction, because MCP is request/response. Pausing the client's stdin to
@@ -79,6 +93,8 @@ export function superviseMcpServer({
   watchDir,
   debounceMs,
   idlePollMs = IDLE_POLL_MS,
+  migrationRecheckMs = MIGRATION_RECHECK_MS,
+  checkMigrations = createMigrationGate(),
   now = Date.now,
 } = {}) {
   const pending = new Map(); // client request id -> when it was forwarded
@@ -91,6 +107,8 @@ export function superviseMcpServer({
   let dirty = false; // source changed while a swap was already running
   let parked = false;
   let bootFailures = 0;
+  let held = null; // why the swap is waiting, so the same reason is said once
+  let recheckTimer = null;
 
   const send = (msg) => stdout.write(JSON.stringify(msg) + '\n');
   const fail = (id, message) => send({ jsonrpc: '2.0', id, error: { code: SERVER_ERROR, message } });
@@ -203,10 +221,38 @@ export function superviseMcpServer({
       parked = true;
       swapping = false;
       child = null;
+      // Nothing left to hold on to, so a held swap is moot — and its timer
+      // would spend one more child on a tree that is already known broken.
+      releaseHold();
       console.error(`[KB] server died ${bootFailures} times before starting; parked until src/ changes again`);
       return;
     }
     replaceChild();
+  };
+
+  // Says why once, then asks again on a timer until the answer changes. The
+  // timer is the only thing that ends the wait, so a migration run in another
+  // terminal completes the swap with nothing else to do.
+  const holdSwap = (summary) => {
+    if (summary !== held) {
+      held = summary;
+      console.error(
+        `[KB] reload held — ${summary}. Run \`${MIGRATE_COMMAND}\`: the running server keeps answering `
+        + 'until then, and the reload finishes by itself once the database catches up.'
+      );
+    }
+    if (recheckTimer) return;
+    recheckTimer = setTimeout(() => {
+      recheckTimer = null;
+      swapWhenIdle();
+    }, migrationRecheckMs);
+    recheckTimer.unref();
+  };
+
+  const releaseHold = () => {
+    clearTimeout(recheckTimer);
+    recheckTimer = null;
+    held = null;
   };
 
   const swap = () => {
@@ -214,6 +260,15 @@ export function superviseMcpServer({
       dirty = true;
       return;
     }
+    // Only a child that is serving is worth keeping. With none — parked, or
+    // crashed and being replaced — holding would leave the session with no
+    // process at all, which is worse than the failure being held off, and
+    // would leave `child` null on a path that assumes otherwise.
+    if (child) {
+      const summary = checkMigrations();
+      if (summary) return holdSwap(summary);
+    }
+    releaseHold();
     // Set before the kill so that anything the client sends from this instant
     // is queued rather than written into a process that is going away.
     swapping = true;
@@ -270,6 +325,7 @@ export function superviseMcpServer({
   // here gets killed mid-cleanup. It signals this pid rather than the process
   // group, which is why the child also exits on its own stdin EOF.
   const shutdown = () => {
+    releaseHold();
     const old = child;
     child = null;
     old?.kill();
