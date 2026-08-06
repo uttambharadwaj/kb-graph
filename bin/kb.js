@@ -89,9 +89,9 @@ const COMMANDS = {
     run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),
   },
   'aliases-backfill': {
-    summary: 'Propose retrieval aliases (one model call per note) for notes never asked, filter, store',
+    summary: 'Propose retrieval aliases (one model call per note) for notes never asked, filter, store; --revet re-filters stored proposals with no model calls',
     value: ['--limit', '--doc'],
-    boolean: ['--dry-run'],
+    boolean: ['--dry-run', '--revet'],
     run: a => import('../src/cli/aliases-backfill.js').then(m => m.runAliasesBackfillCli(a)),
   },
   'wakeup-hook': {
