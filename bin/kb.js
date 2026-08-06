@@ -90,7 +90,7 @@ const COMMANDS = {
   },
   'aliases-backfill': {
     summary: 'Propose retrieval aliases (one model call per note) for notes never asked, filter, store',
-    value: ['--limit'],
+    value: ['--limit', '--doc'],
     boolean: ['--dry-run'],
     run: a => import('../src/cli/aliases-backfill.js').then(m => m.runAliasesBackfillCli(a)),
   },
