@@ -65,6 +65,9 @@ export async function processNewClippings(vaultPath, { dryRun = false } = {}) {
       summary: classification.summary || null,
       confidence: classification.confidence || null,
       key_topics: classification.key_topics || [],
+      // Proposals only — the indexer's filterAliases decides what the scorer
+      // ever sees. Hand-written aliases survive a model that offers none.
+      aliases: (classification.aliases?.length ? classification.aliases : fm.aliases) || null,
       classified: true,
       classified_at: new Date().toISOString().split('T')[0],
       classified_by: 'claude',
