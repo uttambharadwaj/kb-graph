@@ -49,6 +49,10 @@ export function neverAsked(filePath) {
 export async function runAliasesBackfillCli(args = []) {
   if (!acceptFlags(args, { usage: USAGE, value: ['--limit', '--doc'], boolean: ['--dry-run'] })) return;
   const docRaw = readFlagValue(args, '--doc');
+  const doc = docRaw === undefined ? undefined : Number(docRaw);
+  if (docRaw !== undefined && !Number.isInteger(doc)) {
+    throw new UsageError(`--doc must be a document id, got: ${docRaw}`, USAGE);
+  }
   const limitRaw = readFlagValue(args, '--limit');
   const limit = limitRaw === undefined ? DEFAULT_LIMIT : Number(limitRaw);
   if (!Number.isInteger(limit) || limit < 1) {
@@ -63,9 +67,9 @@ export async function runAliasesBackfillCli(args = []) {
     SELECT vf.vault_path, vf.document_id, d.title, d.tags
     FROM vault_files vf JOIN documents d ON d.id = vf.document_id
     WHERE d.superseded_at IS NULL AND d.doc_type != 'archive'
-      ${docRaw === undefined ? '' : 'AND d.id = ?'}
+      ${doc === undefined ? '' : 'AND d.id = ?'}
     ORDER BY vf.document_id
-  `).all(...(docRaw === undefined ? [] : [Number(docRaw)]));
+  `).all(...(doc === undefined ? [] : [doc]));
 
   const unasked = rows.filter(row => neverAsked(join(vaultPath, row.vault_path)));
   const candidates = unasked.slice(0, limit);
