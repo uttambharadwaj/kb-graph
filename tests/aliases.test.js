@@ -157,3 +157,28 @@ describe('aliases-backfill selection', () => {
     assert.strictEqual(neverAsked(join(dir, 'missing.md')), false);
   });
 });
+
+describe('aliases-backfill --revet', () => {
+  it('re-filters stored proposals when the filter changes, without touching files', async () => {
+    const { revetAliases } = await import('../src/cli/aliases-backfill.js');
+    const { writeFileSync, mkdirSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const vault = process.env.OBSIDIAN_VAULT_PATH;
+    // Stored under a looser filter than today's: "sweeper" is mid-band now,
+    // "zephyrometer" is the note's own rare word. Only the column tightens —
+    // the frontmatter proposal is the durable record and stays whole.
+    const body = 'the zephyrometer and the sweeper both appear in this body';
+    mkdirSync(join(vault, 'notes'), { recursive: true });
+    writeFileSync(join(vault, 'notes', 'revet.md'), '---\ntitle: Wind instrument order\naliases: [zephyrometer, sweeper]\n---\n' + body);
+    const info = getDb().prepare('INSERT INTO documents (title, content, doc_type, tags, aliases) VALUES (?, ?, ?, ?, ?)')
+      .run('Wind instrument order', body, 'lesson', '', 'zephyrometer sweeper');
+    getDb().prepare('INSERT INTO vault_files (vault_path, content_hash, document_id, title) VALUES (?, ?, ?, ?)')
+      .run('notes/revet.md', 'revet-hash', info.lastInsertRowid, 'Wind instrument order');
+
+    revetAliases();
+
+    const stored = getDb().prepare('SELECT aliases FROM documents WHERE id = ?').get(info.lastInsertRowid).aliases;
+    assert.strictEqual(stored, 'zephyrometer');
+    assert.match(readFileSync(join(vault, 'notes', 'revet.md'), 'utf-8'), /sweeper/, 'frontmatter proposals stay whole');
+  });
+});

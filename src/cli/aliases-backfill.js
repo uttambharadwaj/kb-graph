@@ -19,9 +19,10 @@ import matter from 'gray-matter';
 import { getDb } from '../db.js';
 import { runClaudeJSON } from '../claude-cli.js';
 import { indexVaultFile } from '../vault/indexer.js';
+import { filterAliases } from '../hint-relevance.js';
 import { UsageError, acceptFlags, readFlagValue } from './flags.js';
 
-const USAGE = 'Usage: kb aliases-backfill [--limit <N>] [--doc <id>] [--dry-run]';
+const USAGE = 'Usage: kb aliases-backfill [--limit <N>] [--doc <id>] [--dry-run] [--revet]';
 const DEFAULT_LIMIT = 20;
 
 const ALIAS_PROMPT = `You suggest retrieval aliases for a knowledge-base note: the words a person's QUESTION would use when this note is the answer.
@@ -46,8 +47,45 @@ export function neverAsked(filePath) {
   }
 }
 
+// Re-run the deterministic filter over every stored proposal — no model
+// calls, no frontmatter writes. The reindex path cannot do this: it skips a
+// file whose content hash is unchanged, and a filter change (a tightened
+// ceiling, a bigger corpus) changes no file. This is how the stored column
+// catches up with the filter as it stands today.
+export function revetAliases() {
+  const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT vf.vault_path, vf.document_id, d.title, d.tags, d.content, d.aliases
+    FROM vault_files vf JOIN documents d ON d.id = vf.document_id
+    WHERE d.superseded_at IS NULL AND d.doc_type != 'archive'
+    ORDER BY vf.document_id
+  `).all();
+  const update = db.prepare('UPDATE documents SET aliases = ? WHERE id = ?');
+  let seen = 0, changed = 0;
+  for (const row of rows) {
+    let fm;
+    try {
+      ({ data: fm } = matter(readFileSync(join(vaultPath, row.vault_path), 'utf-8')));
+    } catch {
+      continue;
+    }
+    if (!('aliases' in fm)) continue;
+    seen += 1;
+    const vetted = filterAliases(fm.aliases, { title: row.title, tags: row.tags, content: row.content }) || null;
+    if (vetted !== row.aliases) {
+      changed += 1;
+      update.run(vetted, row.document_id);
+      console.log(`#${row.document_id} ${row.title}\n  "${row.aliases || ''}" -> "${vetted || ''}"`);
+    }
+  }
+  console.log(`\n${seen} notes re-vetted, ${changed} changed.`);
+  return { seen, changed };
+}
+
 export async function runAliasesBackfillCli(args = []) {
-  if (!acceptFlags(args, { usage: USAGE, value: ['--limit', '--doc'], boolean: ['--dry-run'] })) return;
+  if (!acceptFlags(args, { usage: USAGE, value: ['--limit', '--doc'], boolean: ['--dry-run', '--revet'] })) return;
+  if (args.includes('--revet')) { revetAliases(); return; }
   const docRaw = readFlagValue(args, '--doc');
   const doc = docRaw === undefined ? undefined : Number(docRaw);
   if (docRaw !== undefined && !Number.isInteger(doc)) {
