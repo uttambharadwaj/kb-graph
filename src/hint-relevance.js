@@ -87,6 +87,16 @@ function documentFrequencies(db, terms) {
 // the scorer.
 const MAX_ALIAS_TOKENS = 8;
 
+// Far stricter than the query's 15% ceiling, and measured rather than chosen:
+// after the full-corpus backfill, the model's aliases for conceptual notes
+// were working vocabulary that sat comfortably under 15% — "gaps" (3.3%) put
+// a testing lesson under "make sure all these gaps are tracked", "cleanup"
+// (6.9%) put a roadblocks manifest under a prompt about churn — while every
+// alias that recovered a real miss was far rarer ("indexer" 0.2%, "backfill"
+// 1.5%). An identity term exists to be the distinctive half of a two-term
+// match; a word in one note in thirty is not that.
+const MAX_ALIAS_DF_RATIO = 0.03;
+
 export function filterAliases(aliases, { title, tags, content }) {
   const proposed = Array.isArray(aliases) ? aliases
     : typeof aliases === 'string' ? [aliases] : [];
@@ -101,10 +111,9 @@ export function filterAliases(aliases, { title, tags, content }) {
     .filter(t => !own.has(t) && covered(t, noteSet, prefixable));
   if (!candidates.length) return '';
   // df of 0 means the note is not indexed yet — filter after the write, so
-  // the note's own words count themselves. The ceiling mirrors the query's:
-  // a term too common to carry signal there carries none as identity either.
+  // the note's own words count themselves.
   const df = documentFrequencies(db, candidates);
-  const maxDf = Math.max(total * MAX_DF_RATIO, MIN_DF_LARGE);
+  const maxDf = Math.max(total * MAX_ALIAS_DF_RATIO, MIN_DF_LARGE);
   return candidates
     .filter(t => (df.get(t) || 0) > 0 && df.get(t) <= maxDf)
     .sort((a, b) => df.get(a) - df.get(b))
@@ -170,11 +179,34 @@ export function relevantNotes(prompt, { limit = 3 } = {}) {
   const minMass = MIN_COVERED_MASS_RATIO * Math.log(total);
   const promptSet = new Set(promptTerms);
   const prefixable = promptTerms.filter(t => t.length >= MIN_PREFIX_LEN);
+
+  // Two identity tokens that are inflections of each other are one subject
+  // wearing two spellings — "backfill" beside "backfills", "review" beside
+  // "reviewer" — and a single prompt word covers both at once. Counted
+  // separately they let one shared subject impersonate the two INDEPENDENT
+  // pieces of evidence the coverage gate demands, which is how "do the
+  // backfill" fired on a LogsQL note the moment an alias added the singular
+  // (measured: 4 of 8 new fires after the alias backfill were this shape).
+  // So matched tokens fold into families — related by the same bounded
+  // inflection rule the covering uses — and each family testifies once, at
+  // the idf of its most distinctive spelling: the rarest form is the one the
+  // prompt actually named ("indexer", df 5, beside "index", df 84).
+  const related = (a, b) => covered(a, new Set([b]), b.length >= MIN_PREFIX_LEN ? [b] : []);
+  const familiesOf = (tokens) => {
+    const families = [];
+    for (const w of tokens) {
+      const home = families.find(f => f.some(m => related(m, w)));
+      if (home) home.push(w); else families.push([w]);
+    }
+    return families;
+  };
+
   const hits = [];
   candidates.forEach((doc, i) => {
     const matched = identities[i].filter(w => dfOf.get(w) > 0 && covered(w, promptSet, prefixable));
-    if (matched.length < MIN_COVERED_TERMS) return;
-    const mass = matched.reduce((sum, w) => sum + idf(w), 0);
+    const families = familiesOf(matched);
+    if (families.length < MIN_COVERED_TERMS) return;
+    const mass = families.reduce((sum, f) => sum + Math.max(...f.map(idf)), 0);
     if (mass < minMass) return;
     hits.push({ id: doc.id, title: doc.title, doc_type: doc.doc_type, tier: doc.tier, mass });
   });
