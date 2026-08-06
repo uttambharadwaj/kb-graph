@@ -24,15 +24,16 @@ import { UsageError, acceptFlags } from './flags.js';
 const USAGE = 'Usage: kb aliases-backfill [--limit <N>] [--doc <id>] [--dry-run]';
 const DEFAULT_LIMIT = 20;
 
-const ALIAS_PROMPT = `You suggest retrieval aliases for a knowledge-base note: the search words a person would use to ask about its subject, which its title and tags do not already carry.
+const ALIAS_PROMPT = `You suggest retrieval aliases for a knowledge-base note: the words a person's QUESTION would use when this note is the answer.
 
 Return ONLY valid JSON (no markdown fencing, no explanation): {"aliases": ["...", ...]} with 0 to 6 entries.
 
 Rules:
-- Every alias must be a word or short phrase the note's own text uses. Never invent a synonym the note does not contain.
-- Name subjects someone would ask about: components, tools, commands, error names, concepts.
-- Never ordinary working words (run, check, fix, track, gap, issue).
-- If the title and tags already carry every subject word, return {"aliases": []}.`;
+- Imagine the questions this note answers; each alias is the subject of one, phrased as the question would say it — usually a one-to-three-word phrase ("harvest job", "vault indexer").
+- Every alias must be a word or phrase the note's own text uses. Never invent a synonym the note does not contain.
+- Prefer the plain name a person would say over a code identifier; include an identifier only when someone would ask by it.
+- Do not propose a generic working word on its own (run, check, fix, issue) — though one may appear inside a subject phrase.
+- Duplication against the title is fine; a filter removes what the title already covers.`;
 
 // The resumability marker: an `aliases` frontmatter key — even an empty list —
 // means a pass already ran, so the note is never re-billed.
