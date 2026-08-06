@@ -499,6 +499,14 @@ export const MIGRATIONS = [{
 
     CREATE UNIQUE INDEX IF NOT EXISTS uq_meter_rollups_bucket ON meter_rollups(table_name, day, dim);
   `),
+}, {
+  version: 15,
+  // Retrieval aliases: extra tokens the hint scorer counts as a note's
+  // identity alongside title and tags. Only ever written through
+  // filterAliases (src/hint-relevance.js) — raw model output never lands here.
+  name: 'document retrieval aliases',
+  applied: db => hasColumn(db, 'documents', 'aliases'),
+  up: db => addColumn(db, 'documents', 'aliases', 'TEXT'),
 }];
 
 // The stored spellings that are not their own canonical form. One column, no

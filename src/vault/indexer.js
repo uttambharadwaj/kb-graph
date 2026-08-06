@@ -3,6 +3,7 @@ import { join, relative, extname, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { parseVaultNote } from './parser.js';
 import { normalizeTagString } from '../tags.js';
+import { filterAliases } from '../hint-relevance.js';
 import {
   insertDocument, updateDocumentFull, getDb,
   getVaultFile, upsertVaultFile, deleteVaultFile, getAllVaultPaths,
@@ -210,6 +211,15 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
   } else {
     docId = insertDocument(fields).id;
   }
+  // After the write, so the note's own words are in the index when the filter
+  // asks for their frequency — and recomputed on every reindex, which re-vets
+  // an alias the corpus has since grown too common.
+  const aliases = filterAliases(parsed.frontmatter.aliases, {
+    title: parsed.title,
+    tags: parsed.tags.join(' '),
+    content: parsed.body,
+  });
+  getDb().prepare('UPDATE documents SET aliases = ? WHERE id = ?').run(aliases || null, docId);
   // Frontmatter is hand-editable, so a claim it makes can fail the tier rules.
   // The DB clamps rather than throwing — one bad file must not sink a whole
   // reindex — so say what was lowered instead of lowering it silently.
