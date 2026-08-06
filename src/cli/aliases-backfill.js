@@ -19,7 +19,7 @@ import matter from 'gray-matter';
 import { getDb } from '../db.js';
 import { runClaudeJSON } from '../claude-cli.js';
 import { indexVaultFile } from '../vault/indexer.js';
-import { UsageError, acceptFlags } from './flags.js';
+import { UsageError, acceptFlags, readFlagValue } from './flags.js';
 
 const USAGE = 'Usage: kb aliases-backfill [--limit <N>] [--doc <id>] [--dry-run]';
 const DEFAULT_LIMIT = 20;
@@ -44,13 +44,6 @@ export function neverAsked(filePath) {
   } catch {
     return false; // vault file gone or unreadable — the indexer's problem, not this one's
   }
-}
-
-function readFlagValue(args, name) {
-  const index = args.findIndex(arg => arg === name || arg.startsWith(`${name}=`));
-  if (index === -1) return undefined;
-  const arg = args[index];
-  return arg.includes('=') ? arg.split('=').slice(1).join('=') : args[index + 1];
 }
 
 export async function runAliasesBackfillCli(args = []) {
