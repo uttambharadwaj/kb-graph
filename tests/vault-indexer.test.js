@@ -75,6 +75,32 @@ Only this note should need indexing.`);
     }
   });
 
+  it('stores frontmatter aliases only after the filter has vetted them', async () => {
+    const relPath = '05_research/aliased-note.md';
+    // "indexer" is the body's word, "vectorizer" is nobody's — the filter
+    // keeps the first and drops the second (tests/aliases.test.js owns the
+    // full gate; this pins the wiring from frontmatter to column).
+    writeFileSync(join(vaultDir, relPath), `---
+title: Only the write path embeds a note
+type: research
+tags: [embedding-plumbing]
+aliases: [indexer, vectorizer]
+---
+
+The vault indexer is what embeds a document after a write.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT aliases FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      assert.strictEqual(row.aliases, 'indexer');
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
   it('should reject single-file indexing outside the vault', async () => {
     const outsideFile = join(tmpdir(), 'outside-kb-vault.md');
     writeFileSync(outsideFile, '# Outside');

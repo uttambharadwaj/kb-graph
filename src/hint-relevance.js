@@ -7,8 +7,9 @@
 // came back empty.
 //
 // The bar here is therefore read from the note's side: how much of THIS note's
-// identity — title and tags — does the prompt cover, and how distinctive is it?
-// That denominator is short and uniform across notes, which a prompt's is not.
+// identity — title, tags and vetted alias tokens (filterAliases below) — does
+// the prompt cover, and how distinctive is it? That denominator is short and
+// uniform across notes, which a prompt's is not.
 import { getDb, STOP_WORDS } from './db.js';
 
 // One shared word is a coincidence — a prompt naming a person matched a meeting
@@ -73,6 +74,44 @@ function documentFrequencies(db, terms) {
   return new Map(rows.filter(r => r.doc > 0).map(r => [r.term, r.doc]));
 }
 
+// A note may also carry alias tokens — subject words its body uses but its
+// title does not ("indexer" for a note titled by what the indexer does). They
+// widen identity, and identity is title-and-tags-only for a measured reason:
+// bodies are ordinary working English, and scoring them as identity took the
+// live fire rate from 49% to 91%, almost all of it conversational filler. So
+// admission is the narrow part: a token must be the note's OWN vocabulary —
+// a proposed synonym the note never uses is the fabrication class the
+// grounding filter exists for — and rare enough corpus-wide to be a subject
+// word rather than a working one. Rarest survive the cap, since distinctive
+// is the entire value here. Callers store the result; proposals never reach
+// the scorer.
+const MAX_ALIAS_TOKENS = 8;
+
+export function filterAliases(aliases, { title, tags, content }) {
+  const proposed = Array.isArray(aliases) ? aliases
+    : typeof aliases === 'string' ? [aliases] : [];
+  if (!proposed.length) return '';
+  const db = getDb();
+  const total = db.prepare('SELECT COUNT(*) c FROM documents').get().c;
+  const own = new Set([...tokenize(title), ...tokenize(tags)]);
+  const note = [...new Set(tokenize(`${title} ${tags} ${content}`))];
+  const noteSet = new Set(note);
+  const prefixable = note.filter(t => t.length >= MIN_PREFIX_LEN);
+  const candidates = [...new Set(proposed.flatMap(a => tokenize(a)))]
+    .filter(t => !own.has(t) && covered(t, noteSet, prefixable));
+  if (!candidates.length) return '';
+  // df of 0 means the note is not indexed yet — filter after the write, so
+  // the note's own words count themselves. The ceiling mirrors the query's:
+  // a term too common to carry signal there carries none as identity either.
+  const df = documentFrequencies(db, candidates);
+  const maxDf = Math.max(total * MAX_DF_RATIO, MIN_DF_LARGE);
+  return candidates
+    .filter(t => (df.get(t) || 0) > 0 && df.get(t) <= maxDf)
+    .sort((a, b) => df.get(a) - df.get(b))
+    .slice(0, MAX_ALIAS_TOKENS)
+    .join(' ');
+}
+
 /**
  * Notes the prompt is plausibly about, best first. Empty is a real answer and
  * the common one — most prompts are not about anything the store holds.
@@ -115,7 +154,7 @@ export function relevantNotes(prompt, { limit = 3 } = {}) {
   if (!query.length) return [];
 
   const candidates = db.prepare(`
-    SELECT d.id, d.title, d.doc_type, d.tags, d.tier
+    SELECT d.id, d.title, d.doc_type, d.tags, d.tier, d.aliases
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
@@ -125,7 +164,7 @@ export function relevantNotes(prompt, { limit = 3 } = {}) {
     LIMIT ?
   `).all(query.map(q => `"${q.term}" *`).join(' OR '), MAX_CANDIDATES);
 
-  const identities = candidates.map(c => [...new Set([...tokenize(c.title), ...tokenize(c.tags)])]);
+  const identities = candidates.map(c => [...new Set([...tokenize(c.title), ...tokenize(c.tags), ...tokenize(c.aliases)])]);
   load(identities.flat());
 
   const minMass = MIN_COVERED_MASS_RATIO * Math.log(total);

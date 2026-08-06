@@ -44,7 +44,7 @@ describe('migration 14 — meter_rollups', () => {
     applyMigrations(fixture, KB_MIGRATIONS.filter(m => m.version < 14));
     assert.ok(!hasTable(fixture, 'meter_rollups'), 'fixture must not already have it');
 
-    const ran = applyMigrations(fixture, KB_MIGRATIONS);
+    const ran = applyMigrations(fixture, KB_MIGRATIONS.filter(m => m.version <= 14));
     assert.deepStrictEqual(ran.map(m => m.version), [14]);
     assert.ok(hasTable(fixture, 'meter_rollups'));
 
