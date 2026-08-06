@@ -100,3 +100,20 @@ describe('relevantNotes with aliases', () => {
     assert.deepStrictEqual(fired.map(r => `${r.prompt} -> ${r.hits.map(h => h.title).join(', ')}`), []);
   });
 });
+
+describe('aliases-backfill selection', () => {
+  it('asks only notes whose frontmatter has never carried an aliases key', async () => {
+    const { neverAsked } = await import('../src/cli/aliases-backfill.js');
+    const { mkdtempSync, writeFileSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = mkdtempSync(join(tmpdir(), 'alias-backfill-'));
+    writeFileSync(join(dir, 'unasked.md'), '---\ntitle: A\n---\nbody');
+    writeFileSync(join(dir, 'asked-empty.md'), '---\ntitle: B\naliases: []\n---\nbody');
+    writeFileSync(join(dir, 'asked.md'), '---\ntitle: C\naliases: [indexer]\n---\nbody');
+    assert.strictEqual(neverAsked(join(dir, 'unasked.md')), true);
+    assert.strictEqual(neverAsked(join(dir, 'asked-empty.md')), false, 'an empty list still means "asked"');
+    assert.strictEqual(neverAsked(join(dir, 'asked.md')), false);
+    assert.strictEqual(neverAsked(join(dir, 'missing.md')), false);
+  });
+});

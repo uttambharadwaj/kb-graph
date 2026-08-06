@@ -2,17 +2,10 @@
 // scheduler runs this; it stays an operator action until `kb surface-report`'s
 // METER GROWTH section gives someone a rate worth defending a window against.
 import { getDb } from '../db.js';
-import { UsageError } from './flags.js';
+import { UsageError, readFlagValue } from './flags.js';
 import { METER_TABLES, PRUNE_EXCLUDED, pruneMeters } from '../meters.js';
 
 const PRUNE_USAGE = 'Usage: kb meters prune --keep-days <N> [--dry-run] [--table <name>]';
-
-function readFlagValue(args, name) {
-  const index = args.findIndex(arg => arg === name || arg.startsWith(`${name}=`));
-  if (index === -1) return undefined;
-  const arg = args[index];
-  return arg.includes('=') ? arg.split('=').slice(1).join('=') : args[index + 1];
-}
 
 export function runMetersPruneCli(args) {
   const keepDaysRaw = readFlagValue(args, '--keep-days');

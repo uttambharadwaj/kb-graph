@@ -88,6 +88,12 @@ const COMMANDS = {
     summary: 'Replay every prompt the hint has seen against the current scorer; diff two runs to grade a change',
     run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),
   },
+  'aliases-backfill': {
+    summary: 'Propose retrieval aliases (one model call per note) for notes never asked, filter, store',
+    value: ['--limit', '--doc'],
+    boolean: ['--dry-run'],
+    run: a => import('../src/cli/aliases-backfill.js').then(m => m.runAliasesBackfillCli(a)),
+  },
   'wakeup-hook': {
     summary: 'Print compact KB briefing (for SessionStart hooks)',
     run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),

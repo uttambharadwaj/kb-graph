@@ -9,7 +9,8 @@ Return ONLY valid JSON (no markdown fencing, no explanation) with these fields:
   "project": project name if relevant (e.g. "my-app", "backend", "frontend") or null,
   "summary": 1-2 sentence summary optimized for AI retrieval (max 200 chars),
   "confidence": "high", "medium", or "low",
-  "key_topics": array of 2-4 main topics/concepts covered
+  "key_topics": array of 2-4 main topics/concepts covered,
+  "aliases": array of 0-6 retrieval aliases — the words a person's QUESTION would use when this note is the answer. Imagine the questions the note answers; each alias is the subject of one, phrased as the question would say it, usually a one-to-three-word phrase ("harvest job", "vault indexer"). Every alias must be a word or phrase the note's own text uses (never invent a synonym the note does not contain). Prefer the plain name a person would say over a code identifier. Duplication against the title is fine; a filter removes what the title already covers.
 }
 
 Classification guidelines:
@@ -48,6 +49,7 @@ ${content.slice(0, 4000)}`;
       summary: title,
       confidence: 'low',
       key_topics: [],
+      aliases: [],
       project: null,
     };
   }

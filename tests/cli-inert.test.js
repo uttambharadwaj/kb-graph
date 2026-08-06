@@ -14,7 +14,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // print usage and write nothing — the whole point of the command.
 const KB_COMMANDS = [
   'start', 'stop', 'mcp', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
-  'retrieval-report', 'wakeup-hook', 'prompt-hint', 'link-backfill', 'stale-servers',
+  'retrieval-report', 'wakeup-hook', 'prompt-hint', 'link-backfill', 'stale-servers', 'aliases-backfill',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
   'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
   'bus-send', 'bus-read', 'bus-status', 'bus-session', 'bus-agent', 'bus-agentd',

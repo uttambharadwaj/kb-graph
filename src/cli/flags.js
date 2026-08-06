@@ -80,6 +80,15 @@ export function acceptFlags(args, spec) {
   return true;
 }
 
+// The value of a `--flag value` or `--flag=value` argument, or undefined when
+// absent. Callers validate the value; this only finds it.
+export function readFlagValue(args, name) {
+  const index = args.findIndex(arg => arg === name || arg.startsWith(`${name}=`));
+  if (index === -1) return undefined;
+  const arg = args[index];
+  return arg.includes('=') ? arg.split('=').slice(1).join('=') : args[index + 1];
+}
+
 // Shared exit handling so a usage mistake is distinguishable from a failure:
 // exit 2 for "you typed it wrong", exit 1 for "it went wrong".
 function exitOnUsageError(err) {

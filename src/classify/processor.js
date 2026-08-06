@@ -65,6 +65,12 @@ export async function processNewClippings(vaultPath, { dryRun = false } = {}) {
       summary: classification.summary || null,
       confidence: classification.confidence || null,
       key_topics: classification.key_topics || [],
+      // Proposals only — the indexer's filterAliases decides what the scorer
+      // ever sees. Hand-written aliases survive a model that offers none, and
+      // the empty list is kept rather than dropped with the nulls below: it is
+      // the "asked, nothing to add" marker aliases-backfill keys on, so a
+      // classified note is never re-billed.
+      aliases: (classification.aliases?.length ? classification.aliases : fm.aliases) || [],
       classified: true,
       classified_at: new Date().toISOString().split('T')[0],
       classified_by: 'claude',
