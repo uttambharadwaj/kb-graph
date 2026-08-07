@@ -173,7 +173,7 @@ export function matchCommand(command, entries, { alreadyFired = new Set() } = {}
         if (rarest === null || hits < rarest) rarest = hits;
       }
     }
-    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, hits: rarest });
+    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, tier: entry.tier, hits: rarest });
   }
   return fired.sort((a, b) => a.hits - b.hits);
 }
@@ -293,12 +293,14 @@ export function filterTriggers(proposed, { title, content }, { corpus = loadComm
 // leave it half-written — write to a temp file in the same directory and
 // rename, which POSIX guarantees is atomic.
 export function rebuildTriggerIndex(path = TRIGGER_INDEX_PATH) {
+  // tier rides along so the hook can carry the unconfirmed-conclusion caveat
+  // (as prompt-hint does) without opening the database on the hot path.
   const rows = getDb().prepare(`
-    SELECT id, title, triggers FROM documents
+    SELECT id, title, tier, triggers FROM documents
     WHERE triggers IS NOT NULL AND superseded_at IS NULL AND doc_type != 'archive'
     ORDER BY id
   `).all();
-  const entries = rows.map(r => ({ id: r.id, title: r.title, patterns: JSON.parse(r.triggers) }));
+  const entries = rows.map(r => ({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers) }));
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(entries));
   renameSync(tmp, path);

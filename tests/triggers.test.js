@@ -195,7 +195,7 @@ describe('stripHeredocs', () => {
 });
 
 describe('matchCommand — heredoc bodies never fire', () => {
-  const entry = { id: 'a', title: 'Force-delete branch', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+  const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
 
   it('does not fire on the same text inside a heredoc body', () => {
     const heredocCmd = 'cat > x.md <<EOF\nsome text with gh pr merge --delete-branch inside\nEOF\necho done';
@@ -204,12 +204,12 @@ describe('matchCommand — heredoc bodies never fire', () => {
 
   it('fires on the same text at command position, outside any heredoc', () => {
     const hits = matchCommand('gh pr merge 78 --squash --delete-branch', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 });
 
 describe('matchCommand — mention vs execution', () => {
-  const entry = { id: 'a', title: 'Force-delete branch', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+  const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
 
   it('does not fire on a grep that mentions the flag', () => {
     assert.deepStrictEqual(matchCommand("grep -- '--delete-branch' notes.md", [entry]), []);
@@ -221,17 +221,17 @@ describe('matchCommand — mention vs execution', () => {
 
   it('fires when the command actually runs it', () => {
     const hits = matchCommand('gh pr merge 78 --squash --delete-branch', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 
   it('fires at the start of a segment after &&', () => {
     const hits = matchCommand('cd /x && gh pr merge --delete-branch', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 
   it('fires through an env-assignment + sudo wrapper', () => {
     const hits = matchCommand('KB_DIR=/tmp sudo gh pr merge --delete-branch', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 
   it('declines when only some parts are present', () => {
@@ -245,12 +245,12 @@ describe('matchCommand — mention vs execution', () => {
 
   it('fires after a background & separator', () => {
     const hits = matchCommand('sleep 5 & gh pr merge --delete-branch', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 });
 
 describe('matchCommand — token boundary vs flag substring', () => {
-  const entry = { id: 'g', title: 'Watch eva mentions', patterns: [{ parts: ['grep', 'eva'], hits: 1, sessions: 1 }] };
+  const entry = { id: 'g', title: 'Watch eva mentions', tier: 'observed', patterns: [{ parts: ['grep', 'eva'], hits: 1, sessions: 1 }] };
 
   it('does not match "eva" embedded in relevantNotes', () => {
     assert.deepStrictEqual(matchCommand('grep relevantnotes src/hint-relevance.js', [entry]), []);
@@ -262,13 +262,13 @@ describe('matchCommand — token boundary vs flag substring', () => {
 
   it('matches "eva" as a standalone token', () => {
     const hits = matchCommand('grep eva src/main.js', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', hits: 1 }]);
+    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', tier: 'observed', hits: 1 }]);
   });
 
   it('a flag-shaped part matches as a plain substring, by design', () => {
-    const flagEntry = { id: 'f', title: 'Watch --delete flags', patterns: [{ parts: ['grep', '--delete'], hits: 1, sessions: 1 }] };
+    const flagEntry = { id: 'f', title: 'Watch --delete flags', tier: 'observed', patterns: [{ parts: ['grep', '--delete'], hits: 1, sessions: 1 }] };
     const hits = matchCommand('grep --deleted-cache-dir', [flagEntry]);
-    assert.deepStrictEqual(hits, [{ id: 'f', title: 'Watch --delete flags', hits: 1 }]);
+    assert.deepStrictEqual(hits, [{ id: 'f', title: 'Watch --delete flags', tier: 'observed', hits: 1 }]);
   });
 });
 
@@ -279,14 +279,14 @@ describe('matchCommand — parts must land in the same segment', () => {
   });
 
   it('a real newline is a statement separator, not whitespace — a pattern split across lines does not fire', () => {
-    const entry = { id: 'a', title: 'Force-delete branch', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+    const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
     assert.deepStrictEqual(matchCommand('gh pr merge 78\n--delete-branch now', [entry]), []);
   });
 
   it('the same text on one line still fires', () => {
-    const entry = { id: 'a', title: 'Force-delete branch', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+    const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
     const hits = matchCommand('gh pr merge 78 --delete-branch now', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
   });
 });
 
@@ -346,6 +346,7 @@ describe('rebuildTriggerIndex / loadTriggerIndex', () => {
     assert.deepStrictEqual(loaded, [{
       id: triggered.lastInsertRowid,
       title: 'Force-push warning',
+      tier: 'inferred',
       patterns: [{ parts: ['git push', '--force'], hits: 2, sessions: 1 }],
     }]);
   });
