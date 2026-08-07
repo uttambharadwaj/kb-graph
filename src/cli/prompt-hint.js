@@ -2,49 +2,19 @@
 // knowledge base holds, print a one-line hint naming those notes. Silent
 // otherwise, which is most prompts — a surface that fires every time carries no
 // information, so declining is the product, not a failure mode.
-import { appendFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
 import { relevantNotes } from '../hint-relevance.js';
 import { liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
-import { LOGS_DIR } from '../paths.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
+import { HOOK_ERROR_LOG, recordHookFailure, deliver } from './hook-io.js';
 
 const MAX_HINTS = 3;
 
-export const HOOK_ERROR_LOG = join(LOGS_DIR, 'prompt-hint-errors.log');
-
-// Non-blocking is right — a knowledge base problem must never stop a prompt —
-// but silent is not. A hook that failed and a hook that had nothing to say are
-// identical from outside, which is why intermittent hook errors have never been
-// attributable to a particular hook. One line, then exit 0 exactly as before.
-export function recordHookFailure(stage, err) {
-  try {
-    // paths.js creates the files dir, not this one, and the first thing ever
-    // written here is by definition a failure — the worst moment to discover
-    // the destination is missing.
-    mkdirSync(LOGS_DIR, { recursive: true });
-    // One failure is one line. A stack pasted in raw makes `wc -l` on this file
-    // count frames, which is the wrong answer to the only question it is asked.
-    const detail = String(err?.stack || err).replace(/\s*\n\s*/g, ' | ');
-    appendFileSync(HOOK_ERROR_LOG, `${new Date().toISOString()} ${stage}: ${detail}\n`);
-  } catch {
-    // A logger that fails must not be louder than the thing it was logging.
-  }
-}
-
-// console.log returns before the pipe has taken the bytes, so a delivery that
-// fails is recorded by the meter as a hint that fired and seen by the caller as
-// nothing at all. Wait for the write, and say so when it does not land.
-export function deliver(line, out = process.stdout) {
-  return new Promise(resolve => {
-    out.write(`${line}\n`, err => {
-      if (err) recordHookFailure('deliver', err);
-      resolve();
-    });
-  });
-}
+// Re-exported rather than duplicated — trigger-hook.js (PreToolUse, runs on
+// every Bash call) imports these from hook-io.js directly instead of from
+// here, since this module pulls in db.js at load time and that hook must not.
+export { HOOK_ERROR_LOG, recordHookFailure, deliver };
 
 // Task notifications, system reminders and subagent reports reach this hook the
 // same way a typed prompt does, wrapped in a tag. Nobody said them to us, so
