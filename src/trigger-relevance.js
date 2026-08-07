@@ -15,7 +15,7 @@
 // hole). This file is the post-review shape: session-level ceiling, a shared
 // segment matcher used by both the vet and the hook so they grade the same
 // predicate, and grounding restricted to the note's own code spans.
-import { readFileSync, writeFileSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, renameSync, statSync } from 'fs';
 import { join } from 'path';
 import { getDb } from './db.js';
 import { KB_DIR } from './paths.js';
@@ -195,6 +195,32 @@ export function loadCommandCorpus(path = CORPUS_PATH) {
   }
 }
 
+// filterTriggers's default corpus (rows + precomputed segments + session
+// count) memoized module-level, invalidated by the corpus file's mtime.
+// Reindex calls filterTriggers once per vault file (~1,900 files) and every
+// call re-scans the whole corpus per proposed pattern; without this, a full
+// reindex re-reads and re-segments 14.5k commands ~1,900 times over. Only
+// the DEFAULT corpus is cached — a caller that passes `corpus` explicitly
+// (every test, and anyone grading an alternate corpus) always gets a fresh
+// per-call computation, exactly as before.
+let defaultCorpusCache = null; // { mtimeMs, rows, segments, totalSessions }
+
+function defaultCorpusWithSegments() {
+  let mtimeMs = null;
+  try {
+    mtimeMs = statSync(CORPUS_PATH).mtimeMs;
+  } catch {
+    // No corpus file yet — loadCommandCorpus already returns [] for this,
+    // and a stable `null` key still lets repeated calls hit the cache.
+  }
+  if (defaultCorpusCache && defaultCorpusCache.mtimeMs === mtimeMs) return defaultCorpusCache;
+  const rows = loadCommandCorpus();
+  const segments = rows.map(c => commandSegments(c.command));
+  const totalSessions = new Set(rows.map(c => c.session)).size;
+  defaultCorpusCache = { mtimeMs, rows, segments, totalSessions };
+  return defaultCorpusCache;
+}
+
 // Fenced ``` blocks and inline `backtick` spans only — never surrounding
 // prose. Grounding a trigger in prose is the exact failure filterAliases's
 // own header comment documents for body-as-identity: 'the fix', 'apply',
@@ -231,22 +257,25 @@ function isCommandShaped(part) {
 // The fabrication guards (code-span grounding, shape, caps) hold for pins
 // too: a human vouches for the noise trade, never for a command the note
 // doesn't contain.
-export function filterTriggers(proposed, { title, content }, { corpus = loadCommandCorpus(), pinned = false } = {}) {
+export function filterTriggers(proposed, { title, content }, { corpus, pinned = false } = {}) {
   const patterns = parseTriggerProposals(proposed).map(parts => parts.map(normalize));
   if (!patterns.length) return '';
 
-  const totalSessions = new Set(corpus.map(c => c.session)).size;
+  // An explicitly-passed corpus (every test, an alternate grading run) is
+  // never cached — only the default (no `corpus` argument) memoizes, and
+  // only by the corpus file's own mtime (see defaultCorpusWithSegments).
+  const { rows: corpusRows, segments: corpusSegments, totalSessions } = corpus
+    ? { rows: corpus, segments: corpus.map(c => commandSegments(c.command)), totalSessions: new Set(corpus.map(c => c.session)).size }
+    : defaultCorpusWithSegments();
+
   // A ceiling graded against too little history — too few lines, or too few
   // distinct sessions to make a session ratio meaningful — grades nothing.
   // Same stance as filterAliases's "df of 0 means not indexed yet": nothing
   // ungraded reaches the hook, and the nightly corpus rebuild + re-vet
   // catches these notes up once history exists. A pin is its own grading.
-  if (!pinned && (corpus.length < MIN_CORPUS_LINES || totalSessions < MIN_CORPUS_SESSIONS)) return '';
+  if (!pinned && (corpusRows.length < MIN_CORPUS_LINES || totalSessions < MIN_CORPUS_SESSIONS)) return '';
 
   const codeText = normalize(extractCodeSpans(`${title}\n${content}`));
-  // Computed once per call and reused across every proposed pattern, since
-  // every pattern re-scans the same corpus.
-  const corpusSegments = corpus.map(c => commandSegments(c.command));
 
   const seen = new Set();
   const accepted = [];
@@ -267,10 +296,10 @@ export function filterTriggers(proposed, { title, content }, { corpus = loadComm
 
     let hits = 0;
     const sessionsHit = new Set();
-    for (let i = 0; i < corpus.length; i += 1) {
+    for (let i = 0; i < corpusRows.length; i += 1) {
       if (corpusSegments[i].some(seg => patternMatchesSegment(parts, seg))) {
         hits += 1;
-        sessionsHit.add(corpus[i].session);
+        sessionsHit.add(corpusRows[i].session);
       }
     }
     if (!pinned && hits < MIN_CORPUS_HITS) continue;

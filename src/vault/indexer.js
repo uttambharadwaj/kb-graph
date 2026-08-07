@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { parseVaultNote } from './parser.js';
 import { normalizeTagString } from '../tags.js';
 import { filterAliases } from '../hint-relevance.js';
+import { filterTriggers, rebuildTriggerIndex } from '../trigger-relevance.js';
 import {
   insertDocument, updateDocumentFull, getDb,
   getVaultFile, upsertVaultFile, deleteVaultFile, getAllVaultPaths,
@@ -220,6 +221,21 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
     content: parsed.body,
   });
   getDb().prepare('UPDATE documents SET aliases = ? WHERE id = ?').run(aliases || null, docId);
+  // Same after-the-write timing as aliases, for the same reason (corpus df
+  // needs the note's own words indexed first — not applicable to triggers'
+  // code-span grounding, but keeping both writes adjacent avoids two
+  // separate passes over parsed.frontmatter). Title/content only: tags are
+  // not command text. NULL, never '', when nothing survives — rebuildTrigger
+  // Index assumes every non-NULL triggers column is valid JSON.
+  const priorTriggers = getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(docId)?.triggers ?? null;
+  const vettedTriggers = filterTriggers(parsed.frontmatter.triggers, {
+    title: parsed.title,
+    content: parsed.body,
+  }, { pinned: !!parsed.frontmatter.triggers_pinned }) || null;
+  getDb().prepare('UPDATE documents SET triggers = ? WHERE id = ?').run(vettedTriggers, docId);
+  // The index materializer does a full table scan — worth paying only when
+  // this file's own column actually moved, not on every unrelated reindex.
+  if (vettedTriggers !== priorTriggers) rebuildTriggerIndex();
   // Frontmatter is hand-editable, so a claim it makes can fail the tier rules.
   // The DB clamps rather than throwing — one bad file must not sink a whole
   // reindex — so say what was lowered instead of lowering it silently.

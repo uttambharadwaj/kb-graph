@@ -9,6 +9,24 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { getDb } from '../src/db.js';
 import { scanVault, indexVaultFile } from '../src/vault/indexer.js';
+import { CORPUS_PATH, TRIGGER_INDEX_PATH, loadTriggerIndex } from '../src/trigger-relevance.js';
+
+// The indexer's triggers wiring uses filterTriggers's DEFAULT corpus (no
+// explicit `corpus` option), which reads CORPUS_PATH — so these tests write
+// a real TSV there rather than passing a synthetic array the way
+// tests/triggers.test.js does. 40 sessions x 20 filler lines (>=500 lines,
+// >=20 sessions, the corpus-adequacy floor) plus two markers: one common
+// enough to be rejected by the 5% session ceiling, one rare enough to clear
+// it.
+function writeTestCorpus() {
+  const lines = [];
+  for (let s = 0; s < 40; s += 1) {
+    for (let j = 0; j < 20; j += 1) lines.push(`s${s}\t${j % 2 === 0 ? 'git status' : 'ls -la'}`);
+  }
+  for (let s = 0; s < 4; s += 1) lines.push(`s${s}\tgit push --force`); // 4/40 = 10% -> rejected
+  lines.push('s10\trare-marker-cmd run'); // 1/40 = 2.5% -> accepted
+  writeFileSync(CORPUS_PATH, lines.join('\n') + '\n');
+}
 
 describe('scanVault', () => {
   let vaultDir;
@@ -94,6 +112,87 @@ The vault indexer is what embeds a document after a write.`);
       assert.deepStrictEqual(result.errors, []);
       const row = getDb().prepare('SELECT aliases FROM documents WHERE source = ?').get(`vault:${relPath}`);
       assert.strictEqual(row.aliases, 'indexer');
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
+  it('vets frontmatter triggers into the column — one accepted, one rejected by the session ceiling', async () => {
+    writeTestCorpus();
+    const relPath = '05_research/trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Force-push cleanup
+type: lesson
+tags: [git]
+triggers: ["git push && --force", "rare-marker-cmd"]
+---
+
+Never run \`git push --force\` here; also watch for \`rare-marker-cmd\`.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT id, triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      const kept = JSON.parse(row.triggers);
+      assert.deepStrictEqual(kept.map(k => k.parts), [['rare-marker-cmd']]);
+
+      const index = loadTriggerIndex(TRIGGER_INDEX_PATH);
+      const entry = index.find(e => e.id === row.id);
+      assert.ok(entry, 'rebuildTriggerIndex must have run and picked up the new column');
+      assert.deepStrictEqual(entry.patterns.map(p => p.parts), [['rare-marker-cmd']]);
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
+  it('honors triggers_pinned, keeping a pattern the session ceiling would otherwise reject', async () => {
+    writeTestCorpus();
+    const relPath = '05_research/pinned-trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Force-push cleanup (curated)
+type: lesson
+tags: [git]
+triggers: ["git push && --force"]
+triggers_pinned: true
+---
+
+Never run \`git push --force\` here.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      const kept = JSON.parse(row.triggers);
+      assert.deepStrictEqual(kept.map(k => k.parts), [['git push', '--force']]);
+      assert.strictEqual(kept[0].pinned, true);
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
+  it('stores NULL, never an empty string, when nothing survives the vet', async () => {
+    writeTestCorpus();
+    const relPath = '05_research/no-trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: A note with no groundable command
+type: lesson
+tags: [git]
+triggers: ["totally-unrelated-command"]
+---
+
+This note only describes totally-unrelated-command in prose, never inside a code span.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      assert.strictEqual(row.triggers, null);
     } finally {
       const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
       if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);

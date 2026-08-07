@@ -15,9 +15,11 @@ import { getDb } from '../src/db.js';
 import { KB_DIR } from '../src/paths.js';
 import {
   filterTriggers, parseTriggerProposals, matchCommand, stripHeredocs,
-  rebuildTriggerIndex, loadTriggerIndex,
+  rebuildTriggerIndex, loadTriggerIndex, CORPUS_PATH,
 } from '../src/trigger-relevance.js';
 import { buildCommandCorpus } from '../src/cli/trigger-corpus.js';
+import { neverAsked, revetTriggers, runTriggersBackfillCli } from '../src/cli/triggers-backfill.js';
+import { UsageError } from '../src/cli/flags.js';
 
 // 40 sessions, 20 filler lines each (git status / ls -la, no marker overlap)
 // plus explicit marker injections at known session indices, so every ratio
@@ -385,5 +387,109 @@ describe('buildCommandCorpus', () => {
     const [session, command] = written.trim().split('\t');
     assert.strictEqual(session, 'session1', 'session column is the fixture filename stem');
     assert.strictEqual(command, "cat > x.md <<'EOF' ; echo done");
+  });
+});
+
+describe('triggers-backfill selection', () => {
+  it('asks only notes whose frontmatter has never carried a triggers key', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'triggers-backfill-'));
+    writeFileSync(join(dir, 'unasked.md'), '---\ntitle: A\n---\nbody');
+    writeFileSync(join(dir, 'asked-empty.md'), '---\ntitle: B\ntriggers: []\n---\nbody');
+    writeFileSync(join(dir, 'asked.md'), '---\ntitle: C\ntriggers: [somecmd]\n---\nbody');
+    assert.strictEqual(neverAsked(join(dir, 'unasked.md')), true);
+    assert.strictEqual(neverAsked(join(dir, 'asked-empty.md')), false, 'an empty list still means "asked"');
+    assert.strictEqual(neverAsked(join(dir, 'asked.md')), false);
+    assert.strictEqual(neverAsked(join(dir, 'missing.md')), false);
+  });
+});
+
+describe('triggers-backfill — flag validation', () => {
+  it('rejects a non-integer --doc', async () => {
+    await assert.rejects(runTriggersBackfillCli(['--doc', 'nope']), UsageError);
+  });
+
+  it('rejects a non-positive --limit', async () => {
+    await assert.rejects(runTriggersBackfillCli(['--limit', '0']), UsageError);
+  });
+});
+
+describe('triggers-backfill --dry-run', () => {
+  it('counts unasked candidates and writes nothing — no model call', async () => {
+    const vaultPath = process.env.OBSIDIAN_VAULT_PATH;
+    mkdirSync(join(vaultPath, 'notes'), { recursive: true });
+    writeFileSync(
+      join(vaultPath, 'notes', 'dry-run-unasked.md'),
+      '---\ntitle: Dry run candidate\n---\nNever run `dry-run-cmd` here.',
+    );
+    const doc = getDb().prepare('INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, ?, ?)')
+      .run('Dry run candidate', 'Never run `dry-run-cmd` here.', 'lesson', '');
+    getDb().prepare('INSERT INTO vault_files (vault_path, content_hash, document_id, title) VALUES (?, ?, ?, ?)')
+      .run('notes/dry-run-unasked.md', 'dry-run-hash', doc.lastInsertRowid, 'Dry run candidate');
+
+    const lines = [];
+    const realLog = console.log;
+    console.log = (...args) => lines.push(args.join(' '));
+    try {
+      // Completing without hanging or throwing is itself proof no model call
+      // happened — --dry-run returns before runClaudeJSON is ever reached.
+      await runTriggersBackfillCli(['--dry-run']);
+    } finally {
+      console.log = realLog;
+    }
+
+    const out = lines.join('\n');
+    assert.match(out, new RegExp(`#${doc.lastInsertRowid} Dry run candidate`));
+    assert.match(out, /of \d+ unasked notes would be asked this run/);
+    assert.doesNotMatch(
+      readFileSync(join(vaultPath, 'notes', 'dry-run-unasked.md'), 'utf-8'),
+      /triggers:/,
+      'dry run must not write frontmatter',
+    );
+    assert.strictEqual(
+      getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(doc.lastInsertRowid).triggers,
+      null,
+      'dry run must not write the column',
+    );
+  });
+});
+
+describe('triggers-backfill --revet', () => {
+  it('re-filters the stored column against the current corpus, without touching frontmatter', async () => {
+    // 40 sessions written to the DEFAULT corpus path — revetTriggers calls
+    // filterTriggers with no explicit corpus, same as the indexer.
+    const lines = [];
+    for (let s = 0; s < 40; s += 1) {
+      for (let j = 0; j < 20; j += 1) lines.push(`s${s}\t${j % 2 === 0 ? 'git status' : 'ls -la'}`);
+    }
+    lines.push('s10\trare-marker-cmd run'); // 1/40 = 2.5% -> clears the ceiling
+    writeFileSync(CORPUS_PATH, lines.join('\n') + '\n');
+
+    const vaultPath = process.env.OBSIDIAN_VAULT_PATH;
+    mkdirSync(join(vaultPath, 'notes'), { recursive: true });
+    const body = 'Watch for `rare-marker-cmd` in history.';
+    writeFileSync(
+      join(vaultPath, 'notes', 'revet-trigger.md'),
+      '---\ntitle: Revet trigger note\ntriggers: [rare-marker-cmd]\n---\n' + body,
+    );
+
+    // Stored under a stale value a past filter/corpus produced — the
+    // frontmatter proposal is the durable record and stays whole; only the
+    // column catches up to what filterTriggers computes today.
+    const stale = JSON.stringify([{ parts: ['stale-cmd'], hits: 0, sessions: 0 }]);
+    const info = getDb().prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, triggers) VALUES (?, ?, ?, ?, ?)'
+    ).run('Revet trigger note', body, 'lesson', '', stale);
+    getDb().prepare('INSERT INTO vault_files (vault_path, content_hash, document_id, title) VALUES (?, ?, ?, ?)')
+      .run('notes/revet-trigger.md', 'revet-hash', info.lastInsertRowid, 'Revet trigger note');
+
+    revetTriggers();
+
+    const stored = getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(info.lastInsertRowid).triggers;
+    assert.deepStrictEqual(JSON.parse(stored).map(p => p.parts), [['rare-marker-cmd']]);
+    assert.match(
+      readFileSync(join(vaultPath, 'notes', 'revet-trigger.md'), 'utf-8'),
+      /triggers: \[rare-marker-cmd\]/,
+      'frontmatter proposal stays whole',
+    );
   });
 });
