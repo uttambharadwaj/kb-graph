@@ -113,6 +113,11 @@ const COMMANDS = {
     summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)',
     run: () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
   },
+  'trigger-hook': {
+    summary: 'Read hook JSON on stdin, warn on a vetted command trigger (for PreToolUse/Bash hooks); '
+      + 'emits only when <KB_DIR>/trigger-hook-enabled exists, log-only otherwise',
+    run: () => import('../src/cli/trigger-hook.js').then(m => m.triggerHook()),
+  },
   'link-backfill': {
     summary: 'Connect existing docs via embedding neighbors (doc_links + Related sections)',
     run: () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),

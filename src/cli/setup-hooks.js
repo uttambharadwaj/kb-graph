@@ -6,6 +6,7 @@ import { join } from 'path';
 const HOOK_SPECS = [
   { event: 'SessionStart', matcher: 'startup|resume|clear|compact', subcommand: 'wakeup-hook' },
   { event: 'UserPromptSubmit', matcher: null, subcommand: 'prompt-hint' },
+  { event: 'PreToolUse', matcher: 'Bash', subcommand: 'trigger-hook' },
 ];
 
 // Pure merge: dedup by subcommand so re-runs and prior manual installs never duplicate.
