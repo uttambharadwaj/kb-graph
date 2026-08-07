@@ -8,16 +8,20 @@ import { mergeClaudeHooks, installClaudeHooks , unresolvableHookCommands } from 
 
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
 
-test('mergeClaudeHooks adds SessionStart and UserPromptSubmit entries', () => {
+test('mergeClaudeHooks adds SessionStart, UserPromptSubmit and PreToolUse entries', () => {
   const merged = mergeClaudeHooks({}, OPTS);
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
+  const ptu = merged.hooks.PreToolUse;
   assert.equal(ss.length, 1);
   assert.equal(ss[0].matcher, 'startup|resume|clear|compact');
   assert.equal(ss[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook');
   assert.equal(ups.length, 1);
   assert.equal(ups[0].matcher, undefined);
   assert.equal(ups[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js prompt-hint');
+  assert.equal(ptu.length, 1);
+  assert.equal(ptu[0].matcher, 'Bash');
+  assert.equal(ptu[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook');
 });
 
 test('mergeClaudeHooks is idempotent', () => {
@@ -31,6 +35,19 @@ test('mergeClaudeHooks detects existing hooks with different node paths', () => 
   const merged = mergeClaudeHooks(existing, OPTS);
   assert.equal(merged.hooks.SessionStart.length, 1); // not duplicated
   assert.equal(merged.hooks.UserPromptSubmit.length, 1); // still added
+  assert.equal(merged.hooks.PreToolUse.length, 1); // still added
+});
+
+// A real settings.json can already carry unrelated PreToolUse entries (e.g. a
+// hand-written style-review reminder) with their own matcher — the dedup key
+// is the subcommand suffix, not the event, so trigger-hook must land beside
+// them rather than displacing or merging into them.
+test('mergeClaudeHooks adds trigger-hook alongside an unrelated PreToolUse entry', () => {
+  const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "echo 'style reminder'" }] }] } };
+  const merged = mergeClaudeHooks(existing, OPTS);
+  assert.equal(merged.hooks.PreToolUse.length, 2);
+  assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, "echo 'style reminder'");
+  assert.equal(merged.hooks.PreToolUse[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook');
 });
 
 test('mergeClaudeHooks preserves unrelated settings and hooks', () => {
