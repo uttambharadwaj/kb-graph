@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { getDb } from '../src/db.js';
 import { KB_DIR } from '../src/paths.js';
 import {
-  filterTriggers, parseTriggerProposals, matchCommand, stripHeredocs,
+  filterTriggers, parseTriggerProposals, matchCommand, stripHeredocs, commandSegments,
   rebuildTriggerIndex, loadTriggerIndex, CORPUS_PATH,
 } from '../src/trigger-relevance.js';
 import { buildCommandCorpus } from '../src/cli/trigger-corpus.js';
@@ -196,6 +196,37 @@ describe('stripHeredocs', () => {
   });
 });
 
+// A2: fixes from the fix-batch-A review. A here-string was misread as a
+// heredoc opener one character over, and a heredoc-shaped false positive
+// (a bit-shift) silently swallowed everything after it — both because the
+// old single-scalar `delimiter` only ever tracked ONE pending terminator.
+describe('stripHeredocs — here-strings, bit-shift false positives, and multiple openers', () => {
+  it('does not misread a here-string (<<<) as a heredoc opener, so a dangerous line after it is not swallowed', () => {
+    const raw = 'grep x <<< word\ngh pr merge --delete-branch';
+    assert.strictEqual(stripHeredocs(raw), raw, 'nothing to strip — <<< is not a heredoc opener at all');
+  });
+
+  it('fails safe to the ORIGINAL, unstripped text when a false-positive opener (a bit-shift) never finds its terminator', () => {
+    const raw = 'python3 -c "print(1 << bits)"';
+    assert.strictEqual(stripHeredocs(raw), raw, 'a possible false positive beats silently swallowing what follows');
+  });
+
+  it('an unterminated heredoc anywhere in a multi-line command returns the whole thing unstripped, not just the tail', () => {
+    const raw = 'cat <<EOF\nbody line\nEOF\npython3 -c "1 << bits"\necho after';
+    assert.strictEqual(stripHeredocs(raw), raw);
+  });
+
+  it('two heredocs opened on one line consume their bodies in order — a dangerous line inside the SECOND body stays suppressed', () => {
+    const raw = ['cat <<A <<B', 'line-for-A', 'A', 'gh pr merge --delete-branch', 'B', 'echo done'].join('\n');
+    assert.strictEqual(stripHeredocs(raw), 'cat <<A <<B\necho done');
+  });
+
+  it('the second of two same-line heredocs still strips correctly even with real content around it', () => {
+    const raw = ['cat <<A <<B', 'A', 'not-a-real-command --delete-branch', 'B'].join('\n');
+    assert.strictEqual(stripHeredocs(raw), 'cat <<A <<B');
+  });
+});
+
 describe('matchCommand — heredoc bodies never fire', () => {
   const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
 
@@ -251,6 +282,76 @@ describe('matchCommand — mention vs execution', () => {
   });
 });
 
+// A1: fixes from the fix-batch-A review. The old segment splitter was a
+// plain regex over flattened text with no idea what a quote was, so a `;`,
+// `&&` or `&` inside a quoted string split the command anyway — killing the
+// core mention-vs-execution guarantee the whole matcher exists for — and a
+// redirect's `&` (`2>&1`) got read as a background-job separator, splitting
+// a real command's flag onto its own segment so it could never match.
+describe('commandSegments / matchCommand — quote-aware segmentation', () => {
+  const entry = { id: 'a', title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+
+  it('a semicolon inside a quoted string does not split the segment — a quoted MENTION still does not fire', () => {
+    const cmd = 'echo "do not run; gh pr merge 1 --delete-branch"';
+    assert.deepStrictEqual(commandSegments(cmd), [cmd]);
+    assert.deepStrictEqual(matchCommand(cmd, [entry]), []);
+  });
+
+  it('&& inside a quoted string does not split the segment', () => {
+    const cmd = 'git commit -m "a && b"';
+    assert.deepStrictEqual(commandSegments(cmd), [cmd]);
+  });
+
+  it('a redirect & (2>&1) is not a background-job separator, so the flag after it still lands in the same segment and FIRES', () => {
+    const hits = matchCommand('gh pr merge 1 2>&1 --delete-branch', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
+  });
+
+  it('&> and >&2 redirect forms are likewise not background-job separators', () => {
+    assert.deepStrictEqual(commandSegments('gh pr merge 1 --delete-branch &> /dev/null'), ['gh pr merge 1 --delete-branch &> /dev/null']);
+    assert.deepStrictEqual(commandSegments('gh pr merge 1 --delete-branch >&2'), ['gh pr merge 1 --delete-branch >&2']);
+  });
+
+  it('a real background & (not adjacent to a redirect) still splits, unchanged from before', () => {
+    assert.deepStrictEqual(commandSegments('sleep 5 & gh pr merge --delete-branch'), ['sleep 5', 'gh pr merge --delete-branch']);
+  });
+
+  it('a quoted env-assignment value strips as ONE wrapper token instead of anchoring on its closing quote', () => {
+    const hits = matchCommand('GIT_AUTHOR_NAME="John Doe" gh pr merge 1 --delete-branch', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
+    assert.deepStrictEqual(commandSegments('GIT_AUTHOR_NAME="John Doe" gh pr merge 1 --delete-branch'), ['gh pr merge 1 --delete-branch']);
+  });
+
+  // Seam sweep, run by hand against the new scanner before writing this.
+  it('nested single-inside-double quotes: the inner single quote has no special meaning', () => {
+    const cmd = 'echo "a \'b\' c; gh pr merge --delete-branch"';
+    assert.deepStrictEqual(commandSegments(cmd), [cmd]);
+  });
+
+  it('a backslash-escaped quote outside real quotes does not open quoting — an operator right after it still splits', () => {
+    assert.deepStrictEqual(commandSegments('echo \\"; gh pr merge --delete-branch'), ['echo \\"', 'gh pr merge --delete-branch']);
+  });
+
+  it('a quoted separator inside a command substitution does not leak out, but the real separator after it still splits', () => {
+    const hits = matchCommand('x=$(cmd "a;b") ; gh pr merge --delete-branch', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', tier: 'observed', hits: 5 }]);
+  });
+
+  it('an empty or non-string command yields no segments, not a throw', () => {
+    assert.deepStrictEqual(commandSegments(''), []);
+    assert.deepStrictEqual(commandSegments(undefined), []);
+    assert.deepStrictEqual(commandSegments(null), []);
+  });
+
+  it('an unterminated quote does not hang or throw — the rest of the command is treated as still inside it', () => {
+    assert.doesNotThrow(() => commandSegments('echo "never closes; gh pr merge --delete-branch'));
+  });
+
+  it('a trailing backslash at the very end of the command does not throw (no character to escape)', () => {
+    assert.doesNotThrow(() => commandSegments('echo foo\\'));
+  });
+});
+
 describe('matchCommand — token boundary vs flag substring', () => {
   const entry = { id: 'g', title: 'Watch eva mentions', tier: 'observed', patterns: [{ parts: ['grep', 'eva'], hits: 1, sessions: 1 }] };
 
@@ -264,6 +365,19 @@ describe('matchCommand — token boundary vs flag substring', () => {
 
   it('matches "eva" as a standalone token', () => {
     const hits = matchCommand('grep eva src/main.js', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', tier: 'observed', hits: 1 }]);
+  });
+
+  // A3: partAppears now caches its RegExp per distinct part (module-level
+  // Map) instead of compiling fresh on every call. Correctness check, not a
+  // benchmark — a stale/shared regex object reused incorrectly across calls
+  // would show up here as a decline that should have matched, or vice versa,
+  // since the SAME 'eva' part is graded against three different commands in
+  // a row within this one process.
+  it('the cached regex for a reused part still grades each call independently — a miss, a miss, then a real match', () => {
+    assert.deepStrictEqual(matchCommand('grep relevantnotes src/hint-relevance.js', [entry]), []);
+    assert.deepStrictEqual(matchCommand('grep parsevaultnote src/vault/indexer.js', [entry]), []);
+    const hits = matchCommand('grep eva src/other.js', [entry]);
     assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', tier: 'observed', hits: 1 }]);
   });
 
@@ -355,6 +469,40 @@ describe('rebuildTriggerIndex / loadTriggerIndex', () => {
 
   it('a missing path loads as no entries', () => {
     assert.deepStrictEqual(loadTriggerIndex(join(KB_DIR, 'does-not-exist.json')), []);
+  });
+
+  it('skips a row whose triggers column is not valid JSON, and still indexes the good rows (B1)', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, triggers) VALUES (?, ?, ?, ?, ?)'
+    );
+    // Malformed JSON can only land here via a hand SQL edit or a write that
+    // died mid-way — filterTriggers itself never emits anything but valid
+    // JSON or ''. One bad row must not sink the rows around it.
+    const bad = insert.run('Corrupted row', 'x', 'lesson', '', '{not valid json');
+    const good = insert.run(
+      'Good row', 'y', 'lesson', '', JSON.stringify([{ parts: ['good-cmd'], hits: 1, sessions: 1 }]),
+    );
+
+    // Membership, not an exact count — earlier tests in this file leave
+    // their own live triggered rows in the DB (this file's convention, seen
+    // throughout), so the total is whatever else is live plus these two.
+    const idxPath = join(KB_DIR, 'trigger-index-bad-row-test.json');
+    rebuildTriggerIndex(idxPath);
+    const ids = loadTriggerIndex(idxPath).map(e => e.id);
+    assert.ok(ids.includes(good.lastInsertRowid), 'the good row still indexes');
+    assert.ok(!ids.includes(bad.lastInsertRowid), 'the bad row is skipped, not left to crash the rebuild');
+  });
+});
+
+describe('shared trigger-proposal rules (B4)', () => {
+  it('the classifier and triggers-backfill prompts both interpolate one exported constant, not independent copies', () => {
+    const classifierSrc = readFileSync(new URL('../src/classify/classifier.js', import.meta.url), 'utf-8');
+    const backfillSrc = readFileSync(new URL('../src/cli/triggers-backfill.js', import.meta.url), 'utf-8');
+    assert.match(classifierSrc, /from ['"]\.\.\/trigger-proposal-rules\.js['"]/);
+    assert.match(backfillSrc, /from ['"]\.\.\/trigger-proposal-rules\.js['"]/);
+    assert.match(classifierSrc, /\$\{TRIGGER_PROPOSAL_RULES\}/);
+    assert.match(backfillSrc, /\$\{TRIGGER_PROPOSAL_RULES\}/);
   });
 });
 

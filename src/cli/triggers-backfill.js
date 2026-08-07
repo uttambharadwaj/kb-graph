@@ -21,30 +21,22 @@ import { getDb } from '../db.js';
 import { runClaudeJSON } from '../claude-cli.js';
 import { indexVaultFile } from '../vault/indexer.js';
 import { filterTriggers, rebuildTriggerIndex } from '../trigger-relevance.js';
+import { TRIGGER_PROPOSAL_RULES } from '../trigger-proposal-rules.js';
+import { neverAsked as neverAskedKey } from './aliases-backfill.js';
 import { UsageError, acceptFlags, readFlagValue } from './flags.js';
 
 const USAGE = 'Usage: kb triggers-backfill [--limit <N>] [--doc <id>] [--dry-run] [--revet]';
 const DEFAULT_LIMIT = 20;
 
-const TRIGGERS_PROMPT = `You identify command triggers for a knowledge-base note: which commands, quoted in this note's own code spans, is the note warning you about running?
+const TRIGGERS_PROMPT = `You identify command triggers for a knowledge-base note: which commands is the note warning you about running?
 
-Return ONLY valid JSON (no markdown fencing, no explanation): {"triggers": ["...", ...]} with 0 to 3 entries. Usually none — most notes warn about nothing you'd type at a shell, so an empty array is the normal answer.
+Return ONLY valid JSON (no markdown fencing, no explanation): {"triggers": ["...", ...]}.
 
-Rules:
-- Propose a pattern only when the note's own text, inside backticks or a fenced code block, contains the exact command you are warning about.
-- Each pattern is a string: the required parts of the command, joined " && " (e.g. "gh pr merge && --delete-branch").
-- Do not propose a pattern for a command the note only describes in prose without quoting it.`;
+${TRIGGER_PROPOSAL_RULES}`;
 
-// The resumability marker: a `triggers` frontmatter key — even an empty
-// list — means a pass already ran, so the note is never re-billed.
-export function neverAsked(filePath) {
-  try {
-    const { data: fm } = matter(readFileSync(filePath, 'utf-8'));
-    return !('triggers' in fm);
-  } catch {
-    return false; // vault file gone or unreadable — the indexer's problem, not this one's
-  }
-}
+// Same resumability marker aliases-backfill.js uses (an even-if-empty
+// frontmatter key means a pass already ran), keyed on 'triggers' instead.
+export const neverAsked = (filePath) => neverAskedKey(filePath, 'triggers');
 
 // Re-run the deterministic filter over every stored proposal — no model
 // calls, no frontmatter writes. The reindex path cannot do this: it skips a
@@ -120,6 +112,12 @@ export async function runTriggersBackfillCli(args = []) {
   }
 
   let asked = 0, kept = 0, anyChange = false;
+  // Prepared once, not once per candidate — the only read left per note is
+  // the final `stored` value the log line and `kept` counter need; the
+  // prior-value read is gone, because indexVaultFile now reports
+  // triggersChanged itself (it already knows, having just computed it).
+  const selectTriggers = getDb().prepare('SELECT triggers FROM documents WHERE id = ?');
+
   for (const c of candidates) {
     const filePath = join(vaultPath, c.vault_path);
     const { data: fm, content: body } = matter(readFileSync(filePath, 'utf-8'));
@@ -135,22 +133,23 @@ export async function runTriggersBackfillCli(args = []) {
     }
     asked += 1;
     const proposed = Array.isArray(proposal?.triggers) ? proposal.triggers.map(String) : [];
-    const priorTriggers = getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(c.document_id)?.triggers ?? null;
     // The empty list is written too: it is the "asked, nothing to add" marker
     // that makes the run resumable.
     fm.triggers = proposed;
     writeFileSync(filePath, matter.stringify(body, fm));
-    const result = await indexVaultFile(vaultPath, c.vault_path);
-    const stored = getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(c.document_id)?.triggers ?? null;
-    if (stored !== priorTriggers) anyChange = true;
+    // Deferred: K candidates would otherwise cost K full-table index
+    // rebuilds (one inline per changed note, via src/vault/indexer.js) on
+    // top of the one this loop already does at the end.
+    const result = await indexVaultFile(vaultPath, c.vault_path, { deferTriggerIndex: true });
+    if (result.triggersChanged) anyChange = true;
+    const stored = selectTriggers.get(c.document_id)?.triggers ?? null;
     if (stored) kept += 1;
     const errs = result.errors?.length ? ` (index: ${result.errors.join('; ')})` : '';
     console.log(`#${c.document_id} ${c.title}\n  proposed [${proposed.join(', ')}] -> kept "${stored || ''}"${errs}`);
   }
 
-  // indexVaultFile already rebuilds the index per note whose own column
-  // changed (src/vault/indexer.js); this is a cheap final consolidation, not
-  // the only place it happens.
+  // The only rebuild for this whole run — every per-note call above deferred
+  // it, so K changed notes cost one rebuild, not K+1.
   if (anyChange) rebuildTriggerIndex();
   console.log(`\n${asked} notes asked, ${kept} gained triggers; ${remaining} live notes still unasked.`);
 }

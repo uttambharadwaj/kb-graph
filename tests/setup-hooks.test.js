@@ -8,16 +8,23 @@ import { mergeClaudeHooks, installClaudeHooks , unresolvableHookCommands } from 
 
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
 
-test('mergeClaudeHooks adds SessionStart and UserPromptSubmit entries', () => {
+test('mergeClaudeHooks adds SessionStart, UserPromptSubmit and PreToolUse entries', () => {
   const merged = mergeClaudeHooks({}, OPTS);
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
+  const ptu = merged.hooks.PreToolUse;
   assert.equal(ss.length, 1);
   assert.equal(ss[0].matcher, 'startup|resume|clear|compact');
   assert.equal(ss[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook');
   assert.equal(ups.length, 1);
   assert.equal(ups[0].matcher, undefined);
   assert.equal(ups[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js prompt-hint');
+  assert.equal(ptu.length, 1);
+  assert.equal(ptu[0].matcher, 'Bash');
+  // Script form, not the subcommand form: bin/kb-trigger-hook.js beside
+  // bin/kb.js, not `kb.js trigger-hook` — see setup-hooks.js's HOOK_SPECS
+  // comment for why this one hook skips bin/kb.js's dispatch machinery.
+  assert.equal(ptu[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
 });
 
 test('mergeClaudeHooks is idempotent', () => {
@@ -31,6 +38,47 @@ test('mergeClaudeHooks detects existing hooks with different node paths', () => 
   const merged = mergeClaudeHooks(existing, OPTS);
   assert.equal(merged.hooks.SessionStart.length, 1); // not duplicated
   assert.equal(merged.hooks.UserPromptSubmit.length, 1); // still added
+  assert.equal(merged.hooks.PreToolUse.length, 1); // still added
+});
+
+// A real settings.json can already carry unrelated PreToolUse entries (e.g. a
+// hand-written style-review reminder) with their own matcher — the dedup key
+// is the spec's own identity (script filename here, subcommand elsewhere),
+// not the event, so trigger-hook must land beside them rather than
+// displacing or merging into them.
+test('mergeClaudeHooks adds trigger-hook alongside an unrelated PreToolUse entry', () => {
+  const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "echo 'style reminder'" }] }] } };
+  const merged = mergeClaudeHooks(existing, OPTS);
+  assert.equal(merged.hooks.PreToolUse.length, 2);
+  assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, "echo 'style reminder'");
+  assert.equal(merged.hooks.PreToolUse[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
+});
+
+// The script form's dedup checks the command for the script's own filename,
+// not a leading-space-prefixed token — since the full path is
+// `<dir>/kb-trigger-hook.js`, a naive ` ${subcommand}`-style suffix check
+// would never match it and every re-run would install a duplicate. Exercised
+// here with the checkout directory itself differing between runs (e.g. a
+// prior install from a dev checkout, now re-run from the deploy checkout),
+// which the plain kbJsPath-equality the idempotency test above already
+// covers would not catch.
+test('mergeClaudeHooks recognizes an already-installed script hook even from a different checkout directory', () => {
+  const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/node /Users/dev/kb-checkout/bin/kb-trigger-hook.js' }] }] } };
+  const merged = mergeClaudeHooks(existing, { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' });
+  assert.equal(merged.hooks.PreToolUse.length, 1, 'not duplicated even though the directory prefix differs');
+});
+
+// A4: a real prior commit of this stack installed the subcommand form
+// (`kb.js trigger-hook`) before the thin entry existed. The PreToolUse spec
+// now carries the subcommand alongside the script so a settings.json still
+// holding that install is recognized too — without this, re-running setup
+// on a machine that installed before the thin entry landed would install a
+// SECOND PreToolUse hook rather than replacing or recognizing the first.
+test('mergeClaudeHooks recognizes a legacy subcommand-form trigger-hook install and does not duplicate it', () => {
+  const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook' }] }] } };
+  const merged = mergeClaudeHooks(existing, OPTS);
+  assert.equal(merged.hooks.PreToolUse.length, 1, 'the legacy install must be recognized, not duplicated');
+  assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook', 'the legacy command is left as-is — only a fresh install writes the script form');
 });
 
 test('mergeClaudeHooks preserves unrelated settings and hooks', () => {

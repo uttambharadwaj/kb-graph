@@ -155,7 +155,7 @@ describe('prompt-hint leaves a marker when it fails', () => {
   // Its own KB dir, holding a kb.db that is not a database — a failure the hook
   // meets on the read path, where a real one would happen.
   const broken = mkdtempSync(join(tmpdir(), 'kb-hook-fail-'));
-  const errorLog = join(broken, 'logs', 'prompt-hint-errors.log');
+  const errorLog = join(broken, 'logs', 'hook-errors.log');
   const logLines = () => (existsSync(errorLog) ? readFileSync(errorLog, 'utf8').trim().split('\n').filter(Boolean) : []);
 
   it('records the failure instead of swallowing it, and still injects nothing', () => {
@@ -173,7 +173,7 @@ describe('prompt-hint leaves a marker when it fails', () => {
   });
 
   it('says nothing when the hook works', () => {
-    const healthy = join(process.env.KB_DIR, 'logs', 'prompt-hint-errors.log');
+    const healthy = join(process.env.KB_DIR, 'logs', 'hook-errors.log');
     runHook('prompt-hint', { session_id: 'sess-hook-ok', prompt: 'a prompt long enough to clear the hint length gate' });
     assert.strictEqual(existsSync(healthy), false, 'a working hook writes no error line');
   });
@@ -191,5 +191,23 @@ describe('a hint that is written but not delivered says so', () => {
 
     const lines = readFileSync(HOOK_ERROR_LOG, 'utf8').trim().split('\n');
     assert.match(lines.at(-1), /deliver: .*EPIPE/);
+  });
+});
+
+// A8: this log is shared infrastructure now (prompt-hint.js and
+// trigger-hook.js both fail into it) — it used to be named after the one
+// hook that first needed it, which would misleadingly file a trigger-hook
+// failure under "prompt hint" during triage.
+describe('the shared hook error log is named for what it is, not for the first hook that needed it', () => {
+  it('HOOK_ERROR_LOG points at hook-errors.log, not prompt-hint-errors.log', async () => {
+    const { HOOK_ERROR_LOG } = await import('../src/cli/hook-io.js');
+    assert.match(HOOK_ERROR_LOG, /\/hook-errors\.log$/);
+    assert.doesNotMatch(HOOK_ERROR_LOG, /prompt-hint/);
+  });
+
+  it('prompt-hint.js re-exports the exact same constant, not a copy', async () => {
+    const fromHookIo = (await import('../src/cli/hook-io.js')).HOOK_ERROR_LOG;
+    const fromPromptHint = (await import('../src/cli/prompt-hint.js')).HOOK_ERROR_LOG;
+    assert.strictEqual(fromPromptHint, fromHookIo);
   });
 });

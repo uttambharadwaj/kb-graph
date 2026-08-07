@@ -1,23 +1,54 @@
 // src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code settings
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, renameSync } from 'fs';
 import { isVersionPinned } from './runtime-node.js';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
+// `script`, when present, is preferred over `subcommand`: it installs
+// `${nodeBin} <dir-of-kbJsPath>/<script>` instead of
+// `${nodeBin} ${kbJsPath} <subcommand>`. trigger-hook runs on every Bash call
+// (~227/session median) and bin/kb.js's own dispatch machinery (flags.js,
+// schema.js, runtime-node.js's re-exec check) costs real latency before
+// reaching any command — bin/kb-trigger-hook.js skips all of that. `kb
+// trigger-hook` (bin/kb.js) still exists as the debuggable manual-invocation
+// path; only the installed hook command uses the thin entry.
+//
+// The PreToolUse spec carries BOTH fields: `subcommand` stays so `identifies`
+// still recognizes an install from before the thin entry existed (a real
+// prior commit of this stack installed `kb.js trigger-hook`) and doesn't
+// double-install over it — only `commandFor`'s preference for `script` over
+// `subcommand` decides what a NEW install writes.
 const HOOK_SPECS = [
   { event: 'SessionStart', matcher: 'startup|resume|clear|compact', subcommand: 'wakeup-hook' },
   { event: 'UserPromptSubmit', matcher: null, subcommand: 'prompt-hint' },
+  { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook' },
 ];
 
-// Pure merge: dedup by subcommand so re-runs and prior manual installs never duplicate.
+const commandFor = (spec, { nodeBin, kbJsPath }) => spec.script
+  ? `${nodeBin} ${join(dirname(kbJsPath), spec.script)}`
+  : `${nodeBin} ${kbJsPath} ${spec.subcommand}`;
+
+// The identity a command must end with to count as "this spec already
+// installed". Checks the script form first (the script's own filename —
+// the full path always ends with it, so this works whether kbJsPath is the
+// dev checkout or a deployed one), then the subcommand form (the trailing
+// token), so either a current or a legacy install is recognized and neither
+// gets duplicated.
+const identifies = (spec, command) => {
+  const cmd = command ?? '';
+  if (spec.script && cmd.endsWith(spec.script)) return true;
+  if (spec.subcommand && cmd.endsWith(` ${spec.subcommand}`)) return true;
+  return false;
+};
+
+// Pure merge: dedup by the spec's own identity so re-runs and prior manual installs never duplicate.
 export function mergeClaudeHooks(settings, { nodeBin, kbJsPath }) {
   const next = structuredClone(settings ?? {});
   next.hooks = next.hooks ?? {};
   for (const spec of HOOK_SPECS) {
     const entries = (next.hooks[spec.event] = next.hooks[spec.event] ?? []);
-    const already = entries.some(e =>
-      (e.hooks ?? []).some(h => (h.command ?? '').endsWith(` ${spec.subcommand}`)));
+    const already = entries.some(e => (e.hooks ?? []).some(h => identifies(spec, h.command)));
     if (already) continue;
-    const entry = { hooks: [{ type: 'command', command: `${nodeBin} ${kbJsPath} ${spec.subcommand}` }] };
+    const entry = { hooks: [{ type: 'command', command: commandFor(spec, { nodeBin, kbJsPath }) }] };
     if (spec.matcher) entry.matcher = spec.matcher;
     entries.push(entry);
   }

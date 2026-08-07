@@ -9,7 +9,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { getDb } from '../src/db.js';
 import { scanVault, indexVaultFile } from '../src/vault/indexer.js';
-import { CORPUS_PATH, TRIGGER_INDEX_PATH, loadTriggerIndex } from '../src/trigger-relevance.js';
+import { CORPUS_PATH, TRIGGER_INDEX_PATH, loadTriggerIndex, rebuildTriggerIndex } from '../src/trigger-relevance.js';
 
 // The indexer's triggers wiring uses filterTriggers's DEFAULT corpus (no
 // explicit `corpus` option), which reads CORPUS_PATH — so these tests write
@@ -194,6 +194,107 @@ This note only describes totally-unrelated-command in prose, never inside a code
       const row = getDb().prepare('SELECT triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
       assert.strictEqual(row.triggers, null);
     } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
+  it('a malformed triggers row elsewhere does not block rebuilding the index for a good note (B1)', async () => {
+    writeTestCorpus();
+    // Simulate a corrupted row from a past write (hand SQL edit, a partial
+    // write) — the only way malformed JSON could land in this column, since
+    // filterTriggers only ever produces valid JSON or ''.
+    const bad = getDb().prepare('INSERT INTO documents (title, content, doc_type, tags, triggers) VALUES (?, ?, ?, ?, ?)')
+      .run('Corrupted trigger row', 'x', 'lesson', '', '{not valid json');
+
+    const relPath = '05_research/good-trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Good trigger note
+type: lesson
+tags: [git]
+triggers: ["rare-marker-cmd"]
+---
+
+Watch for \`rare-marker-cmd\` in history.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT id FROM documents WHERE source = ?').get(`vault:${relPath}`);
+
+      const index = loadTriggerIndex(TRIGGER_INDEX_PATH);
+      assert.ok(index.some(e => e.id === row.id), 'the good note must still appear in the rebuilt index');
+      assert.ok(!index.some(e => e.id === bad.lastInsertRowid), 'the bad row is skipped, not left to crash the rebuild');
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+      getDb().prepare('DELETE FROM documents WHERE id = ?').run(bad.lastInsertRowid);
+    }
+  });
+
+  it('defers the index rebuild when asked — column changes, index waits for an explicit rebuild (B2)', async () => {
+    writeTestCorpus();
+    const relPath = '05_research/deferred-trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Deferred trigger note
+type: lesson
+tags: [git]
+triggers: ["rare-marker-cmd"]
+---
+
+Watch for \`rare-marker-cmd\` in history.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath, { deferTriggerIndex: true });
+      assert.strictEqual(result.triggersChanged, true);
+      const row = getDb().prepare('SELECT id, triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      assert.ok(row.triggers, 'the column updates regardless of deferral');
+
+      const beforeExplicitRebuild = loadTriggerIndex(TRIGGER_INDEX_PATH);
+      assert.ok(!beforeExplicitRebuild.some(e => e.id === row.id), 'a deferred call must not rebuild inline');
+
+      rebuildTriggerIndex();
+      const afterExplicitRebuild = loadTriggerIndex(TRIGGER_INDEX_PATH);
+      assert.ok(afterExplicitRebuild.some(e => e.id === row.id), 'an explicit rebuild picks up the deferred change');
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
+  it('an indexer upsert survives a trigger-index rebuild failure, vault_files row still recorded (B1)', async () => {
+    writeTestCorpus();
+    // An unwritable index location: a directory sitting where the atomic
+    // rename needs to land a file makes renameSync throw EISDIR. Clear
+    // whatever an earlier test already left at this path first (a real
+    // trigger-index.json, most likely) — mkdirSync fails on an existing file.
+    rmSync(TRIGGER_INDEX_PATH, { recursive: true, force: true });
+    mkdirSync(TRIGGER_INDEX_PATH);
+    const relPath = '05_research/rebuild-failure-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Rebuild failure note
+type: lesson
+tags: [git]
+triggers: ["rare-marker-cmd"]
+---
+
+Watch for \`rare-marker-cmd\` in history.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.strictEqual(result.indexed, 1, 'the write itself must not abort');
+      assert.match(result.errors.join(' '), /trigger index rebuild failed/);
+
+      const row = getDb().prepare('SELECT id, triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      assert.ok(row.triggers, 'the column write itself still lands');
+
+      const vf = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      assert.strictEqual(vf.document_id, row.id, 'the vault_files row is still recorded despite the rebuild failure');
+    } finally {
+      rmSync(TRIGGER_INDEX_PATH, { recursive: true, force: true });
       const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
       if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
       getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
