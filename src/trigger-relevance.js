@@ -5,6 +5,16 @@
 // and the payoff is a hook firing on a live shell invocation, so a bad
 // pattern is a false alarm on someone's terminal rather than a bad search
 // result.
+//
+// Revision 1 (2026-08-07, docs/plans/2026-08-07-kb-action-triggers-design.md):
+// an adversarial review measured the original per-command 1% ceiling against
+// real history and it fails on noise (P(fire) = 1-(1-r)^K over ~227 Bash
+// calls/session makes a 1%-per-command pattern fire in 90% of sessions), and
+// found mention/execution confusion (grep or echo of a dangerous string fired
+// it) and prose-as-grounding (filterAliases's own documented body-as-identity
+// hole). This file is the post-review shape: session-level ceiling, a shared
+// segment matcher used by both the vet and the hook so they grade the same
+// predicate, and grounding restricted to the note's own code spans.
 import { readFileSync, writeFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import { getDb } from './db.js';
@@ -24,12 +34,23 @@ const MAX_PATTERN_PARTS = 4;
 // Below this a part is a stray flag letter or fragment ('-f', 'rm ') that
 // substring-matches almost anything.
 const MIN_PART_LEN = 3;
-// The noise ceiling: a pattern common enough in real history to fire on
-// ordinary work is not a warning, it's a nag.
-const MAX_CORPUS_HIT_RATIO = 0.01;
-// Below this the corpus is too small to grade a ceiling against — see the
-// early return in filterTriggers.
+// The noise ceiling, measured per SESSION not per command: P(fires at least
+// once) = 1-(1-r)^K over a session's Bash calls (K median ~227), so a
+// per-command ratio that looks rare still saturates sessions. 5% of sessions
+// containing a match at all is the ceiling a pattern must clear.
+const MAX_SESSION_HIT_RATIO = 0.05;
+// Below this the corpus can't grade a session ratio meaningfully — a handful
+// of sessions makes every ratio a multiple of 1/N.
+const MIN_CORPUS_SESSIONS = 20;
+// Below this the corpus has too few lines full stop, independent of session
+// count (a few sessions could still be enormous, or vice versa).
 const MIN_CORPUS_LINES = 500;
+// A pattern with zero corpus hits is NOT noise-free — the corpus is a few
+// days of real usage, workstream-skewed, and a domain it never saw (infra,
+// a rare tool) reads identically to a genuinely rare command. Requiring at
+// least one hit means "seen and rare" gets in; "never seen" waits for the
+// nightly corpus rebuild + re-vet to cover that domain before it can.
+const MIN_CORPUS_HITS = 1;
 
 function normalize(s) {
   return String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -55,12 +76,146 @@ export function parseTriggerProposals(raw) {
   return patterns;
 }
 
+// A heredoc body is the note's own text quoted back at a shell prompt, not a
+// command anyone ran — 59/117 `gh pr create` corpus hits were heredoc bodies
+// in the pre-review measurement. Line-based, matching how bash itself scans:
+// on `<<DELIM`/`<<-DELIM` (optionally quoted), every following line is
+// dropped up to and including the line that is exactly DELIM. The marker
+// line itself is kept, since the real command sits on it (`cat >x <<EOF`).
+export function stripHeredocs(command) {
+  const lines = String(command ?? '').split('\n');
+  const out = [];
+  let delimiter = null;
+  for (const line of lines) {
+    if (delimiter !== null) {
+      if (line.trim() === delimiter) delimiter = null;
+      continue;
+    }
+    const start = line.match(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/);
+    if (start) delimiter = start[2];
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+// Splits into segments the way a shell would start separate commands:
+// `;`, `&&`, `||`, `|`, `$(`, and backtick all begin a new one. Each segment
+// then has its leading wrappers stripped (env assignments, sudo, nohup, time,
+// env, command) so `KB_DIR=/tmp sudo gh pr merge --delete-branch` and
+// `gh pr merge --delete-branch` grade identically — the wrapper is not what
+// the pattern is warning about.
+const SEGMENT_SPLIT = /\|\||&&|;|\$\(|`|\|/;
+const WRAPPER_TOKENS = new Set(['sudo', 'nohup', 'time', 'env', 'command']);
+const ENV_ASSIGNMENT = /^[a-z_][a-z0-9_]*=\S*$/;
+
+function stripWrappers(segment) {
+  const tokens = segment.split(' ').filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && (ENV_ASSIGNMENT.test(tokens[i]) || WRAPPER_TOKENS.has(tokens[i]))) i += 1;
+  return tokens.slice(i).join(' ');
+}
+
+export function commandSegments(command) {
+  const stripped = stripHeredocs(String(command ?? ''));
+  const lowered = stripped.toLowerCase();
+  const flattened = lowered.replace(/\n/g, ' ; ').replace(/\t/g, ' ');
+  const normalized = flattened.replace(/\s+/g, ' ').trim();
+  return normalized.split(SEGMENT_SPLIT).map(seg => stripWrappers(seg.trim())).filter(Boolean);
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// A part made only of letters/digits/spaces is a word or phrase and needs
+// token boundaries — otherwise 'eva' substring-matches inside
+// 'relevantNotes'. A part with other characters (a flag like
+// '--delete-branch') is distinctive enough on its own that a plain substring
+// check is the documented, accepted risk.
+function partAppears(part, segment) {
+  if (/^[a-z0-9 ]+$/.test(part)) {
+    return new RegExp(`(?<![a-z0-9_-])${escapeRegex(part)}(?![a-z0-9_-])`).test(segment);
+  }
+  return segment.includes(part);
+}
+
+// The first part anchors the pattern to the START of a segment — the thing a
+// segment actually RUNS, not something it merely mentions. This is what
+// separates `gh pr merge --delete-branch` (runs it) from
+// `grep -- '--delete-branch' notes.md` or `echo "gh pr merge ..."` (mentions
+// it) — both contain every part as a substring, neither starts with the
+// first one. Remaining parts only need to appear anywhere in the SAME
+// segment; a pattern whose parts straddle two segments of a compound command
+// does not match either one.
+function patternMatchesSegment(parts, segment) {
+  if (!parts.length) return false;
+  const [first, ...rest] = parts;
+  if (!segment.startsWith(first)) return false;
+  const next = segment[first.length];
+  if (next !== undefined && /[a-z0-9]/.test(next)) return false;
+  return rest.every(p => partAppears(p, segment));
+}
+
+// entries = [{ id, title, patterns: [{ parts, hits, sessions }] }]. A note
+// fires when ANY of its patterns matches ANY segment of the command — the
+// same predicate filterTriggers grades the corpus with, so the hook can never
+// fire on something the vet would have rejected as noise (or vice versa).
+export function matchCommand(command, entries, { alreadyFired = new Set() } = {}) {
+  const segments = commandSegments(command);
+  const fired = [];
+  for (const entry of entries) {
+    if (alreadyFired.has(entry.id)) continue;
+    let rarest = null;
+    for (const { parts, hits } of entry.patterns || []) {
+      if (parts.length && segments.some(seg => patternMatchesSegment(parts, seg))) {
+        if (rarest === null || hits < rarest) rarest = hits;
+      }
+    }
+    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, hits: rarest });
+  }
+  return fired.sort((a, b) => a.hits - b.hits);
+}
+
+// TSV: `<session>\t<command>`, one line per Bash call. Loaded rows carry the
+// session id the ceiling counts distinct sessions over, and a normalized
+// command — heredoc-stripping and newline flattening already happened at
+// corpus-build time (src/cli/trigger-corpus.js), so this is just case/space.
 export function loadCommandCorpus(path = CORPUS_PATH) {
   try {
-    return readFileSync(path, 'utf-8').split('\n').filter(Boolean).map(normalize);
+    return readFileSync(path, 'utf-8').split('\n').filter(Boolean).map(line => {
+      const tab = line.indexOf('\t');
+      const session = tab === -1 ? '' : line.slice(0, tab);
+      const command = tab === -1 ? line : line.slice(tab + 1);
+      return { session, command: normalize(command) };
+    });
   } catch {
     return [];
   }
+}
+
+// Fenced ``` blocks and inline `backtick` spans only — never surrounding
+// prose. Grounding a trigger in prose is the exact failure filterAliases's
+// own header comment documents for body-as-identity: 'the fix', 'apply',
+// 'drop', 'token', 'reset' all read as normal English and would ground almost
+// any pattern if prose counted.
+function extractCodeSpans(text) {
+  const str = String(text ?? '');
+  const spans = [];
+  const fenced = /```[^\n]*\n?([\s\S]*?)```/g;
+  let m;
+  while ((m = fenced.exec(str))) spans.push(m[1]);
+  const withoutFenced = str.replace(/```[^\n]*\n?[\s\S]*?```/g, ' ');
+  const inline = /`([^`\n]+)`/g;
+  while ((m = inline.exec(withoutFenced))) spans.push(m[1]);
+  return spans.join('\n');
+}
+
+// A single plain word ('apply', 'drop') is never a legal trigger even if it
+// sits inside a code span — it needs to look like something you'd type as a
+// command, not a word that happens to be in one.
+function isCommandShaped(part) {
+  const words = part.trim().split(/\s+/).filter(Boolean);
+  return words.length >= 2 || /[-/._=]/.test(part);
 }
 
 // The vet. Only what survives this ever reaches documents.triggers, and only
@@ -69,58 +224,56 @@ export function filterTriggers(proposed, { title, content }, { corpus = loadComm
   const patterns = parseTriggerProposals(proposed).map(parts => parts.map(normalize));
   if (!patterns.length) return '';
 
-  // A ceiling graded against too little history grades nothing — same stance
-  // as filterAliases's "df of 0 means not indexed yet". A future --revet-style
-  // pass catches these notes up once a corpus exists; nothing ungraded should
-  // reach the hook in the meantime.
-  if (corpus.length < MIN_CORPUS_LINES) return '';
+  const totalSessions = new Set(corpus.map(c => c.session)).size;
+  // A ceiling graded against too little history — too few lines, or too few
+  // distinct sessions to make a session ratio meaningful — grades nothing.
+  // Same stance as filterAliases's "df of 0 means not indexed yet": nothing
+  // ungraded reaches the hook, and the nightly corpus rebuild + re-vet
+  // catches these notes up once history exists.
+  if (corpus.length < MIN_CORPUS_LINES || totalSessions < MIN_CORPUS_SESSIONS) return '';
 
-  const noteText = normalize(`${title}\n${content}`);
-  const hitCeiling = corpus.length * MAX_CORPUS_HIT_RATIO;
+  const codeText = normalize(extractCodeSpans(`${title}\n${content}`));
+  // Computed once per call and reused across every proposed pattern, since
+  // every pattern re-scans the same corpus.
+  const corpusSegments = corpus.map(c => commandSegments(c.command));
+
   const seen = new Set();
   const accepted = [];
 
   for (const parts of patterns) {
     if (parts.length > MAX_PATTERN_PARTS) continue;
     if (parts.some(p => p.length < MIN_PART_LEN)) continue;
-    // Grounding: the note's own text must contain the command it warns
-    // about, the same fabrication guard filterAliases applies to synonyms.
-    if (parts.some(p => !noteText.includes(p))) continue;
+    // Grounding: the note's own code spans must contain the command it warns
+    // about — the same fabrication guard filterAliases applies to synonyms,
+    // narrowed to code spans so prose can't ground it (see extractCodeSpans).
+    if (parts.some(p => !codeText.includes(p))) continue;
+    // Shape: at least one part has to look like something you'd type, not a
+    // plain English word a code span happened to contain.
+    if (!parts.some(isCommandShaped)) continue;
 
     const key = parts.join('\0');
     if (seen.has(key)) continue;
 
-    const hits = corpus.reduce((n, line) => n + (parts.every(p => line.includes(p)) ? 1 : 0), 0);
-    // hits === 0 is kept: a pattern that never matched history is noise-free
-    // by definition, not unproven — it just hasn't happened yet.
-    if (hits > hitCeiling) continue;
+    let hits = 0;
+    const sessionsHit = new Set();
+    for (let i = 0; i < corpus.length; i += 1) {
+      if (corpusSegments[i].some(seg => patternMatchesSegment(parts, seg))) {
+        hits += 1;
+        sessionsHit.add(corpus[i].session);
+      }
+    }
+    if (hits < MIN_CORPUS_HITS) continue;
+    if (sessionsHit.size / totalSessions > MAX_SESSION_HIT_RATIO) continue;
 
     seen.add(key);
-    accepted.push({ parts, hits });
+    accepted.push({ parts, hits, sessions: sessionsHit.size });
   }
 
   if (!accepted.length) return '';
-  const kept = accepted.sort((a, b) => a.hits - b.hits).slice(0, MAX_TRIGGER_PATTERNS);
+  const kept = accepted
+    .sort((a, b) => a.sessions - b.sessions || a.hits - b.hits)
+    .slice(0, MAX_TRIGGER_PATTERNS);
   return JSON.stringify(kept);
-}
-
-// entries = [{ id, title, patterns: [{ parts, hits }] }], as loadTriggerIndex
-// returns them. A note fires when ANY of its patterns has every part present
-// in the command, in any position — this is a tripwire, not a parser.
-export function matchCommand(command, entries, { alreadyFired = new Set() } = {}) {
-  const normalized = normalize(command);
-  const fired = [];
-  for (const entry of entries) {
-    if (alreadyFired.has(entry.id)) continue;
-    let rarest = null;
-    for (const { parts, hits } of entry.patterns || []) {
-      if (parts.length && parts.every(p => normalized.includes(p))) {
-        if (rarest === null || hits < rarest) rarest = hits;
-      }
-    }
-    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, hits: rarest });
-  }
-  return fired.sort((a, b) => a.hits - b.hits);
 }
 
 // The hook's read path has no lock on this file, so a rebuild must never
