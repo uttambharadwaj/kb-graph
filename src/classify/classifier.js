@@ -11,6 +11,7 @@ Return ONLY valid JSON (no markdown fencing, no explanation) with these fields:
   "confidence": "high", "medium", or "low",
   "key_topics": array of 2-4 main topics/concepts covered,
   "aliases": array of 0-6 retrieval aliases — the words a person's QUESTION would use when this note is the answer. Imagine the questions the note answers; each alias is the subject of one, phrased as the question would say it, usually a one-to-three-word phrase ("harvest job", "vault indexer"). Every alias must be a word or phrase the note's own text uses (never invent a synonym the note does not contain). Prefer the plain name a person would say over a code identifier. Duplication against the title is fine; a filter removes what the title already covers.
+  "triggers": array of 0-3 command patterns — propose ONLY when the note warns about RUNNING a specific command whose exact text appears in the note's own code spans (backticks or fenced blocks). Most notes have none; an empty array is the normal answer. Each pattern is a string with its required parts joined " && " (e.g. "gh pr merge && --delete-branch").
 }
 
 Classification guidelines:
@@ -50,6 +51,7 @@ ${content.slice(0, 4000)}`;
       confidence: 'low',
       key_topics: [],
       aliases: [],
+      triggers: [],
       project: null,
     };
   }

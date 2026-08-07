@@ -99,6 +99,12 @@ const COMMANDS = {
     value: ['--projects'],
     run: a => import('../src/cli/trigger-corpus.js').then(m => m.runTriggerCorpusCli(a)),
   },
+  'triggers-backfill': {
+    summary: 'Propose command triggers (one model call per note) for notes never asked, filter, store; --revet re-filters stored proposals with no model calls',
+    value: ['--limit', '--doc'],
+    boolean: ['--dry-run', '--revet'],
+    run: a => import('../src/cli/triggers-backfill.js').then(m => m.runTriggersBackfillCli(a)),
+  },
   'wakeup-hook': {
     summary: 'Print compact KB briefing (for SessionStart hooks)',
     run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),

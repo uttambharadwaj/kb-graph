@@ -71,6 +71,11 @@ export async function processNewClippings(vaultPath, { dryRun = false } = {}) {
       // the "asked, nothing to add" marker aliases-backfill keys on, so a
       // classified note is never re-billed.
       aliases: (classification.aliases?.length ? classification.aliases : fm.aliases) || [],
+      // Same "asked, nothing to add" marker as aliases, for the same
+      // resumability reason. triggers_pinned is never touched here — that
+      // key is human-written only, and `...fm` above already carries it
+      // through untouched when present.
+      triggers: (classification.triggers?.length ? classification.triggers : fm.triggers) || [],
       classified: true,
       classified_at: new Date().toISOString().split('T')[0],
       classified_by: 'claude',
