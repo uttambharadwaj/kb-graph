@@ -301,6 +301,41 @@ describe('triggerHook — marker and log round trip', () => {
   });
 });
 
+// A9: before this fix, a persistently failing appendMarker meant readMarker
+// kept returning [] forever (nothing was ever durably written), so the same
+// note would emit on every matching Bash call for the rest of the session —
+// both the cap and the per-note dedupe dead at once. The fix flips the
+// failure direction: deliver() only runs once the marker write is confirmed
+// to have landed, so a broken marker path now fails SILENT (no warning,
+// ever, for that note) rather than SPAMMING. Verified across repeated calls,
+// not just once, since the bug's whole signature was "every call, not just
+// the first".
+describe('triggerHook — A9: a marker write that never lands must not spam a warning on every call', () => {
+  it('a persistently unwritable marker path stays silent across repeated matching calls', () => {
+    const brokenKbDir = mkdtempSync(join(tmpdir(), 'kb-trigger-hook-broken-marker-'));
+    writeFileSync(join(brokenKbDir, 'trigger-index.json'), JSON.stringify(INDEX));
+    writeFileSync(join(brokenKbDir, 'trigger-hook-enabled'), '');
+    mkdirSync(join(brokenKbDir, 'logs'), { recursive: true });
+    // A file sitting where TRIGGERS_LOG_DIR needs to be a directory —
+    // appendMarker's own mkdirSync(..., {recursive:true}) fails every time,
+    // reproducing "the marker write persistently fails" without needing
+    // real filesystem permission games.
+    writeFileSync(join(brokenKbDir, 'logs', 'triggers'), '');
+
+    const input = BASH('gh pr merge 1 --delete-branch', { session_id: 'sess-broken-marker' });
+    for (let call = 1; call <= 3; call += 1) {
+      const stdout = runHook(input, { KB_DIR: brokenKbDir });
+      assert.strictEqual(stdout, '', `call ${call}: a write that never lands must stay silent, not spam`);
+    }
+
+    const errorLines = readFileSync(join(brokenKbDir, 'logs', 'hook-errors.log'), 'utf-8').trim().split('\n');
+    assert.ok(
+      errorLines.filter(l => l.includes('trigger-marker-write')).length >= 3,
+      'the write failure is still captured for triage on every attempt, even though nothing is ever delivered',
+    );
+  });
+});
+
 // A6: nothing else prunes TRIGGERS_LOG_DIR, so it grows one marker per
 // session and one JSONL file per day forever. The sweep runs opportunistically
 // on the fire path (appendMarker) only — exercised here by backdating file

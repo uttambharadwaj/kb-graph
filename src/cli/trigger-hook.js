@@ -87,23 +87,45 @@ function sweepOldTriggerFiles() {
   }
 }
 
-// Read-modify-write with no lock — two calls racing here can each write a
-// marker that drops the other's id, so the worst case is a note re-firing
-// once more than the cap, never a crash or an unparseable marker. The
-// per-pid tmp name plus rename means neither writer ever observes (or
-// leaves behind) a half-written file.
+// Read-modify-write with no lock — two known race shapes, both accepted
+// rather than fixed with a lock, because the worst case of each is one extra
+// warning, never a crash or an unparseable marker:
+//
+// 1. Id-drop: two calls racing HERE can each write a marker that drops the
+//    other's id (last rename wins). The per-pid tmp name plus rename means
+//    neither writer ever observes (or leaves behind) a half-written file —
+//    just a dropped id, which reads back as "not yet fired" and can re-fire
+//    once more than intended.
+//
+// 2. Cap TOCTOU: the marker is read (for `fired`) BEFORE the emit decision
+//    in triggerHook, and only written (here) AFTER it. Two concurrent Bash
+//    calls can each read the same under-cap marker, each independently
+//    decide to emit, and each call this function — the cap was checked
+//    against a snapshot that was stale by the time either write landed. A
+//    lock would close this, but the exposure is bounded (one extra warning
+//    in a rare race, on a surface whose whole job is warning about rare
+//    things) and not worth the complexity; the return value below (see A9)
+//    already fixes the shape that mattered more — a marker that never
+//    persists no longer spams a warning on every matching call, since
+//    delivery only happens when the write actually landed.
+//
+// Returns whether the id is now durably in the marker (a fresh write, or
+// already present) — false only when the write itself failed, which the
+// caller must treat as "did not fire" rather than deliver anyway.
 function appendMarker(session, id) {
   sweepOldTriggerFiles();
   try {
     mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
     const current = readMarker(session);
-    if (current.includes(id)) return;
+    if (current.includes(id)) return true;
     const path = markerPath(session);
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync(tmp, JSON.stringify([...current, id]));
     renameSync(tmp, path);
+    return true;
   } catch (err) {
     recordHookFailure('trigger-marker-write', err);
+    return false;
   }
 }
 
@@ -191,7 +213,15 @@ export async function triggerHook() {
 
     appendJsonlLog(decision.logLine);
     if (decision.emit) {
-      appendMarker(decision.session, decision.firedId);
+      // A9: write before deliver, and only deliver if the write actually
+      // landed. A persistently failing marker write (unwritable dir, disk
+      // full) must never be silently read back as "nothing has fired yet" —
+      // that would spam the same warning on every matching Bash call all
+      // session, both cap and dedupe dead. Failing to warn once is the
+      // right direction for this surface; recordHookFailure (inside
+      // appendMarker) still captures the write failure for triage.
+      const persisted = appendMarker(decision.session, decision.firedId);
+      if (!persisted) process.exit(0);
       await deliver(JSON.stringify({
         hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: decision.message },
       }));
