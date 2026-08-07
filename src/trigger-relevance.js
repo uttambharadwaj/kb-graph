@@ -222,7 +222,16 @@ function isCommandShaped(part) {
 
 // The vet. Only what survives this ever reaches documents.triggers, and only
 // documents.triggers ever reaches the hook.
-export function filterTriggers(proposed, { title, content }, { corpus = loadCommandCorpus() } = {}) {
+//
+// `pinned` is the curation tier: the motivating gotcha (#2778, `gh pr merge
+// --delete-branch` on a stack base) runs in 11% of sessions and the noise
+// ceiling rightly rejects it as a LEARNED pattern — its shape cannot tell the
+// dangerous run from the routine one. A human who decides the warning is
+// worth its false fires pins the note, which skips the frequency gates only.
+// The fabrication guards (code-span grounding, shape, caps) hold for pins
+// too: a human vouches for the noise trade, never for a command the note
+// doesn't contain.
+export function filterTriggers(proposed, { title, content }, { corpus = loadCommandCorpus(), pinned = false } = {}) {
   const patterns = parseTriggerProposals(proposed).map(parts => parts.map(normalize));
   if (!patterns.length) return '';
 
@@ -231,8 +240,8 @@ export function filterTriggers(proposed, { title, content }, { corpus = loadComm
   // distinct sessions to make a session ratio meaningful — grades nothing.
   // Same stance as filterAliases's "df of 0 means not indexed yet": nothing
   // ungraded reaches the hook, and the nightly corpus rebuild + re-vet
-  // catches these notes up once history exists.
-  if (corpus.length < MIN_CORPUS_LINES || totalSessions < MIN_CORPUS_SESSIONS) return '';
+  // catches these notes up once history exists. A pin is its own grading.
+  if (!pinned && (corpus.length < MIN_CORPUS_LINES || totalSessions < MIN_CORPUS_SESSIONS)) return '';
 
   const codeText = normalize(extractCodeSpans(`${title}\n${content}`));
   // Computed once per call and reused across every proposed pattern, since
@@ -264,11 +273,13 @@ export function filterTriggers(proposed, { title, content }, { corpus = loadComm
         sessionsHit.add(corpus[i].session);
       }
     }
-    if (hits < MIN_CORPUS_HITS) continue;
-    if (sessionsHit.size / totalSessions > MAX_SESSION_HIT_RATIO) continue;
+    if (!pinned && hits < MIN_CORPUS_HITS) continue;
+    if (!pinned && totalSessions > 0 && sessionsHit.size / totalSessions > MAX_SESSION_HIT_RATIO) continue;
 
     seen.add(key);
-    accepted.push({ parts, hits, sessions: sessionsHit.size });
+    const entry = { parts, hits, sessions: sessionsHit.size };
+    if (pinned) entry.pinned = true;
+    accepted.push(entry);
   }
 
   if (!accepted.length) return '';

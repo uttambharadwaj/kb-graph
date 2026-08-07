@@ -103,6 +103,34 @@ describe('filterTriggers — session-level noise ceiling', () => {
   });
 });
 
+describe('filterTriggers — pinned tier', () => {
+  it('a pin skips the session ceiling the learned tier enforces', () => {
+    const parts = [['common-marker-cmd']]; // 3/40 sessions = 7.5%, over the 5% ceiling
+    assert.strictEqual(filterTriggers(parts, NOTE, { corpus: CORPUS }), '');
+    const pinnedResult = JSON.parse(filterTriggers(parts, NOTE, { corpus: CORPUS, pinned: true }));
+    assert.strictEqual(pinnedResult[0].pinned, true);
+    assert.strictEqual(pinnedResult[0].sessions, 3);
+  });
+
+  it('a pin skips the coverage floor and corpus adequacy', () => {
+    const zeroHit = [['zero-hit-marker-cmd']];
+    assert.strictEqual(filterTriggers(zeroHit, NOTE, { corpus: CORPUS }), '');
+    const withCorpus = JSON.parse(filterTriggers(zeroHit, NOTE, { corpus: CORPUS, pinned: true }));
+    assert.deepStrictEqual(withCorpus[0].parts, ['zero-hit-marker-cmd']);
+    const noCorpus = JSON.parse(filterTriggers(zeroHit, NOTE, { corpus: [], pinned: true }));
+    assert.deepStrictEqual(noCorpus[0].parts, ['zero-hit-marker-cmd']);
+  });
+
+  it('a pin never skips grounding — a command the note does not contain stays out', () => {
+    assert.strictEqual(filterTriggers([['ungrounded-marker-cmd']], NOTE, { corpus: CORPUS, pinned: true }), '');
+  });
+
+  it('a pin never skips the shape rule', () => {
+    // NOTE's spans do contain `apply`, so grounding passes; shape is the blocker.
+    assert.strictEqual(filterTriggers([['apply']], NOTE, { corpus: CORPUS, pinned: true }), '');
+  });
+});
+
 describe('filterTriggers — coverage floor', () => {
   it('rejects a pattern with zero corpus hits — unseen is not proven rare', () => {
     assert.strictEqual(filterTriggers(['zero-hit-marker-cmd'], NOTE, { corpus: CORPUS }), '');
