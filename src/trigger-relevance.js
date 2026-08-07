@@ -235,7 +235,17 @@ export function rebuildTriggerIndex(path = TRIGGER_INDEX_PATH) {
     WHERE triggers IS NOT NULL AND superseded_at IS NULL AND doc_type != 'archive'
     ORDER BY id
   `).all();
-  const entries = rows.map(r => ({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers) }));
+  // One bad row (a hand SQL edit, a write that landed half-done) must not
+  // sink the whole index — the same stance loadTriggerIndex and the hook's
+  // own marker reads already take on a corrupt file.
+  const entries = [];
+  for (const r of rows) {
+    try {
+      entries.push({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers) });
+    } catch {
+      // Skip. The column is wrong, not this rebuild's job to repair.
+    }
+  }
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(entries));
   renameSync(tmp, path);

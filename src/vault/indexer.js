@@ -65,45 +65,52 @@ export async function indexVault(vaultPath, { embeddings = false } = {}) {
   return queuedRun;
 }
 
-export async function indexVaultFile(vaultPath, vaultFilePath, { embeddings = false } = {}) {
+// `deferTriggerIndex`: skip the per-file rebuildTriggerIndex() call even when
+// this file's own triggers column changed, and report that fact on the
+// result instead — for a caller doing K of these in a loop (triggers-backfill)
+// that wants exactly one rebuild at the end, not K. Every other caller omits
+// it and keeps today's behavior (rebuild inline, per changed file).
+export async function indexVaultFile(vaultPath, vaultFilePath, { embeddings = false, deferTriggerIndex = false } = {}) {
   const queuedRun = indexQueue.then(
-    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings }),
-    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings }),
+    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings, deferTriggerIndex }),
+    () => _indexVaultFile(vaultPath, vaultFilePath, { embeddings, deferTriggerIndex }),
   );
   indexQueue = queuedRun.catch(() => {});
   return queuedRun;
 }
 
-async function _indexVaultFile(vaultPath, vaultFilePath, { embeddings = false } = {}) {
+async function _indexVaultFile(vaultPath, vaultFilePath, { embeddings = false, deferTriggerIndex = false } = {}) {
   const filePath = isAbsolute(vaultFilePath) ? vaultFilePath : join(vaultPath, vaultFilePath);
   const relPath = relative(vaultPath, filePath);
   if (relPath.startsWith('..') || isAbsolute(relPath)) {
-    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [`${vaultFilePath}: outside vault`], total: 1 };
+    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, triggersChanged: false, errors: [`${vaultFilePath}: outside vault`], total: 1 };
   }
 
   if (extname(filePath).toLowerCase() !== '.md') {
-    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [`${relPath}: unsupported file type`], total: 1 };
+    return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, triggersChanged: false, errors: [`${relPath}: unsupported file type`], total: 1 };
   }
 
   const existing = getVaultFile(relPath);
   const content = readFileSync(filePath, 'utf-8');
   const hash = hashContent(content);
   if (existing?.content_hash === hash) {
-    return { indexed: 0, skipped: 1, deleted: 0, embedded: 0, errors: [], total: 1 };
+    return { indexed: 0, skipped: 1, deleted: 0, embedded: 0, triggersChanged: false, errors: [], total: 1 };
   }
 
-  const result = { indexed: 0, skipped: 0, deleted: 0, embedded: 0, errors: [], total: 1 };
+  const result = { indexed: 0, skipped: 0, deleted: 0, embedded: 0, triggersChanged: false, errors: [], total: 1 };
   const embeddingHelpers = embeddings ? await loadEmbeddingHelpers(result.errors) : false;
-  const embedded = await upsertVaultDocument({
+  const { embedded, triggersChanged } = await upsertVaultDocument({
     filePath,
     relPath,
     content,
     hash,
     embeddings: embeddingHelpers,
     errors: result.errors,
+    deferTriggerIndex,
   });
   result.indexed = 1;
   result.embedded = embedded;
+  result.triggersChanged = triggersChanged;
   return result;
 }
 
@@ -138,14 +145,14 @@ async function _indexVault(vaultPath, { embeddings = false } = {}) {
         continue;
       }
 
-      embedded += await upsertVaultDocument({
+      embedded += (await upsertVaultDocument({
         filePath,
         relPath,
         content,
         hash,
         embeddings: embeddingHelpers,
         errors,
-      });
+      })).embedded;
 
       indexed++;
     } catch (err) {
@@ -189,7 +196,7 @@ async function loadEmbeddingHelpers(errors) {
   }
 }
 
-async function upsertVaultDocument({ filePath, relPath, content, hash, embeddings, errors }) {
+async function upsertVaultDocument({ filePath, relPath, content, hash, embeddings, errors, deferTriggerIndex = false }) {
   const parsed = parseVaultNote(content, relPath);
   const existing = getVaultFile(relPath);
   let docId;
@@ -233,9 +240,22 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
     content: parsed.body,
   }, { pinned: !!parsed.frontmatter.triggers_pinned }) || null;
   getDb().prepare('UPDATE documents SET triggers = ? WHERE id = ?').run(vettedTriggers, docId);
+  const triggersChanged = vettedTriggers !== priorTriggers;
   // The index materializer does a full table scan — worth paying only when
   // this file's own column actually moved, not on every unrelated reindex.
-  if (vettedTriggers !== priorTriggers) rebuildTriggerIndex();
+  // A caller doing many of these in a loop (triggers-backfill) can defer and
+  // consolidate into one rebuild at the end instead of K of them.
+  if (triggersChanged && !deferTriggerIndex) {
+    try {
+      rebuildTriggerIndex();
+    } catch (err) {
+      // A materialization failure is a read-path problem: the column above
+      // already holds the correct vetted value, only the hook's index
+      // snapshot goes stale until the next successful rebuild. Must never
+      // abort the note write that got us here.
+      errors.push(`${relPath}: trigger index rebuild failed: ${err.message}`);
+    }
+  }
   // Frontmatter is hand-editable, so a claim it makes can fail the tier rules.
   // The DB clamps rather than throwing — one bad file must not sink a whole
   // reindex — so say what was lowered instead of lowering it silently.
@@ -263,11 +283,12 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
 
   if (embeddings) {
     try {
-      return await embeddings.storeEmbedding(docId, parsed.body, relPath);
+      const embedded = await embeddings.storeEmbedding(docId, parsed.body, relPath);
+      return { embedded, triggersChanged };
     } catch (embErr) {
       errors.push(`embedding ${relPath}: ${embErr.message}`);
     }
   }
 
-  return 0;
+  return { embedded: 0, triggersChanged };
 }

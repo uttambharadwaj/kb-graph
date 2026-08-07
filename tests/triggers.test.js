@@ -470,6 +470,40 @@ describe('rebuildTriggerIndex / loadTriggerIndex', () => {
   it('a missing path loads as no entries', () => {
     assert.deepStrictEqual(loadTriggerIndex(join(KB_DIR, 'does-not-exist.json')), []);
   });
+
+  it('skips a row whose triggers column is not valid JSON, and still indexes the good rows (B1)', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, triggers) VALUES (?, ?, ?, ?, ?)'
+    );
+    // Malformed JSON can only land here via a hand SQL edit or a write that
+    // died mid-way — filterTriggers itself never emits anything but valid
+    // JSON or ''. One bad row must not sink the rows around it.
+    const bad = insert.run('Corrupted row', 'x', 'lesson', '', '{not valid json');
+    const good = insert.run(
+      'Good row', 'y', 'lesson', '', JSON.stringify([{ parts: ['good-cmd'], hits: 1, sessions: 1 }]),
+    );
+
+    // Membership, not an exact count — earlier tests in this file leave
+    // their own live triggered rows in the DB (this file's convention, seen
+    // throughout), so the total is whatever else is live plus these two.
+    const idxPath = join(KB_DIR, 'trigger-index-bad-row-test.json');
+    rebuildTriggerIndex(idxPath);
+    const ids = loadTriggerIndex(idxPath).map(e => e.id);
+    assert.ok(ids.includes(good.lastInsertRowid), 'the good row still indexes');
+    assert.ok(!ids.includes(bad.lastInsertRowid), 'the bad row is skipped, not left to crash the rebuild');
+  });
+});
+
+describe('shared trigger-proposal rules (B4)', () => {
+  it('the classifier and triggers-backfill prompts both interpolate one exported constant, not independent copies', () => {
+    const classifierSrc = readFileSync(new URL('../src/classify/classifier.js', import.meta.url), 'utf-8');
+    const backfillSrc = readFileSync(new URL('../src/cli/triggers-backfill.js', import.meta.url), 'utf-8');
+    assert.match(classifierSrc, /from ['"]\.\.\/trigger-proposal-rules\.js['"]/);
+    assert.match(backfillSrc, /from ['"]\.\.\/trigger-proposal-rules\.js['"]/);
+    assert.match(classifierSrc, /\$\{TRIGGER_PROPOSAL_RULES\}/);
+    assert.match(backfillSrc, /\$\{TRIGGER_PROPOSAL_RULES\}/);
+  });
 });
 
 describe('buildCommandCorpus', () => {

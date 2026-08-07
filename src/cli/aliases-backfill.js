@@ -36,12 +36,15 @@ Rules:
 - Do not propose a generic working word on its own (run, check, fix, issue) — though one may appear inside a subject phrase.
 - Duplication against the title is fine; a filter removes what the title already covers.`;
 
-// The resumability marker: an `aliases` frontmatter key — even an empty list —
-// means a pass already ran, so the note is never re-billed.
-export function neverAsked(filePath) {
+// The resumability marker: a frontmatter key — even an empty list — means a
+// pass already ran, so the note is never re-billed. `key` parameterizes this
+// for triggers-backfill.js, which shares this exact check against a
+// different frontmatter field; every existing caller here keeps the
+// 'aliases' default.
+export function neverAsked(filePath, key = 'aliases') {
   try {
     const { data: fm } = matter(readFileSync(filePath, 'utf-8'));
-    return !('aliases' in fm);
+    return !(key in fm);
   } catch {
     return false; // vault file gone or unreadable — the indexer's problem, not this one's
   }
