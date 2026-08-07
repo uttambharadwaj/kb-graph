@@ -12,6 +12,8 @@ import { decideAndRecord, buildTriggerMessage, MAX_SESSION_WARNINGS, TRIGGERS_LO
 import { KB_DIR } from '../src/paths.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const THIN_BIN = join(REPO_ROOT, 'bin', 'kb-trigger-hook.js');
 
 function runHook(hookInput, extraEnv = {}) {
   return execFileSync(process.execPath, [HELPER, 'trigger-hook'], {
@@ -251,5 +253,37 @@ describe('triggerHook — marker and log round trip', () => {
     assert.strictEqual(stdout, '');
     const after = existsSync(logPath) ? readFileSync(logPath, 'utf-8') : '';
     assert.strictEqual(after, before, 'a non-Bash call must not grow the denominator');
+  });
+});
+
+// run-hook.mjs above dynamically imports src/cli/trigger-hook.js, which
+// proves the logic but not the actual artifact setup-hooks.js installs. This
+// spawns bin/kb-trigger-hook.js itself, the thin entry point with none of
+// bin/kb.js's flags/schema/runtime-node dispatch machinery.
+describe('bin/kb-trigger-hook.js — the thin installed entry point', () => {
+  const runBin = (hookInput, extraEnv = {}) => execFileSync(process.execPath, [THIN_BIN], {
+    input: JSON.stringify(hookInput),
+    env: { ...process.env, ...extraEnv },
+    encoding: 'utf8',
+  });
+
+  it('emits the same envelope as the src/cli/trigger-hook.js path, end to end', () => {
+    const indexPath = join(process.env.KB_DIR, 'trigger-index.json');
+    writeFileSync(indexPath, JSON.stringify(INDEX));
+    writeFileSync(TRIGGER_HOOK_ENABLED_FLAG, '');
+
+    const stdout = runBin(BASH('gh pr merge 1 --delete-branch', { session_id: 'sess-thin-bin' }));
+    assert.match(stdout, /"additionalContext":"⚠ KB TRIGGER: note #7/);
+  });
+
+  it('empty stdin exits cleanly with nothing printed — it must never block the Bash call it wraps', () => {
+    const stdout = execFileSync(process.execPath, [THIN_BIN], { input: '', env: process.env, encoding: 'utf8' });
+    assert.strictEqual(stdout, '');
+  });
+
+  it('imports only trigger-hook.js — no flags.js, schema.js, runtime-node.js or an explicit dotenv import', () => {
+    const src = readFileSync(THIN_BIN, 'utf-8');
+    const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l));
+    assert.deepStrictEqual(importLines.map(l => l.trim()), ["import { triggerHook } from '../src/cli/trigger-hook.js';"]);
   });
 });
