@@ -4,11 +4,15 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, existsSync, utimesSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { decideAndRecord, buildTriggerMessage, MAX_SESSION_WARNINGS, TRIGGERS_LOG_DIR, TRIGGER_HOOK_ENABLED_FLAG } from '../src/cli/trigger-hook.js';
+import {
+  decideAndRecord, buildTriggerMessage, resolveSession, MAX_SESSION_WARNINGS, FALLBACK_SESSION,
+  TRIGGERS_LOG_DIR, TRIGGER_HOOK_ENABLED_FLAG,
+} from '../src/cli/trigger-hook.js';
 import { KB_DIR } from '../src/paths.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
@@ -159,11 +163,52 @@ describe('decideAndRecord — command truncation in the log', () => {
 });
 
 describe('decideAndRecord — missing session_id still gets its own cap', () => {
-  it('falls back to "unknown" and caps independently', () => {
+  it('falls back to FALLBACK_SESSION and caps independently when transcript_path is also absent', () => {
     const decision = decideAndRecord({ tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --delete-branch' } }, { index: INDEX, enabled: true });
-    assert.strictEqual(decision.session, 'unknown');
+    assert.strictEqual(decision.session, FALLBACK_SESSION);
     const logged = JSON.parse(decision.logLine);
-    assert.strictEqual(logged.session, 'unknown');
+    assert.strictEqual(logged.session, FALLBACK_SESSION);
+  });
+});
+
+// A5: session_id-less calls used to all share one 'unknown' marker — two
+// unrelated session_id-less sessions (e.g. two different subagents whose
+// session_id semantics were the reason emission defaults off) would
+// permanently silence each other's warnings after 2 emissions total, and
+// dedupe would wrongly cross between them. transcript_path (present on the
+// hook's stdin JSON even when session_id is not) is unique per session, so
+// falling back to its filename stem gives each one its own cap again.
+describe('resolveSession — transcript_path fallback before FALLBACK_SESSION', () => {
+  it('prefers session_id when present, ignoring transcript_path', () => {
+    assert.strictEqual(resolveSession({ session_id: 's1', transcript_path: '/x/other.jsonl' }), 's1');
+  });
+
+  it('falls back to the transcript_path filename stem when session_id is absent', () => {
+    assert.strictEqual(resolveSession({ transcript_path: '/Users/u/.claude/projects/proj/abc123.jsonl' }), 'abc123');
+  });
+
+  it('falls back to FALLBACK_SESSION when both are absent', () => {
+    assert.strictEqual(resolveSession({}), FALLBACK_SESSION);
+    assert.strictEqual(resolveSession(), FALLBACK_SESSION);
+  });
+
+  it('falls back to FALLBACK_SESSION when transcript_path is not a string', () => {
+    assert.strictEqual(resolveSession({ transcript_path: 42 }), FALLBACK_SESSION);
+    assert.strictEqual(resolveSession({ transcript_path: '' }), FALLBACK_SESSION);
+  });
+
+  it('two different session_id-less calls with different transcripts get independent identities, not one shared "unknown"', () => {
+    const a = decideAndRecord(
+      { tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --delete-branch' }, transcript_path: '/x/session-a.jsonl' },
+      { index: INDEX, enabled: true },
+    );
+    const b = decideAndRecord(
+      { tool_name: 'Bash', tool_input: { command: 'gh pr merge 1 --delete-branch' }, transcript_path: '/x/session-b.jsonl' },
+      { index: INDEX, enabled: true },
+    );
+    assert.strictEqual(a.session, 'session-a');
+    assert.strictEqual(b.session, 'session-b');
+    assert.notStrictEqual(a.session, b.session);
   });
 });
 
@@ -256,6 +301,50 @@ describe('triggerHook — marker and log round trip', () => {
   });
 });
 
+// A6: nothing else prunes TRIGGERS_LOG_DIR, so it grows one marker per
+// session and one JSONL file per day forever. The sweep runs opportunistically
+// on the fire path (appendMarker) only — exercised here by backdating file
+// mtimes and then triggering an emission, never on a plain decline.
+describe('triggerHook — marker/log retention sweep runs only on the fire path', () => {
+  const daysAgo = (n) => Date.now() / 1000 - n * 24 * 60 * 60;
+
+  it('an emission sweeps markers older than 7 days and jsonl logs older than 30, leaving fresh ones untouched', () => {
+    mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
+    const staleMarker = join(TRIGGERS_LOG_DIR, 'stale-sess.json');
+    const freshMarker = join(TRIGGERS_LOG_DIR, 'fresh-sess.json');
+    const staleLog = join(TRIGGERS_LOG_DIR, 'fires-2020-01-01.jsonl');
+    const freshLog = join(TRIGGERS_LOG_DIR, `fires-${new Date().toISOString().slice(0, 10)}.jsonl`);
+    writeFileSync(staleMarker, '[]');
+    writeFileSync(freshMarker, '[]');
+    writeFileSync(staleLog, '{}\n');
+    writeFileSync(freshLog, '{}\n');
+    utimesSync(staleMarker, daysAgo(8), daysAgo(8));
+    utimesSync(freshMarker, daysAgo(1), daysAgo(1));
+    utimesSync(staleLog, daysAgo(31), daysAgo(31));
+    utimesSync(freshLog, daysAgo(1), daysAgo(1));
+
+    writeFileSync(TRIGGER_HOOK_ENABLED_FLAG, '');
+    runHook(BASH('gh pr merge 1 --delete-branch', { session_id: 'sess-sweep-trigger' }));
+
+    assert.strictEqual(existsSync(staleMarker), false, 'a marker older than 7 days is swept');
+    assert.strictEqual(existsSync(freshMarker), true, 'a marker younger than 7 days survives');
+    assert.strictEqual(existsSync(staleLog), false, 'a jsonl log older than 30 days is swept');
+    assert.strictEqual(existsSync(freshLog), true, 'a jsonl log younger than 30 days survives');
+  });
+
+  it('a plain decline (no emission) does not sweep', () => {
+    mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
+    const staleMarker = join(TRIGGERS_LOG_DIR, 'stale-sess-2.json');
+    writeFileSync(staleMarker, '[]');
+    utimesSync(staleMarker, daysAgo(8), daysAgo(8));
+
+    // No matching pattern in the index -> decline, not an emission.
+    runHook({ session_id: 'sess-no-sweep', tool_name: 'Bash', tool_input: { command: 'git status' } });
+
+    assert.strictEqual(existsSync(staleMarker), true, 'a decline must never trigger the sweep');
+  });
+});
+
 // run-hook.mjs above dynamically imports src/cli/trigger-hook.js, which
 // proves the logic but not the actual artifact setup-hooks.js installs. This
 // spawns bin/kb-trigger-hook.js itself, the thin entry point with none of
@@ -281,9 +370,35 @@ describe('bin/kb-trigger-hook.js — the thin installed entry point', () => {
     assert.strictEqual(stdout, '');
   });
 
-  it('imports only trigger-hook.js — no flags.js, schema.js, runtime-node.js or an explicit dotenv import', () => {
+  it('static imports are only node:fs/os/path — trigger-hook.js loads dynamically, inside the try/catch', () => {
     const src = readFileSync(THIN_BIN, 'utf-8');
-    const importLines = src.split('\n').filter(l => /^\s*import\b/.test(l));
-    assert.deepStrictEqual(importLines.map(l => l.trim()), ["import { triggerHook } from '../src/cli/trigger-hook.js';"]);
+    const staticImportLines = src.split('\n').filter(l => /^\s*import\b/.test(l)).map(l => l.trim());
+    assert.deepStrictEqual(staticImportLines, [
+      "import { appendFileSync, mkdirSync } from 'node:fs';",
+      "import { homedir } from 'node:os';",
+      "import { join } from 'node:path';",
+    ]);
+    assert.match(src, /await import\('\.\.\/src\/cli\/trigger-hook\.js'\)/);
+    assert.doesNotMatch(src, /^\s*import\b.*(flags\.js|schema\.js|runtime-node\.js)/m);
+  });
+
+  it('a module-load failure in the import chain is caught, logged to KB_DIR/logs/hook-errors.log using only node:fs, and still exits 0 with nothing on stdout/stderr', () => {
+    const brokenKbDir = mkdtempSync(join(tmpdir(), 'kb-trigger-hook-broken-'));
+    // paths.js's own top-level mkdirSync(FILES_DIR) throws when a file already
+    // occupies where it needs a directory — the module-load failure this
+    // guard exists for, reproduced without touching real disk permissions.
+    writeFileSync(join(brokenKbDir, 'files'), '');
+
+    const result = spawnSync(process.execPath, [THIN_BIN], {
+      input: JSON.stringify(BASH('git status')),
+      env: { ...process.env, KB_DIR: brokenKbDir },
+      encoding: 'utf8',
+    });
+
+    assert.strictEqual(result.status, 0, 'a broken import chain must still exit 0, never block the Bash call');
+    assert.strictEqual(result.stdout, '');
+    assert.strictEqual(result.stderr, '', 'no stack trace on stderr — the whole point of the guard');
+    const logged = readFileSync(join(brokenKbDir, 'logs', 'hook-errors.log'), 'utf-8');
+    assert.match(logged, /trigger-hook-bin: /);
   });
 });

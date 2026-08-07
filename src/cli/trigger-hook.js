@@ -10,8 +10,10 @@
 // only logs what it would have said. `kb trigger-hook-enable` deliberately
 // does not exist yet — create the flag file by hand once observation looks
 // sane.
-import { existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import {
+  existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, readdirSync, statSync, unlinkSync,
+} from 'fs';
+import { basename, join } from 'path';
 import { KB_DIR, LOGS_DIR } from '../paths.js';
 import { loadTriggerIndex, matchCommand } from '../trigger-match.js';
 import { recordHookFailure, deliver } from './hook-io.js';
@@ -23,6 +25,27 @@ export const TRIGGER_HOOK_ENABLED_FLAG = join(KB_DIR, 'trigger-hook-enabled');
 // A command this long is already unreadable in the log; the line exists to
 // grade fire/decline rates; not to replay the command verbatim.
 const COMMAND_LOG_MAX = 2000;
+
+// What every session_id-less call used to share: one marker, so after 2
+// emissions ever, every such call (across every actual session) was
+// permanently silenced, and dedupe wrongly spanned sessions that had nothing
+// to do with each other. Kept as the LAST resort only — see resolveSession.
+export const FALLBACK_SESSION = 'unknown';
+
+// session_id is what the hook is given when it has one; transcript_path
+// (also on the hook's stdin JSON) names the session's own JSONL file even
+// when session_id is absent, and its basename without extension is the same
+// session identity src/cli/trigger-corpus.js already keys the corpus on
+// (`session column is the fixture filename stem`) — so a marker keyed on it
+// lines up with an id nothing else in this codebase invented.
+export function resolveSession({ session_id, transcript_path } = {}) {
+  if (session_id) return session_id;
+  if (typeof transcript_path === 'string' && transcript_path) {
+    const stem = basename(transcript_path, '.jsonl');
+    if (stem) return stem;
+  }
+  return FALLBACK_SESSION;
+}
 
 const markerPath = (session) => join(TRIGGERS_LOG_DIR, `${session}.json`);
 const jsonlPath = (date = new Date()) => join(TRIGGERS_LOG_DIR, `fires-${date.toISOString().slice(0, 10)}.jsonl`);
@@ -38,12 +61,39 @@ function readMarker(session) {
   }
 }
 
+// Markers and JSONL logs accumulate one file per session/day forever with
+// nothing else pruning them. Swept opportunistically here rather than as a
+// separate scheduled job — this path (a fire) is already rare by
+// construction (at most MAX_SESSION_WARNINGS times per session), which
+// bounds how often the directory gets listed. Self-contained try/catch: a
+// sweep failure must never be mistaken for the marker-write failure it runs
+// alongside, and must never surface at all beyond its own log line.
+const MARKER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const LOG_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+function sweepOldTriggerFiles() {
+  try {
+    const now = Date.now();
+    for (const name of readdirSync(TRIGGERS_LOG_DIR)) {
+      let maxAge = null;
+      if (name.endsWith('.jsonl')) maxAge = LOG_RETENTION_MS;
+      else if (name.endsWith('.json')) maxAge = MARKER_RETENTION_MS;
+      else continue;
+      const full = join(TRIGGERS_LOG_DIR, name);
+      if (now - statSync(full).mtimeMs > maxAge) unlinkSync(full);
+    }
+  } catch (err) {
+    recordHookFailure('trigger-log-sweep', err);
+  }
+}
+
 // Read-modify-write with no lock — two calls racing here can each write a
 // marker that drops the other's id, so the worst case is a note re-firing
 // once more than the cap, never a crash or an unparseable marker. The
 // per-pid tmp name plus rename means neither writer ever observes (or
 // leaves behind) a half-written file.
 function appendMarker(session, id) {
+  sweepOldTriggerFiles();
   try {
     mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
     const current = readMarker(session);
@@ -85,13 +135,13 @@ export const buildTriggerMessage = (match) =>
 // must not log those, since a call that was never the denominator would
 // understate the decline rate rather than leaving it honestly absent.
 export function decideAndRecord(input, { index = [], fired = [], enabled = false } = {}) {
-  const { session_id, tool_name, tool_input, cwd } = input || {};
+  const { tool_name, tool_input, cwd } = input || {};
   if (tool_name !== 'Bash') return null;
   const rawCommand = tool_input?.command;
   if (!rawCommand) return null;
 
   const command = String(rawCommand);
-  const session = session_id || 'unknown';
+  const session = resolveSession(input);
   const matches = matchCommand(command, index, { alreadyFired: new Set(fired) });
 
   const emit = matches.length > 0 && enabled && fired.length < MAX_SESSION_WARNINGS;
@@ -131,7 +181,7 @@ export async function triggerHook() {
     // read on a misconfigured or manually-fed invocation.
     if (hookInput?.tool_name !== 'Bash' || !hookInput?.tool_input?.command) process.exit(0);
 
-    const session = hookInput.session_id || 'unknown';
+    const session = resolveSession(hookInput);
     const decision = decideAndRecord(hookInput, {
       index: loadTriggerIndex(),
       fired: readMarker(session),
