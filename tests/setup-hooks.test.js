@@ -68,6 +68,19 @@ test('mergeClaudeHooks recognizes an already-installed script hook even from a d
   assert.equal(merged.hooks.PreToolUse.length, 1, 'not duplicated even though the directory prefix differs');
 });
 
+// A4: a real prior commit of this stack installed the subcommand form
+// (`kb.js trigger-hook`) before the thin entry existed. The PreToolUse spec
+// now carries the subcommand alongside the script so a settings.json still
+// holding that install is recognized too — without this, re-running setup
+// on a machine that installed before the thin entry landed would install a
+// SECOND PreToolUse hook rather than replacing or recognizing the first.
+test('mergeClaudeHooks recognizes a legacy subcommand-form trigger-hook install and does not duplicate it', () => {
+  const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook' }] }] } };
+  const merged = mergeClaudeHooks(existing, OPTS);
+  assert.equal(merged.hooks.PreToolUse.length, 1, 'the legacy install must be recognized, not duplicated');
+  assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook', 'the legacy command is left as-is — only a fresh install writes the script form');
+});
+
 test('mergeClaudeHooks preserves unrelated settings and hooks', () => {
   const existing = {
     model: 'opus',
