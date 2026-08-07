@@ -507,6 +507,14 @@ export const MIGRATIONS = [{
   name: 'document retrieval aliases',
   applied: db => hasColumn(db, 'documents', 'aliases'),
   up: db => addColumn(db, 'documents', 'aliases', 'TEXT'),
+}, {
+  version: 16,
+  // Command triggers: patterns that let a note fire before a Bash tool call
+  // runs. Only ever written through filterTriggers (src/trigger-relevance.js)
+  // — raw model output never lands here.
+  name: 'document command triggers',
+  applied: db => hasColumn(db, 'documents', 'triggers'),
+  up: db => addColumn(db, 'documents', 'triggers', 'TEXT'),
 }];
 
 // The stored spellings that are not their own canonical form. One column, no

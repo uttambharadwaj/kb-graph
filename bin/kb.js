@@ -94,6 +94,11 @@ const COMMANDS = {
     boolean: ['--dry-run', '--revet'],
     run: a => import('../src/cli/aliases-backfill.js').then(m => m.runAliasesBackfillCli(a)),
   },
+  'trigger-corpus': {
+    summary: 'Extract the historical Bash command corpus from Claude transcripts (grades trigger noise ceilings)',
+    value: ['--projects'],
+    run: a => import('../src/cli/trigger-corpus.js').then(m => m.runTriggerCorpusCli(a)),
+  },
   'wakeup-hook': {
     summary: 'Print compact KB briefing (for SessionStart hooks)',
     run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
