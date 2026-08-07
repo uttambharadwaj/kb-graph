@@ -13,7 +13,10 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { LOGS_DIR } from '../paths.js';
 
-export const HOOK_ERROR_LOG = join(LOGS_DIR, 'prompt-hint-errors.log');
+// Shared across every hook that reuses this module (prompt-hint.js and
+// trigger-hook.js so far) — one name, not one per hook, so a failure here
+// doesn't file itself under a different hook's name and mislead triage.
+export const HOOK_ERROR_LOG = join(LOGS_DIR, 'hook-errors.log');
 
 export function recordHookFailure(stage, err) {
   try {
