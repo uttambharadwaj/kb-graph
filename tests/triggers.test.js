@@ -209,6 +209,16 @@ describe('matchCommand — mention vs execution', () => {
   it('declines when only some parts are present', () => {
     assert.deepStrictEqual(matchCommand('gh pr merge 78 --squash', [entry]), []);
   });
+
+  it('does not read a hyphen-joined longer command as running the prefix', () => {
+    const push = { id: 'p', title: 'Force push', patterns: [{ parts: ['git push', '--force'], hits: 3, sessions: 1 }] };
+    assert.deepStrictEqual(matchCommand('git push-to-prod --force', [push]), []);
+  });
+
+  it('fires after a background & separator', () => {
+    const hits = matchCommand('sleep 5 & gh pr merge --delete-branch', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'a', title: 'Force-delete branch', hits: 5 }]);
+  });
 });
 
 describe('matchCommand — token boundary vs flag substring', () => {

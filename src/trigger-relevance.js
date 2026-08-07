@@ -104,7 +104,7 @@ export function stripHeredocs(command) {
 // env, command) so `KB_DIR=/tmp sudo gh pr merge --delete-branch` and
 // `gh pr merge --delete-branch` grade identically — the wrapper is not what
 // the pattern is warning about.
-const SEGMENT_SPLIT = /\|\||&&|;|\$\(|`|\|/;
+const SEGMENT_SPLIT = /\|\||&&|;|\$\(|`|\||&/;
 const WRAPPER_TOKENS = new Set(['sudo', 'nohup', 'time', 'env', 'command']);
 const ENV_ASSIGNMENT = /^[a-z_][a-z0-9_]*=\S*$/;
 
@@ -151,8 +151,10 @@ function patternMatchesSegment(parts, segment) {
   if (!parts.length) return false;
   const [first, ...rest] = parts;
   if (!segment.startsWith(first)) return false;
+  // Same boundary class partAppears uses — without `-` here, `git push-to-prod`
+  // reads as running `git push`.
   const next = segment[first.length];
-  if (next !== undefined && /[a-z0-9]/.test(next)) return false;
+  if (next !== undefined && /[a-z0-9_-]/.test(next)) return false;
   return rest.every(p => partAppears(p, segment));
 }
 
