@@ -112,6 +112,8 @@ export async function wakeupHook() {
     const states = db.prepare(
       "SELECT vf.title, vf.document_id, d.tier, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT ?"
     ).all(BRIEFING_STATE_LIMIT);
+    // Total live state notes, independent of the LIMIT above — decides whether
+    // the "more workstreams" pointer line prints below.
     const stateCount = db.prepare(
       "SELECT COUNT(*) as c FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL"
     ).get().c;
