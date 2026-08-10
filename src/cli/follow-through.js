@@ -1,4 +1,4 @@
-// `kb follow-through` — PF-3207: does anyone act on what gets pushed at them?
+// `kb follow-through` — does anyone act on what gets pushed at them?
 //
 // Read-only over the retrievals table (plus the trigger-hook's JSONL fire
 // log, which has no DB row at all). Never touches the write path.
@@ -319,10 +319,11 @@ function printReport(report) {
   }
 }
 
-const USAGE = 'Usage: kb follow-through [--json] [--exclude-session <id>]...';
+const EXCLUDE_SESSION_FLAG = '--exclude-session';
+const USAGE = `Usage: kb follow-through [--json] [${EXCLUDE_SESSION_FLAG} <id>]...`;
 
 export function runFollowThroughCli(args = []) {
-  if (!acceptFlags(args, { usage: USAGE, value: ['--exclude-session'], boolean: ['--json'] })) return;
+  if (!acceptFlags(args, { usage: USAGE, value: [EXCLUDE_SESSION_FLAG], boolean: ['--json'] })) return;
 
   // flags.js has no repeatable-value concept — --exclude-session can appear
   // any number of times, so it's collected here rather than via readFlagValue
@@ -330,9 +331,10 @@ export function runFollowThroughCli(args = []) {
   // value is dropped instead of pushed as undefined, which better-sqlite3
   // would reject as a bind parameter.
   const excludeSessions = [];
+  const eqPrefix = `${EXCLUDE_SESSION_FLAG}=`;
   for (let i = 0; i < args.length; i += 1) {
-    if (args[i] === '--exclude-session' && args[i + 1] != null) excludeSessions.push(args[i + 1]);
-    else if (args[i].startsWith('--exclude-session=')) excludeSessions.push(args[i].slice('--exclude-session='.length));
+    if (args[i] === EXCLUDE_SESSION_FLAG && args[i + 1] != null) excludeSessions.push(args[i + 1]);
+    else if (args[i].startsWith(eqPrefix)) excludeSessions.push(args[i].slice(eqPrefix.length));
   }
   const asJson = args.includes('--json');
 
