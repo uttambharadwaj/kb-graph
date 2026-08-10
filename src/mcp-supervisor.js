@@ -1,4 +1,4 @@
-import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/server';
 import { spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';

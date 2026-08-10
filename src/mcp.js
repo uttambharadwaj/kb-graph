@@ -1,5 +1,5 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { registerBusResources } from './bus/resources.js';
 import { restartOnSourceChange } from './restart-on-change.js';
 import { getToolDefinitions } from './tools.js';
@@ -22,7 +22,7 @@ export async function start() {
 
   // Register all tools from shared definitions (already metered — see tools.js).
   for (const tool of getToolDefinitions()) {
-    server.tool(tool.name, tool.description, tool.schema, track(tool.handler));
+    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.schema }, track(tool.handler));
   }
   registerBusResources(server);
 

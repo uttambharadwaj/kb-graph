@@ -1,9 +1,9 @@
-import { ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ResourceTemplate } from '@modelcontextprotocol/server';
 import { getBusResourceLimit } from './config.js';
 import { listBusChannels, readBusChannel } from './service.js';
 
 export function registerBusResources(server) {
-  server.resource(
+  server.registerResource(
     'bus-channel',
     new ResourceTemplate('bus://{channel}', {
       list: async () => ({

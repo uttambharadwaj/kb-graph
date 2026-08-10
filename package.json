@@ -27,7 +27,9 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "bcryptjs": "^2.4.3",
     "better-auth": "^1.5.5",
     "better-sqlite3": "^11.0.0",

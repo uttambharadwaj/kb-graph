@@ -7,9 +7,8 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { Client, LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { MIGRATIONS as KB_MIGRATIONS } from '../src/db.js';
 import { seedDb, shortOf } from './helpers/migrations.js';
@@ -127,7 +126,7 @@ async function harness({ marker = 'one', behind = false, recheckMs } = {}) {
   transport.stderr?.on('data', (chunk) => { noise += chunk; });
 
   const call = async (name, options) => {
-    const res = await client.callTool({ name, arguments: {} }, undefined, options);
+    const res = await client.callTool({ name, arguments: {} }, options);
     return res.content[0].text;
   };
   // FSEvents replays the writes made just before the watcher registered, so the
