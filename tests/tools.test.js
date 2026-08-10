@@ -123,6 +123,26 @@ describe('retrieval logging', () => {
     assert.ok(row);
   });
 
+  // MCP calls (kb_read/kb_search/kb_context) each stand on their own — unlike
+  // a hint prompt or a briefing, nothing groups several of them into one
+  // decision — so none of them carries an event id. Event ids belong to the
+  // push surfaces (see hooks-retrieval.test.js).
+  it('kb_read, kb_search, and kb_context all log rows with a NULL event id', async () => {
+    const db = getDb();
+    db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('event-id-null-check', 'x', 'note')`).run();
+    const readId = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('event-id-null-read', 'x', 'note')`).run().lastInsertRowid;
+
+    await handler('kb_read')({ id: readId });
+    await handler('kb_search')({ query: 'event-id-null-check', limit: 20, include_superseded: false });
+    await handler('kb_context')({ query: 'event-id-null-check', limit: 15 });
+
+    for (const surface of ['kb_read', 'kb_search', 'kb_context']) {
+      const rows = db.prepare('SELECT event_id FROM retrievals WHERE surface = ? ORDER BY id DESC LIMIT 1').all(surface);
+      assert.ok(rows.length, `expected at least one ${surface} row`);
+      for (const row of rows) assert.strictEqual(row.event_id, null, `${surface} row must not carry an event id`);
+    }
+  });
+
   // Same reasoning as the search surfaces: a read of an id that is gone is a
   // read that failed, and dropping it leaves kb_read's miss rate structurally
   // zero rather than measured.

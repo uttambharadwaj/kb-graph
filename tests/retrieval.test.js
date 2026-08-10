@@ -4,7 +4,7 @@ import assert from 'node:assert';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { getDb } from '../src/db.js';
-import { PUSH_SURFACES, SURFACES, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
+import { PUSH_SURFACES, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 
 function seedMap(pid, entry) {
@@ -67,6 +67,36 @@ describe('resolveSessionId', () => {
   });
 });
 
+describe('isTestSession', () => {
+  const cases = [
+    ['smoke-test', true],
+    ['smoke-2', true],
+    ['smoke-compact-test', true],
+    ['live-verify', true],
+    ['smoke-anything-else', true],
+    ['SMOKE-CAPS-TOO', true],
+    ['test-run-42', true],
+    ['test_underscore', true],
+    ['fake-session-abc', true],
+    ['sess-real-abc123', false],
+    ['human-1', false],
+    ['contest-planning', false, 'must not match "test" as a substring, only as the prefixed word'],
+    [null, false],
+    ['', false],
+  ];
+
+  it('matches the smoke/test/fake naming convention and the historical literals, and nothing else', () => {
+    for (const [session, expected] of cases) {
+      assert.strictEqual(isTestSession(session), expected, `isTestSession(${JSON.stringify(session)})`);
+    }
+  });
+
+  it('does not match "test" or "fake" as a mid-string substring', () => {
+    assert.strictEqual(isTestSession('a-testament-to-something'), false);
+    assert.strictEqual(isTestSession('defaketh-session'), false);
+  });
+});
+
 describe('logRetrieval', () => {
   it('writes a row with the given surface, doc id, query and session', () => {
     const db = getDb();
@@ -76,6 +106,30 @@ describe('logRetrieval', () => {
     assert.ok(row);
     assert.strictEqual(row.session, 'sess-1');
     assert.ok(row.created_at);
+  });
+
+  it('stores the given event id, and defaults it to NULL', () => {
+    const db = getDb();
+    logRetrieval({ surface: 'kb_read', session: 'sess-evt', eventId: 'evt-123', query: 'with-event' });
+    logRetrieval({ surface: 'kb_read', session: 'sess-evt', query: 'without-event' });
+    assert.strictEqual(
+      db.prepare("SELECT event_id FROM retrievals WHERE query = 'with-event'").get().event_id,
+      'evt-123',
+    );
+    assert.strictEqual(
+      db.prepare("SELECT event_id FROM retrievals WHERE query = 'without-event'").get().event_id,
+      null,
+    );
+  });
+
+  it('computes is_test from the session id at write time', () => {
+    const db = getDb();
+    logRetrieval({ surface: 'kb_read', session: 'smoke-test', query: 'is-test-smoke' });
+    logRetrieval({ surface: 'kb_read', session: 'sess-real-42', query: 'is-test-real' });
+    logRetrieval({ surface: 'kb_read', session: null, query: 'is-test-null-session' });
+    assert.strictEqual(db.prepare("SELECT is_test FROM retrievals WHERE query = 'is-test-smoke'").get().is_test, 1);
+    assert.strictEqual(db.prepare("SELECT is_test FROM retrievals WHERE query = 'is-test-real'").get().is_test, 0);
+    assert.strictEqual(db.prepare("SELECT is_test FROM retrievals WHERE query = 'is-test-null-session'").get().is_test, 0);
   });
 
   it('writes a miss row (doc_id NULL) when passed no docId', () => {
@@ -161,5 +215,17 @@ describe('logRetrievalResults', () => {
     const ambient = db.prepare("SELECT session FROM retrievals WHERE query = 'ambient'").get();
     assert.strictEqual(explicit.session, 'from-hook');
     assert.strictEqual(ambient.session, null);
+  });
+
+  it('stamps the same event id on every row a single call produces, including a miss row', () => {
+    const db = getDb();
+    const ids = makeDocs(db, 3);
+    logRetrievalResults({ results: ids.map(id => ({ id })), surface: 'hint', query: 'shared-event', eventId: 'evt-shared' });
+    const rows = db.prepare("SELECT event_id FROM retrievals WHERE surface = 'hint' AND query = 'shared-event'").all();
+    assert.deepStrictEqual(rows.map(r => r.event_id), ['evt-shared', 'evt-shared', 'evt-shared']);
+
+    logRetrievalResults({ results: [], surface: 'hint', query: 'shared-event-miss', eventId: 'evt-miss' });
+    const missRow = db.prepare("SELECT event_id FROM retrievals WHERE surface = 'hint' AND query = 'shared-event-miss'").get();
+    assert.strictEqual(missRow.event_id, 'evt-miss');
   });
 });

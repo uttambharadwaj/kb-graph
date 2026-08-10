@@ -515,6 +515,24 @@ export const MIGRATIONS = [{
   name: 'document command triggers',
   applied: db => hasColumn(db, 'documents', 'triggers'),
   up: db => addColumn(db, 'documents', 'triggers', 'TEXT'),
+}, {
+  version: 17,
+  // event_id groups the rows one decision produced -- a hint prompt's up to
+  // MAX_HINTS doc rows, a SessionStart briefing's state rows -- into the unit
+  // follow-through actually measures, so a report reads it off the row
+  // instead of reconstructing it from timestamp proximity in SQL. is_test is
+  // computed at write time from the session id (isTestSession in
+  // retrieval.js) so smoke/manual-verification sessions can be excluded by a
+  // column instead of a session-string filter copied into every report query.
+  // Additive only: historical rows stay event_id NULL / is_test 0, which a
+  // report has to reconstruct for anyway since those rows predate the unit
+  // existing at all.
+  name: 'event identity and test-session flag on retrievals',
+  applied: db => ['event_id', 'is_test'].every(column => hasColumn(db, 'retrievals', column)),
+  up: db => {
+    addColumn(db, 'retrievals', 'event_id', 'TEXT');
+    addColumn(db, 'retrievals', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
+  },
 }];
 
 // The stored spellings that are not their own canonical form. One column, no

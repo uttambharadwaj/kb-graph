@@ -103,15 +103,38 @@ export function resolveSessionId(hookInput = null, { getAncestry = defaultAncest
   return entry && pidStartOk ? entry.session_id : null;
 }
 
+// Exact ids already polluting the table from manual smoke/verification runs
+// that predate the naming convention below -- kept as a literal list rather
+// than folded into the regex so a new one-off id doesn't have to be shaped
+// like these to get excluded; it just has to follow the prefix convention.
+const TEST_SESSION_LITERALS = new Set(['smoke-test', 'smoke-2', 'smoke-compact-test', 'live-verify']);
+
+// The naming convention for smoke/manual-verification sessions going forward.
+const TEST_SESSION_PREFIX = /^(?:smoke|test|fake)[-_]/i;
+
+// Whether a session id names a smoke/verification run rather than real usage.
+// Computed at write time (see logRetrieval) so every report reads is_test off
+// the row instead of repeating this classification in its own SQL.
+export function isTestSession(session) {
+  if (!session) return false;
+  return TEST_SESSION_PREFIX.test(session) || TEST_SESSION_LITERALS.has(session);
+}
+
 // Never let telemetry break a read: insert failures are swallowed so the
 // caller still gets its results, but logged loudly since a silent failure
 // here means the meter quietly goes blind.
-export function logRetrieval({ docId = null, surface, query = null, session = null }) {
+//
+// eventId is the caller's to generate and reuse: one hint prompt's ≤3 doc
+// rows, or one SessionStart's briefing rows, share a single id so the group
+// they form is a property of the data instead of something a report
+// reconstructs from timestamps. Left NULL for a call whose result is already
+// its own single decision (kb_read/kb_search/kb_context and friends).
+export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null }) {
   try {
     if (!SURFACES.includes(surface)) throw new Error(`unknown surface "${surface}"`);
     getDb().prepare(
-      'INSERT INTO retrievals (doc_id, surface, query, session) VALUES (?, ?, ?, ?)'
-    ).run(docId, surface, query, session);
+      'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0);
   } catch (err) {
     console.error(`[KB] retrieval log failed (surface=${surface}, doc_id=${docId}): ${err.message}`);
   }
@@ -132,11 +155,12 @@ export function logRetrievalResults({
   surface,
   query = null,
   session = resolveSessionId(),
+  eventId = null,
 }) {
   if (!surface) return;
   if (results.length === 0) {
-    logRetrieval({ surface, query, session });
+    logRetrieval({ surface, query, session, eventId });
     return;
   }
-  for (const r of results) logRetrieval({ docId: r.id, surface, query, session });
+  for (const r of results) logRetrieval({ docId: r.id, surface, query, session, eventId });
 }

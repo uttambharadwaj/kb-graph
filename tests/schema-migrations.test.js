@@ -66,7 +66,7 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
@@ -157,7 +157,41 @@ describe('purging meter rows the system logged for itself', () => {
   it('does not trip over a database too old to have the meter table', () => {
     const db = current(KB_MIGRATIONS);
     db.exec('DROP TABLE retrievals');
-    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6]);
+    // 17 adds columns to the same table 6 creates, so dropping it leaves both
+    // pending — 6 to rebuild the table, 17 to add its columns back on top.
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6, 17]);
+  });
+});
+
+describe('event identity and test-session flag on retrievals (migration 17)', () => {
+  it('adds event_id and is_test, leaving pre-existing rows NULL/0', () => {
+    const db = current(KB_MIGRATIONS);
+    db.exec('DROP TABLE IF EXISTS retrievals');
+    db.exec(`
+      CREATE TABLE retrievals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        doc_id INTEGER,
+        surface TEXT NOT NULL,
+        query TEXT,
+        session TEXT,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    db.prepare("INSERT INTO retrievals (surface, session) VALUES ('hint', 'sess-pre-migration')").run();
+
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [17]);
+
+    assert.ok(hasColumn(db, 'retrievals', 'event_id'));
+    assert.ok(hasColumn(db, 'retrievals', 'is_test'));
+    const row = db.prepare('SELECT event_id, is_test FROM retrievals').get();
+    assert.strictEqual(row.event_id, null, 'a pre-existing row gets no reconstructed event id');
+    assert.strictEqual(row.is_test, 0, 'a pre-existing row is not retroactively classified as a smoke session');
+  });
+
+  it('is idempotent-guarded — reports nothing pending once both columns exist', () => {
+    const db = current(KB_MIGRATIONS);
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS), []);
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS), []);
   });
 });
 

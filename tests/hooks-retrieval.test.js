@@ -294,6 +294,114 @@ describe('a hint that is written but not delivered says so', () => {
 // trigger-hook.js both fail into it) — it used to be named after the one
 // hook that first needed it, which would misleadingly file a trigger-hook
 // failure under "prompt hint" during triage.
+describe('event identity', () => {
+  it('prompt-hint stamps the same event id on every doc row one prompt surfaces', () => {
+    const db = getDb();
+    // Three notes sharing enough identity terms with the prompt to all clear
+    // the hint bar, each with a distinguishing word so they are distinct rows.
+    for (const label of ['Alpha', 'Bravo', 'Charlie']) {
+      db.prepare(
+        `INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, 'note', 'gizmo, calibration')`
+      ).run(`${label} gizmo rotation calibration`, `${label} gizmo rotation calibration procedure`);
+    }
+
+    const prompt = 'gizmo rotation calibration procedure for alpha bravo charlie units';
+    runHook('prompt-hint', { session_id: 'sess-event-hint', prompt });
+
+    const rows = db.prepare(
+      "SELECT doc_id, event_id FROM retrievals WHERE surface = 'hint' AND session = 'sess-event-hint'"
+    ).all();
+    assert.ok(rows.length >= 2, `expected multiple doc rows for this prompt, got ${rows.length}`);
+    const eventIds = new Set(rows.map(r => r.event_id));
+    assert.strictEqual(eventIds.size, 1, 'every doc row from one prompt must share one event id');
+    assert.ok([...eventIds][0], 'the shared event id must not be null');
+  });
+
+  it('prompt-hint stamps a fresh event id on a later, unrelated prompt', () => {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO documents (title, content, doc_type, tags) VALUES ('Delta widget onboarding', 'delta widget onboarding for new hires', 'note', '')`
+    ).run();
+    db.prepare(
+      `INSERT INTO documents (title, content, doc_type, tags) VALUES ('Echo widget onboarding', 'echo widget onboarding for new hires', 'note', '')`
+    ).run();
+
+    runHook('prompt-hint', { session_id: 'sess-event-fresh', prompt: 'delta echo widget onboarding walkthrough' });
+    runHook('prompt-hint', { session_id: 'sess-event-fresh', prompt: 'zzz-unrelated phrasing that matches nothing at all' });
+
+    const eventIds = db.prepare(
+      "SELECT DISTINCT event_id FROM retrievals WHERE surface = 'hint' AND session = 'sess-event-fresh'"
+    ).all().map(r => r.event_id);
+    assert.strictEqual(eventIds.length, 2, 'two separate prompts must not share an event id');
+    assert.ok(eventIds.every(Boolean));
+  });
+
+  it('wakeup-hook stamps the same event id on every briefing row for one SessionStart', () => {
+    const db = getDb();
+    for (const title of ['State: briefing-event-one', 'State: briefing-event-two']) {
+      insertStateNote(db, { title, content: 'body', updatedAt: '2034-01-01T00:00:00Z' });
+    }
+
+    runHook('wakeup-hook', { session_id: 'sess-event-briefing' });
+
+    const rows = db.prepare(
+      "SELECT event_id FROM retrievals WHERE surface = 'briefing' AND session = 'sess-event-briefing'"
+    ).all();
+    assert.ok(rows.length >= 2, `expected multiple briefing rows, got ${rows.length}`);
+    const eventIds = new Set(rows.map(r => r.event_id));
+    assert.strictEqual(eventIds.size, 1, 'every briefing row from one SessionStart must share one event id');
+    assert.ok([...eventIds][0]);
+  });
+
+  it('wakeup-hook post-compact recovery folds the active-note row into the same briefing event id, when it is not already one of the states rows', () => {
+    const db = getDb();
+    // Deliberately old, so it falls out of the top-8 `states` list and the
+    // states loop above does not log it — the only way it gets logged is
+    // through the post-compact branch, which is the code this test exists
+    // to exercise. Found instead via the session-scoped read, same as
+    // 'prefers the state note this session read' above.
+    const active = insertStateNote(db, { title: 'State: compact-event-shared', content: 'body worth recovering', updatedAt: '1999-01-01T00:00:00Z' });
+    db.prepare("INSERT INTO retrievals (doc_id, surface, session) VALUES (?, 'kb_read', ?)").run(active, 'sess-event-compact');
+
+    runHook('wakeup-hook', { session_id: 'sess-event-compact', source: 'compact' });
+
+    const rows = db.prepare(
+      "SELECT doc_id, event_id FROM retrievals WHERE surface = 'briefing' AND session = 'sess-event-compact'"
+    ).all();
+    assert.ok(rows.some(r => r.doc_id === active), 'expected the active note itself to be logged via the post-compact branch');
+    const eventIds = new Set(rows.map(r => r.event_id));
+    assert.strictEqual(eventIds.size, 1, 'the post-compact active-note row must share the briefing event id, not mint its own');
+    assert.ok([...eventIds][0]);
+  });
+});
+
+describe('is_test flag', () => {
+  it('a smoke-prefixed session writes is_test=1 on its hint rows', () => {
+    const db = getDb();
+    runHook('prompt-hint', { session_id: 'smoke-dogfood-run', prompt: 'a prompt long enough to clear the hint length gate' });
+    const row = db.prepare("SELECT is_test FROM retrievals WHERE surface = 'hint' AND session = 'smoke-dogfood-run'").get();
+    assert.ok(row);
+    assert.strictEqual(row.is_test, 1);
+  });
+
+  it('a smoke-prefixed session writes is_test=1 on its briefing rows', () => {
+    const db = getDb();
+    insertStateNote(db, { title: 'State: smoke-flag-check', content: 'body', updatedAt: '2036-01-01T00:00:00Z' });
+    runHook('wakeup-hook', { session_id: 'smoke-briefing-run' });
+    const row = db.prepare("SELECT is_test FROM retrievals WHERE surface = 'briefing' AND session = 'smoke-briefing-run'").get();
+    assert.ok(row);
+    assert.strictEqual(row.is_test, 1);
+  });
+
+  it('an ordinary session writes is_test=0', () => {
+    const db = getDb();
+    runHook('prompt-hint', { session_id: 'sess-ordinary-real', prompt: 'a prompt long enough to clear the hint length gate' });
+    const row = db.prepare("SELECT is_test FROM retrievals WHERE surface = 'hint' AND session = 'sess-ordinary-real'").get();
+    assert.ok(row);
+    assert.strictEqual(row.is_test, 0);
+  });
+});
+
 describe('the shared hook error log is named for what it is, not for the first hook that needed it', () => {
   it('HOOK_ERROR_LOG points at hook-errors.log, not prompt-hint-errors.log', async () => {
     const { HOOK_ERROR_LOG } = await import('../src/cli/hook-io.js');
