@@ -86,25 +86,21 @@ function defaultAncestry() {
   return cachedAncestry;
 }
 
-// Never emit an uncorroborated env id: CLAUDE_CODE_SESSION_ID is set in some
-// orchestration contexts (subagent/background jobs) and absent in a plain
-// interactive session, but nothing about its presence proves it's *current*
-// for this process — a stale value inherited from a parent environment reads
-// identically to a fresh one. It's only trusted when it agrees with the map
-// entry for our own resolved claude pid (even one that failed the pid_start
-// check — see resolveMapEntry), which is independent evidence it names a
-// session a hook actually saw, not a leftover. Agreeing with nothing is not
-// corroboration, so the last-resort fallback is NULL, not a guess.
+// No env fallback: CLAUDE_CODE_SESSION_ID is set in some orchestration
+// contexts (subagent/background jobs) and absent in a plain interactive
+// session, but nothing about its presence proves it's *current* for this
+// process — a stale value inherited from a parent environment reads
+// identically to a fresh one. A pid_start-mismatched map entry names a dead
+// process's session id, and corroborating env against it just re-admits the
+// same stale-id failure mode this walk exists to kill — stale is worse than
+// NULL, which is the whole premise of the switch away from the env var.
+// Only a pid_start-verified map hit is trusted; anything else is NULL.
 export function resolveSessionId(hookInput = null, { getAncestry = defaultAncestry } = {}) {
   if (hookInput?.session_id) return hookInput.session_id;
   const { claudePid, pidStart } = getAncestry();
-  const { entry, pidStartOk } = claudePid == null
-    ? { entry: null, pidStartOk: false }
-    : resolveMapEntry(claudePid, pidStart);
-  if (entry && pidStartOk) return entry.session_id;
-  const envId = process.env.CLAUDE_CODE_SESSION_ID || null;
-  if (envId && entry?.session_id === envId) return envId;
-  return null;
+  if (claudePid == null) return null;
+  const { entry, pidStartOk } = resolveMapEntry(claudePid, pidStart);
+  return entry && pidStartOk ? entry.session_id : null;
 }
 
 // Never let telemetry break a read: insert failures are swallowed so the

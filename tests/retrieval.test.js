@@ -13,9 +13,11 @@ function seedMap(pid, entry) {
 }
 
 // The ancestry walk itself (ps-backed) is process-ancestry.test.js's job;
-// these exercise the map/env fallback chain via the getAncestry override, so
-// no test here depends on what process node:test actually happens to run
-// under.
+// these exercise the map fallback chain via the getAncestry override, so no
+// test here depends on what process node:test actually happens to run under.
+// No env-var case: a pid_start-verified map hit is the only non-hookInput
+// source resolveSessionId trusts, so CLAUDE_CODE_SESSION_ID never enters the
+// resolution at all — see the doc comment on resolveSessionId for why.
 describe('resolveSessionId', () => {
   const ORIGINAL = process.env.CLAUDE_CODE_SESSION_ID;
   afterEach(() => {
@@ -29,7 +31,6 @@ describe('resolveSessionId', () => {
   });
 
   it('is null when ancestry resolution finds no claude ancestor', () => {
-    delete process.env.CLAUDE_CODE_SESSION_ID;
     const getAncestry = () => ({ claudePid: null, pidStart: null });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
     assert.strictEqual(resolveSessionId({}, { getAncestry }), null);
@@ -48,31 +49,21 @@ describe('resolveSessionId', () => {
     assert.strictEqual(resolveSessionId(null, { getAncestry }), 'mapped-session');
   });
 
-  it('treats a pid_start mismatch (pid reuse) as a miss, not a hit', () => {
-    delete process.env.CLAUDE_CODE_SESSION_ID;
+  it('treats a pid_start mismatch (pid reuse) as a miss, never falling back to env', () => {
     seedMap(5103, { pid: 5103, pid_start: 'OLD-START', session_id: 'stale-session' });
+    process.env.CLAUDE_CODE_SESSION_ID = 'stale-session'; // even if env agrees with the dead entry
     const getAncestry = () => ({ claudePid: 5103, pidStart: 'NEW-START' });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
   });
 
-  it('falls back to the env var only when it agrees with the (pid_start-mismatched) map entry', () => {
-    process.env.CLAUDE_CODE_SESSION_ID = 'agreed-session';
-    seedMap(5104, { pid: 5104, pid_start: 'OLD-START', session_id: 'agreed-session' });
-    const getAncestry = () => ({ claudePid: 5104, pidStart: 'NEW-START' });
-    assert.strictEqual(resolveSessionId(null, { getAncestry }), 'agreed-session');
-  });
-
-  it('never emits an env id that agrees with nothing', () => {
+  it('never emits the env id on its own, with or without a map entry present', () => {
     process.env.CLAUDE_CODE_SESSION_ID = 'lonely-env-value';
-    const getAncestry = () => ({ claudePid: null, pidStart: null });
-    assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
-  });
-
-  it('an env id that disagrees with the map entry is not corroboration', () => {
-    process.env.CLAUDE_CODE_SESSION_ID = 'different-env-session';
-    seedMap(5105, { pid: 5105, pid_start: 'OLD-START', session_id: 'map-session' });
-    const getAncestry = () => ({ claudePid: 5105, pidStart: 'NEW-START' });
-    assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
+    assert.strictEqual(resolveSessionId(null, { getAncestry: () => ({ claudePid: null, pidStart: null }) }), null);
+    seedMap(5106, { pid: 5106, pid_start: 'START', session_id: 'lonely-env-value' });
+    assert.strictEqual(
+      resolveSessionId(null, { getAncestry: () => ({ claudePid: 5106, pidStart: 'DIFFERENT' }) }),
+      null,
+    );
   });
 });
 
