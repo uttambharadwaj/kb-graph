@@ -70,6 +70,12 @@ const COMMANDS = {
     summary: 'Read-path coverage: how much of the KB has ever been retrieved',
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
+  'follow-through': {
+    summary: 'Event-unit follow-through per push surface (hint/briefing), kb_search pull-rate benchmark, trigger fires, cluster-bootstrap CI (--json for machine-readable, --exclude-session <id> repeatable)',
+    value: ['--exclude-session'],
+    boolean: ['--json'],
+    run: a => import('../src/cli/follow-through.js').then(m => m.runFollowThroughCli(a)),
+  },
   'surface-report': {
     summary: 'Per-tool and per-model-caller demand, failures and latency, plus where the duplicate threshold really sits',
     run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),

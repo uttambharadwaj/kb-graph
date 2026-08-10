@@ -125,10 +125,12 @@ export function isTestSession(session) {
 // here means the meter quietly goes blind.
 //
 // eventId is the caller's to generate and reuse: one hint prompt's ≤3 doc
-// rows, or one SessionStart's briefing rows, share a single id so the group
-// they form is a property of the data instead of something a report
-// reconstructs from timestamps. Left NULL for a call whose result is already
-// its own single decision (kb_read/kb_search/kb_context and friends).
+// rows, one SessionStart's briefing rows, or one search/context/tunnels
+// call's result rows all share a single id, so the group they form is a
+// property of the data instead of something a report reconstructs from
+// timestamps — reconstruction can't tell two same-second calls apart.
+// Left NULL only for a call whose result is already exactly one row
+// (kb_read/getDocument).
 export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null }) {
   try {
     if (!SURFACES.includes(surface)) throw new Error(`unknown surface "${surface}"`);
