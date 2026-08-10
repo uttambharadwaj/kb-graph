@@ -174,7 +174,7 @@ describe('dedup across runs', () => {
     assert.strictEqual(second.skipped[0].doc_id, doc);
   });
 
-  it('re-running the real CLI does not duplicate a line for the same doc', () => {
+  it('re-running the real CLI does not duplicate a line for the same doc', async () => {
     // Exercises the actual entry point (runPromotionsCli -> getDb()), not the
     // exported computePromotionDecisions helper the tests above use directly.
     const db = getDb();
@@ -185,8 +185,8 @@ describe('dedup across runs', () => {
     const orig = console.log;
     console.log = () => {};
     try {
-      runPromotionsCli([]);
-      runPromotionsCli([]);
+      await runPromotionsCli([]);
+      await runPromotionsCli([]);
     } finally {
       console.log = orig;
     }
@@ -198,22 +198,24 @@ describe('dedup across runs', () => {
 });
 
 describe('jsonl log shape', () => {
-  it('an appended line has exactly the documented fields', () => {
+  it('an appended line has exactly the documented fields, plus applied', () => {
     const db = freshDb();
     const doc = insertDoc(db, { title: 'shaped note' });
     pushAndFollow(db, doc);
 
     const { candidates } = computePromotionDecisions(db);
+    const decisions = candidates.map(c => ({ ...c, applied: true }));
     mkdirSync(PROMOTIONS_LOG_DIR, { recursive: true });
-    writeFileSync(WOULD_PROMOTE_LOG, candidates.map(c => JSON.stringify(c)).join('\n') + '\n');
+    writeFileSync(WOULD_PROMOTE_LOG, decisions.map(c => JSON.stringify(c)).join('\n') + '\n');
 
     const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n');
     assert.strictEqual(lines.length, 1);
     const row = JSON.parse(lines[0]);
-    assert.deepStrictEqual(Object.keys(row).sort(), ['basis', 'current_tier', 'decided_at', 'doc_id', 'title', 'would_become'].sort());
+    assert.deepStrictEqual(Object.keys(row).sort(), ['applied', 'basis', 'current_tier', 'decided_at', 'doc_id', 'title', 'would_become'].sort());
     assert.deepStrictEqual(Object.keys(row.basis).sort(), ['event_id', 'followed_at', 'read_latency_s', 'session'].sort());
     assert.strictEqual(typeof row.decided_at, 'string');
     assert.ok(!Number.isNaN(Date.parse(row.decided_at)));
+    assert.strictEqual(row.applied, true);
   });
 });
 
@@ -240,7 +242,7 @@ describe('read-only on the DB', () => {
 });
 
 describe('--json output and CLI wiring', () => {
-  it('prints the documented top-level shape via the real CLI entry point', () => {
+  it('prints the documented top-level shape via the real CLI entry point', async () => {
     const db = getDb();
     db.exec('DELETE FROM retrievals; DELETE FROM documents;');
     const doc = insertDoc(db, { title: 'json note' });
@@ -250,24 +252,114 @@ describe('--json output and CLI wiring', () => {
     const orig = console.log;
     console.log = (...a) => logs.push(a.join(' '));
     try {
-      runPromotionsCli(['--json']);
+      await runPromotionsCli(['--json']);
     } finally {
       console.log = orig;
     }
 
     assert.strictEqual(logs.length, 1, 'exactly one JSON blob printed');
     const payload = JSON.parse(logs[0]);
-    assert.deepStrictEqual(Object.keys(payload).sort(), ['candidates', 'decisions', 'new', 'skippedAlreadyLogged'].sort());
+    assert.deepStrictEqual(Object.keys(payload).sort(), ['applied', 'candidates', 'decisions', 'new', 'skippedAlreadyLogged'].sort());
     assert.strictEqual(payload.candidates, 1);
     assert.strictEqual(payload.new, 1);
+    assert.strictEqual(payload.applied, 1, 'apply is the default');
     assert.strictEqual(payload.skippedAlreadyLogged, 0);
     assert.strictEqual(payload.decisions[0].doc_id, doc);
+    assert.strictEqual(payload.decisions[0].applied, true);
   });
 
-  it('rejects an unknown --apply flag — applying stays impossible by construction', () => {
-    // No --apply exists on this command; unrecognized flags are refused
-    // before any work runs (flags.js's assertKnownFlags), which is what
-    // makes "dry-run only" a property of the CLI surface, not a convention.
-    assert.throws(() => runPromotionsCli(['--apply']), /Unknown flag: --apply/);
+  it('rejects an unknown --apply flag — there is no such flag, applying is the default', async () => {
+    // Unrecognized flags are refused before any work runs (flags.js's
+    // assertKnownFlags) — a mistyped flag must not be read as consent to run
+    // with defaults.
+    await assert.rejects(() => runPromotionsCli(['--apply']), /Unknown flag: --apply/);
+  });
+});
+
+describe('apply path (live by default)', () => {
+  it('an eligible followed doc is promoted to observed in the DB, with confirmed_by recorded', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'apply me' });
+    pushAndFollow(db, doc);
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    const row = db.prepare('SELECT tier, tier_ref FROM documents WHERE id = ?').get(doc);
+    assert.strictEqual(row.tier, TIER.OBSERVED);
+    assert.match(row.tier_ref, /^Follow-through join: hint event id:e1, session s1, followed .+ \(read latency 300s\); auto-applied by kb promotions$/);
+  });
+
+  it('a doc already in the log is not re-applied, even though it is still eligible', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'already logged' });
+    pushAndFollow(db, doc);
+    mkdirSync(PROMOTIONS_LOG_DIR, { recursive: true });
+    writeFileSync(WOULD_PROMOTE_LOG, JSON.stringify({ doc_id: doc, applied: true }) + '\n');
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.INFERRED, 'dedup must block re-apply, not just re-log');
+  });
+});
+
+describe('--dry-run', () => {
+  it('restores log-only behavior: zero document writes', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'dry run note' });
+    pushAndFollow(db, doc);
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli(['--dry-run']);
+    } finally {
+      console.log = orig;
+    }
+
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.INFERRED);
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const line = lines.find(l => l.doc_id === doc);
+    assert.strictEqual(line.applied, false);
+  });
+});
+
+describe('pre-cutoff exception', () => {
+  it('a pre-cutoff trigger candidate is logged with applied:false and the caveat; tier is unchanged', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'pre-cutoff note' });
+    writeFileSync(join(TRIGGERS_LOG_DIR, 'fires-2026-08-10.jsonl'), JSON.stringify({
+      ts: '2026-08-10T04:00:00.000Z', session: 's1', cwd: '/tmp', command: 'x', matched: [{ id: doc, hits: 1 }], emitted: true,
+    }) + '\n');
+    insertRetrieval(db, { docId: doc, surface: SURFACE.READ, session: 's1', created_at: '2026-08-10 04:05:00' });
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.INFERRED, 'pre-cutoff candidates must never be applied');
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const line = lines.find(l => l.doc_id === doc);
+    assert.strictEqual(line.applied, false);
+    assert.match(line.basis.caveat, /pre-honest-session-id/);
   });
 });

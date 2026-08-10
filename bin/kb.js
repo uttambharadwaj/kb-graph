@@ -77,8 +77,8 @@ const COMMANDS = {
     run: a => import('../src/cli/follow-through.js').then(m => m.runFollowThroughCli(a)),
   },
   promotions: {
-    summary: 'Dry-run: log inferred docs that a followed hint/trigger push would promote to observed, without applying it (--json for machine-readable)',
-    boolean: ['--json'],
+    summary: 'Promote inferred docs that a followed hint/trigger push confirmed to observed (--dry-run to log only, --json for machine-readable)',
+    boolean: ['--json', '--dry-run'],
     run: a => import('../src/cli/promotions.js').then(m => m.runPromotionsCli(a)),
   },
   'surface-report': {

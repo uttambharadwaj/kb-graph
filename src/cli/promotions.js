@@ -1,4 +1,4 @@
-// `kb promotions` — dry-run for a promotion the follow-through join can now
+// `kb promotions` — applies the promotion the follow-through join can now
 // support: a session followed a hint or trigger push and wasn't corrected.
 // "Followed, not corrected" is the only confirmation signal retrieval logging
 // captures, and it proves exactly the observed bar — an agent saw the note
@@ -7,17 +7,27 @@
 // at SessionStart is not an act of reliance the way opening a specific
 // pushed doc is.
 //
-// This only ever LOGS what a live run would do. Nothing here calls
-// promoteDocumentTier or writes to `documents` — flipping to live is a
-// separate, deliberate change once the log looks sane. The one thing this
-// command writes is the jsonl log below; everything else is a SELECT.
+// Applies by default through promoteDocumentTier (the same path kb_promote
+// uses, including the vault-file rewrite) — `--dry-run` logs only, like the
+// old behavior. A pre-cutoff trigger fire (basis.caveat set — see
+// followedFireEvents) is also logged only, never applied: its read-side join
+// may be under-counted, so it waits for human review. The jsonl log below is
+// the audit trail either way.
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
-import { getDb } from '../db.js';
+import { getDb, promoteDocumentTier } from '../db.js';
 import { LOGS_DIR } from '../paths.js';
+import { SURFACE } from '../retrieval.js';
 import { TIER } from '../tiers.js';
+import { setNoteTier } from '../write-note.js';
+import { indexVaultFile } from '../vault/indexer.js';
 import { followedFireEvents, toMs } from './follow-through.js';
 import { acceptFlags } from './flags.js';
+
+function getVaultPath() {
+  return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
+}
 
 export const PROMOTIONS_LOG_DIR = join(LOGS_DIR, 'promotions');
 export const WOULD_PROMOTE_LOG = join(PROMOTIONS_LOG_DIR, 'would-promote.jsonl');
@@ -133,32 +143,72 @@ function appendDecisions(decisions, path = WOULD_PROMOTE_LOG) {
   appendFileSync(path, decisions.map(d => JSON.stringify(d)).join('\n') + '\n');
 }
 
-function printDecision(d) {
-  console.log(`  #${d.doc_id} "${d.title}": ${d.current_tier} -> ${d.would_become} (session ${d.basis.session}, followed ${d.basis.followed_at}, latency ${d.basis.read_latency_s}s, event ${d.basis.event_id})`);
+// The event_id's own prefix says which surface produced it — "trigger:" for
+// a trigger fire (triggerEvents' key), "id:"/"ts:" for a hint (eventKey) —
+// so this needs no extra field threaded through basis. Trigger fires have no
+// SURFACE entry of their own (they never hit the retrievals table — see
+// triggerEvents' comment in follow-through.js), so that half stays a literal.
+function surfaceOf(eventId) {
+  return eventId.startsWith('trigger:') ? 'trigger' : SURFACE.HINT;
 }
 
-const USAGE = 'Usage: kb promotions [--json]';
+// The same tier-promotion path kb_promote uses (src/tools.js), including the
+// vault-file rewrite, so a promotion made here survives the next reindex.
+async function applyDecision(d) {
+  const confirmedBy = `Follow-through join: ${surfaceOf(d.basis.event_id)} event ${d.basis.event_id}, ` +
+    `session ${d.basis.session}, followed ${d.basis.followed_at} (read latency ${d.basis.read_latency_s}s); ` +
+    `auto-applied by kb promotions`;
+  const doc = promoteDocumentTier(d.doc_id, { tier: d.would_become, confirmedBy });
+  if (!doc) return; // doc gone since the decision was computed
 
-export function runPromotionsCli(args = []) {
-  if (!acceptFlags(args, { usage: USAGE, boolean: ['--json'] })) return;
+  const vf = getDb().prepare('SELECT vault_path FROM vault_files WHERE document_id = ?').get(d.doc_id);
+  if (!vf) return; // no vault file for this note — recorded in the index only, same as kb_promote
+  const vaultPath = getVaultPath();
+  setNoteTier(vaultPath, vf.vault_path, { tier: doc.tier, ref: doc.tier_ref });
+  await indexVaultFile(vaultPath, vf.vault_path);
+}
+
+function printDecision(d) {
+  const tag = d.applied ? 'applied' : 'logged only';
+  console.log(`  #${d.doc_id} "${d.title}": ${d.current_tier} -> ${d.would_become} [${tag}] (session ${d.basis.session}, followed ${d.basis.followed_at}, latency ${d.basis.read_latency_s}s, event ${d.basis.event_id})`);
+}
+
+const USAGE = 'Usage: kb promotions [--json] [--dry-run]';
+
+export async function runPromotionsCli(args = []) {
+  if (!acceptFlags(args, { usage: USAGE, boolean: ['--json', '--dry-run'] })) return;
   const asJson = args.includes('--json');
+  const dryRun = args.includes('--dry-run');
 
   const { candidates, skipped } = computePromotionDecisions();
-  appendDecisions(candidates);
+
+  const decisions = [];
+  let appliedCount = 0;
+  for (const d of candidates) {
+    const preCutoff = d.basis.caveat != null;
+    const applied = !dryRun && !preCutoff;
+    if (applied) {
+      await applyDecision(d);
+      appliedCount += 1;
+    }
+    decisions.push({ ...d, applied });
+  }
+  appendDecisions(decisions);
 
   if (asJson) {
     console.log(JSON.stringify({
       candidates: candidates.length + skipped.length,
       new: candidates.length,
+      applied: appliedCount,
       skippedAlreadyLogged: skipped.length,
-      decisions: candidates,
+      decisions,
     }, null, 2));
     return;
   }
 
-  console.log(`kb promotions (dry-run): ${candidates.length + skipped.length} candidates, ${candidates.length} new this run, ${skipped.length} skipped (already logged)`);
-  if (candidates.length) {
-    console.log('\nNew would-promote decisions:');
-    for (const d of candidates) printDecision(d);
+  console.log(`kb promotions: ${candidates.length + skipped.length} candidates, ${appliedCount} applied, ${candidates.length - appliedCount} dry-run/pre-cutoff logged only, ${skipped.length} skipped (already logged)`);
+  if (decisions.length) {
+    console.log('\nDecisions this run:');
+    for (const d of decisions) printDecision(d);
   }
 }
