@@ -364,7 +364,14 @@ export function followedFireEvents(db = getDb(), { excludeSessions = [] } = {}) 
     .filter(e => e.followed30)
     .map(e => ({ ...e, followingRead: followingRead(e, reads.get(e.session) || []) }));
 
-  return { hint: followedOnly(hint.fireEvents), trigger: followedOnly(trigger) };
+  // Trigger fires (not hint pushes — see HONEST_SESSION_ID_CUTOFF_MS's own
+  // comment) can predate the session-identity fix, in which case the read
+  // side of this same join may be under-counted. followThroughReport surfaces
+  // that as a report-wide caveat; a promotion candidate is a single decision,
+  // so it needs the same fact stamped per-event instead of once for the batch.
+  const withPreCutoff = events => events.map(e => ({ ...e, preCutoff: toMs(e.createdAt) < HONEST_SESSION_ID_CUTOFF_MS }));
+
+  return { hint: followedOnly(hint.fireEvents), trigger: withPreCutoff(followedOnly(trigger)) };
 }
 
 function printSurface(label, s) {

@@ -85,17 +85,25 @@ function earliestPerDoc(events) {
 
 function toDecision(ev, doc, decidedAt) {
   const readLatencyS = Math.round((toMs(ev.followingRead.created_at) - toMs(ev.createdAt)) / 1000);
+  const basis = {
+    event_id: ev.key,
+    session: ev.session,
+    followed_at: new Date(toMs(ev.followingRead.created_at)).toISOString(),
+    read_latency_s: readLatencyS,
+  };
+  // Only trigger events carry preCutoff (see followedFireEvents in
+  // follow-through.js); a pre-cutoff trigger fire's read-side join may be
+  // under-counted, so a human reviewing the dry-run log before any flip to
+  // live needs that flagged on the line, not silently dropped.
+  if (ev.preCutoff) {
+    basis.caveat = 'pre-honest-session-id fire — read-side join may be miscounted';
+  }
   return {
     doc_id: doc.id,
     title: doc.title,
     current_tier: doc.tier,
     would_become: WOULD_BECOME,
-    basis: {
-      event_id: ev.key,
-      session: ev.session,
-      followed_at: new Date(toMs(ev.followingRead.created_at)).toISOString(),
-      read_latency_s: readLatencyS,
-    },
+    basis,
     decided_at: decidedAt,
   };
 }

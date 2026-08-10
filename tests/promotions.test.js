@@ -128,6 +128,30 @@ describe('candidate selection', () => {
     assert.strictEqual(candidates[0].basis.followed_at, '2026-08-10T10:05:00.000Z');
     assert.strictEqual(candidates[0].basis.event_id, 'id:e1');
   });
+
+  it('a trigger fire from before the honest-session-id fix carries a caveat; a post-cutoff one and a hint-basis one never do', () => {
+    const db = freshDb();
+    const preCutoffDoc = insertDoc(db, { title: 'pre-cutoff' });
+    const postCutoffDoc = insertDoc(db, { title: 'post-cutoff' });
+    const hintDoc = insertDoc(db, { title: 'hint-basis' });
+
+    // The fix landed 2026-08-10T04:46:50Z (kb-graph #87) — one fire just
+    // before it, one just after.
+    writeFileSync(join(TRIGGERS_LOG_DIR, 'fires-2026-08-10.jsonl'), [
+      JSON.stringify({ ts: '2026-08-10T04:00:00.000Z', session: 's1', cwd: '/tmp', command: 'x', matched: [{ id: preCutoffDoc, hits: 1 }], emitted: true }),
+      JSON.stringify({ ts: '2026-08-10T05:00:00.000Z', session: 's2', cwd: '/tmp', command: 'y', matched: [{ id: postCutoffDoc, hits: 1 }], emitted: true }),
+    ].join('\n') + '\n');
+    insertRetrieval(db, { docId: preCutoffDoc, surface: SURFACE.READ, session: 's1', created_at: '2026-08-10 04:05:00' });
+    insertRetrieval(db, { docId: postCutoffDoc, surface: SURFACE.READ, session: 's2', created_at: '2026-08-10 05:05:00' });
+    pushAndFollow(db, hintDoc, { session: 's3', eventId: 'e-hint' });
+
+    const { candidates } = computePromotionDecisions(db);
+    const byDoc = Object.fromEntries(candidates.map(c => [c.doc_id, c]));
+
+    assert.strictEqual(byDoc[preCutoffDoc].basis.caveat, 'pre-honest-session-id fire — read-side join may be miscounted');
+    assert.strictEqual(byDoc[postCutoffDoc].basis.caveat, undefined);
+    assert.strictEqual(byDoc[hintDoc].basis.caveat, undefined);
+  });
 });
 
 describe('dedup across runs', () => {
