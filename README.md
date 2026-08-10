@@ -259,10 +259,10 @@ kb status              Stats and server status
 kb meters prune        Delete old meter rows (--keep-days N required, --dry-run to preview)
 ```
 
-That is the set you reach for by hand. `kb --help` lists all 40, including the
+That is the set you reach for by hand. `kb --help` lists them all, including the
 hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
-`retrieval-report`, `hint-probe`, `surface-report`, `meters prune`).
+`retrieval-report`, `follow-through`, `hint-probe`, `surface-report`, `meters prune`).
 
 `kb surface-report` answers four questions the store could not answer about
 itself. Which tools does anyone actually call — including the ones nobody has
