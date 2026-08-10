@@ -1,3 +1,4 @@
+import './helpers/tmp-kb.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEnvFile } from '../src/cli/setup.js';

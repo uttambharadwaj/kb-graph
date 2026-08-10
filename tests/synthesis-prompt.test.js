@@ -1,3 +1,4 @@
+import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { generateSynthesisPrompt } from '../src/synthesis/weekly-review.js';

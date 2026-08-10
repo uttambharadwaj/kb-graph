@@ -5,6 +5,16 @@ import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+// If src/paths.js already ran, its KB_DIR const is already bound — catches
+// a src-reaching import listed before this one regardless of source order.
+if (globalThis.__KB_PATHS_LOADED__) {
+  throw new Error(
+    'tests/helpers/tmp-kb.js ran after src/paths.js already resolved ' +
+    'KB_DIR. Import this helper as the first import statement in the ' +
+    'test file.'
+  );
+}
+
 process.env.KB_DIR = mkdtempSync(join(tmpdir(), 'kb-test-'));
 // Files-first writes (kb_ingest, /ingest, writeNote) target the vault — point
 // that at a throwaway dir too or tests write real files into ~/.claude/kb-index.

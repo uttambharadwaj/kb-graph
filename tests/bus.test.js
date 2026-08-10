@@ -1,3 +1,4 @@
+import './helpers/tmp-kb.js';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
