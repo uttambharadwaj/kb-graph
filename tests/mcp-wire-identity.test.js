@@ -9,14 +9,13 @@ const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'mcp.j
 
 // Captured by hand-rolled JSON-RPC against public/main (v1 SDK, pre-migration)
 // on a fresh temp KB, before any v2 change landed. This is the byte-for-byte
-// contract the SDK bump must not move: v1 always sets listChanged: true on
-// both capabilities once any tool/resource is registered (see
-// node_modules/@modelcontextprotocol/sdk@1 server/mcp.js), which this server
-// always does — so this is not a special case, it is what v1 -> v2 must
-// reproduce with no protocol-era opt-in.
+// contract the SDK bump must not move: v1's McpServer sets listChanged: true
+// unconditionally on both capabilities once any tool/resource is registered,
+// which this server always does — so this is not a special case, it is what
+// v1 -> v2 must reproduce with no protocol-era opt-in.
 const REQUEST_PROTOCOL_VERSION = '2025-06-18';
 const V1_BASELINE = {
-  protocolVersion: '2025-06-18',
+  protocolVersion: REQUEST_PROTOCOL_VERSION,
   capabilities: {
     tools: { listChanged: true },
     resources: { listChanged: true },
