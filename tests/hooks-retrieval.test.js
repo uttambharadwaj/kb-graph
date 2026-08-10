@@ -353,18 +353,25 @@ describe('event identity', () => {
     assert.ok([...eventIds][0]);
   });
 
-  it('wakeup-hook post-compact recovery folds the active-note row into the same briefing event id', () => {
+  it('wakeup-hook post-compact recovery folds the active-note row into the same briefing event id, when it is not already one of the states rows', () => {
     const db = getDb();
-    insertStateNote(db, { title: 'State: compact-event-shared', content: 'body worth recovering', updatedAt: '2035-01-01T00:00:00Z' });
+    // Deliberately old, so it falls out of the top-8 `states` list and the
+    // states loop above does not log it — the only way it gets logged is
+    // through the post-compact branch, which is the code this test exists
+    // to exercise. Found instead via the session-scoped read, same as
+    // 'prefers the state note this session read' above.
+    const active = insertStateNote(db, { title: 'State: compact-event-shared', content: 'body worth recovering', updatedAt: '1999-01-01T00:00:00Z' });
+    db.prepare("INSERT INTO retrievals (doc_id, surface, session) VALUES (?, 'kb_read', ?)").run(active, 'sess-event-compact');
 
     runHook('wakeup-hook', { session_id: 'sess-event-compact', source: 'compact' });
 
     const rows = db.prepare(
-      "SELECT event_id FROM retrievals WHERE surface = 'briefing' AND session = 'sess-event-compact'"
+      "SELECT doc_id, event_id FROM retrievals WHERE surface = 'briefing' AND session = 'sess-event-compact'"
     ).all();
-    assert.ok(rows.length >= 1);
+    assert.ok(rows.some(r => r.doc_id === active), 'expected the active note itself to be logged via the post-compact branch');
     const eventIds = new Set(rows.map(r => r.event_id));
     assert.strictEqual(eventIds.size, 1, 'the post-compact active-note row must share the briefing event id, not mint its own');
+    assert.ok([...eventIds][0]);
   });
 });
 
