@@ -36,9 +36,15 @@ export const WOULD_PROMOTE_LOG = join(PROMOTIONS_LOG_DIR, 'would-promote.jsonl')
 const WOULD_BECOME = TIER.OBSERVED;
 
 // One line per doc_id ever, across every run this log has seen — a doc
-// re-followed later does not re-append. Malformed lines (a partial write
-// from a crashed run) are skipped rather than failing the whole read, same
-// tolerance follow-through.js's readTriggerFires uses for its own jsonl.
+// re-followed later does not re-append. A line carrying `error` is the
+// exception: it never counts toward that invariant, so a failed candidate
+// retries on the next run instead of being abandoned forever. A transient
+// failure (vault I/O, a since-fixed pathological value) then succeeds and
+// dedups normally from there; a deterministic failure just re-logs one
+// applied:false line per run, which is the acceptable cost. Malformed lines
+// (a partial write from a crashed run) are skipped rather than failing the
+// whole read, same tolerance follow-through.js's readTriggerFires uses for
+// its own jsonl.
 function readLoggedDocIds(path = WOULD_PROMOTE_LOG) {
   let text;
   try {
@@ -51,7 +57,7 @@ function readLoggedDocIds(path = WOULD_PROMOTE_LOG) {
     if (!line.trim()) continue;
     try {
       const row = JSON.parse(line);
-      if (row.doc_id != null) ids.add(row.doc_id);
+      if (row.doc_id != null && row.error == null) ids.add(row.doc_id);
     } catch {
       // skip
     }
@@ -173,12 +179,16 @@ function buildConfirmedBy(basis) {
 }
 
 // The same tier-promotion path kb_promote uses (src/tools.js), including the
-// vault-file rewrite. Once promoteDocumentTier lands the DB write, a vault
-// failure past that point (I/O, embeddings) must not be reported as a failed
-// promotion or abort the batch — same tolerance kb_promote's own
-// indexVaultForResponse helper gives the reindex half. promoteDocumentTier
-// itself is left to throw here: the caller's per-candidate try/catch is what
-// isolates that from the rest of the run.
+// vault-file rewrite — matched exactly, including which half of it is
+// tolerated: kb_promote only wraps indexVaultFile (via its own
+// indexVaultForResponse), never setNoteTier, so a setNoteTier failure there
+// escapes to the tool handler's own error response. Here it escapes to the
+// caller's per-candidate try/catch instead, which is what isolates it from
+// the rest of the run — and because the DB write already landed, that
+// failure leaves the vault file still claiming the old tier, so the next
+// real `kb vault reindex` (vault file is the source of truth) reverts the
+// DB tier back to inferred and this doc is a fresh candidate again next run.
+// promoteDocumentTier itself is left to throw for the same reason.
 //
 // Exported so a test can assert its outcome contract directly — in
 // particular that a doc gone by apply time (deleted, or promoted out from
@@ -191,13 +201,14 @@ export async function applyDecision(d) {
   const vf = getDb().prepare('SELECT vault_path FROM vault_files WHERE document_id = ?').get(d.doc_id);
   if (!vf) return { applied: true }; // no vault file for this note — recorded in the index only, same as kb_promote
 
+  const vaultPath = getVaultPath();
+  setNoteTier(vaultPath, vf.vault_path, { tier: doc.tier, ref: doc.tier_ref }); // unguarded, matching kb_promote
+
   try {
-    const vaultPath = getVaultPath();
-    setNoteTier(vaultPath, vf.vault_path, { tier: doc.tier, ref: doc.tier_ref });
     await indexVaultFile(vaultPath, vf.vault_path);
     return { applied: true };
   } catch (error) {
-    return { applied: true, error: `vault file not updated: ${error.message}` };
+    return { applied: true, error: `vault reindex failed: ${error.message}` };
   }
 }
 

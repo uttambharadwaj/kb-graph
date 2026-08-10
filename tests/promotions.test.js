@@ -488,3 +488,106 @@ describe('incremental audit log', () => {
     assert.strictEqual(lines.filter(l => l.doc_id === a || l.doc_id === b).length, 2, 'one line per candidate, written as the run went');
   });
 });
+
+describe('setNoteTier failure is not tolerated (matches kb_promote) and retries', () => {
+  // vault_files row with no file on disk at that path -> setNoteTier's
+  // readFileSync throws ENOENT. This is the deterministic, easily
+  // reproduced stand-in for any vault I/O failure past a landed DB write.
+  function seedDocWithMissingVaultFile(db, title) {
+    const doc = insertDoc(db, { title });
+    pushAndFollow(db, doc);
+    db.prepare(
+      'INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type, source) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run('missing/does-not-exist.md', 'hash', doc, title, 'lesson', 'test');
+    return doc;
+  }
+
+  async function runQuietly(args) {
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli(args);
+    } finally {
+      console.log = orig;
+    }
+  }
+
+  it('a setNoteTier failure yields applied:false + error, leaving the DB tier for a reindex to reconcile', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents; DELETE FROM vault_files;');
+    const doc = seedDocWithMissingVaultFile(db, 'vault file missing on disk');
+
+    await runQuietly([]);
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const line = lines.find(l => l.doc_id === doc);
+    assert.strictEqual(line.applied, false, 'an unguarded setNoteTier throw must not be reported as a successful apply');
+    assert.match(line.error, /ENOENT|no such file/i);
+    // promoteDocumentTier's DB write is not rolled back — that's the whole
+    // point of leaving the vault file to be the thing a future reindex
+    // reconciles against, matching kb_promote's own semantics.
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.OBSERVED);
+  });
+
+  it('an error-row candidate is retried next run, and succeeds once the underlying failure is fixed', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents; DELETE FROM vault_files;');
+    const doc = seedDocWithMissingVaultFile(db, 'retryable note');
+
+    await runQuietly([]); // first run: fails, applied:false + error
+
+    // Stand in for what the next real `kb vault reindex` would do: the
+    // vault file never got the tier written, so reindexing (source of
+    // truth) reverts the DB back to inferred.
+    db.prepare('UPDATE documents SET tier = ? WHERE id = ?').run(TIER.INFERRED, doc);
+
+    // Fix the underlying problem: the vault file now actually exists.
+    mkdirSync(join(process.env.OBSIDIAN_VAULT_PATH, 'missing'), { recursive: true });
+    writeFileSync(
+      join(process.env.OBSIDIAN_VAULT_PATH, 'missing/does-not-exist.md'),
+      '---\ntitle: "retryable note"\ntype: lesson\n---\n\nBody text.\n',
+    );
+
+    await runQuietly([]); // second run: same followed event, now retried
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const forDoc = lines.filter(l => l.doc_id === doc);
+    assert.strictEqual(forDoc.length, 2, 'the failed line does not block a second attempt from being logged too');
+    assert.strictEqual(forDoc[0].applied, false);
+    assert.strictEqual(forDoc[1].applied, true, 'retried and succeeded once the vault file existed');
+    assert.strictEqual(forDoc[1].error, undefined);
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.OBSERVED);
+  });
+});
+
+describe('dedup is unaffected for non-error rows', () => {
+  async function runQuietly(args) {
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli(args);
+    } finally {
+      console.log = orig;
+    }
+  }
+
+  it('a dry-run row and a pre-cutoff caveat row still dedup on rerun, since neither carries an error', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const dryRunDoc = insertDoc(db, { title: 'dry run dedup check' });
+    pushAndFollow(db, dryRunDoc, { session: 's-dry', eventId: 'e-dry' });
+    await runQuietly(['--dry-run']); // first pass, logs a dry-run row (applied:false, no error)
+
+    const preCutoffDoc = insertDoc(db, { title: 'pre-cutoff dedup check' });
+    writeFileSync(join(TRIGGERS_LOG_DIR, 'fires-2026-08-10.jsonl'), JSON.stringify({
+      ts: '2026-08-10T04:00:00.000Z', session: 's-cutoff', cwd: '/tmp', command: 'x', matched: [{ id: preCutoffDoc, hits: 1 }], emitted: true,
+    }) + '\n');
+    insertRetrieval(db, { docId: preCutoffDoc, surface: SURFACE.READ, session: 's-cutoff', created_at: '2026-08-10 04:05:00' });
+
+    await runQuietly([]); // second pass: default (apply) mode, both docs re-evaluated
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    assert.strictEqual(lines.filter(l => l.doc_id === dryRunDoc).length, 1, 'the dry-run row already logged it once — no error field, so it must still dedup');
+    assert.strictEqual(lines.filter(l => l.doc_id === preCutoffDoc).length, 1, 'the pre-cutoff caveat row has no error field either, and must dedup the same way');
+  });
+});
