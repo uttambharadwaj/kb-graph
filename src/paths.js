@@ -9,10 +9,12 @@ globalThis.__KB_PATHS_LOADED__ = true;
 const REAL_DEFAULT_KB_DIR = join(homedir(), '.knowledge-base');
 export const KB_DIR = process.env.KB_DIR || REAL_DEFAULT_KB_DIR;
 
-// ESM evaluates a module's static imports (in source order) before any of
-// its own top-level code, regardless of where that code sits in the file —
-// so "set env before the import" fixtures resolve too late. A test process
-// (node --test sets NODE_TEST_CONTEXT) must never land on the real KB dir.
+// ESM evaluates a module's imports before its own top-level code, regardless
+// of source position, so "set env before the import" fixtures run too late.
+// A test process (NODE_TEST_CONTEXT) must never resolve the real KB dir.
+// NODE_TEST_CONTEXT is an undocumented node:test internal (Node 22: "child-v8");
+// if a Node upgrade renames it this check silently disarms — tmp-kb.js's
+// load-order flag is the version-independent backstop.
 if (process.env.NODE_TEST_CONTEXT && KB_DIR === REAL_DEFAULT_KB_DIR) {
   throw new Error(
     'kb-graph: test process resolved KB_DIR to the real ~/.knowledge-base. ' +

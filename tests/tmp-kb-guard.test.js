@@ -1,5 +1,5 @@
-// Regression for kb lesson #3519: a fixture that imported src before setting
-// KB_DIR seeded the live ~/.knowledge-base and caused a ~1hr MCP outage.
+// Regression: a fixture that imported src before setting KB_DIR once seeded
+// the live ~/.knowledge-base and caused a ~1hr MCP outage.
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';

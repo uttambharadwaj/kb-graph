@@ -5,9 +5,8 @@ import { mkdtempSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-// If src/paths.js already ran, its KB_DIR const is bound and immutable —
-// we're too late. Catches the case where a src-reaching import is listed
-// before this one, even if it's positioned after in the source text.
+// If src/paths.js already ran, its KB_DIR const is already bound — catches
+// a src-reaching import listed before this one regardless of source order.
 if (globalThis.__KB_PATHS_LOADED__) {
   throw new Error(
     'tests/helpers/tmp-kb.js ran after src/paths.js already resolved ' +
