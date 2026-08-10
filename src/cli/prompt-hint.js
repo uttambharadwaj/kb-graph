@@ -6,6 +6,7 @@ import { relevantNotes } from '../hint-relevance.js';
 import { liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
+import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
 import { HOOK_ERROR_LOG, recordHookFailure, deliver } from './hook-io.js';
 
@@ -39,6 +40,11 @@ export async function promptHint() {
   try {
     const raw = await readStdin();
     const hookInput = JSON.parse(raw);
+    // Every prompt carries the true session id — refresh the claude_pid ->
+    // session_id map before anything else, so MCP-surface calls that land
+    // between this prompt and the next stay resolvable even if the rest of
+    // this hook declines below.
+    recordSessionMap(hookInput?.session_id);
     const prompt = hookInput?.prompt || '';
     // Too short to mean anything, a slash command with its own routing, or
     // something the harness said rather than the user.
