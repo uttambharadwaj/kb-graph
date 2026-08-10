@@ -345,12 +345,13 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
 
 // Shared with `kb promotions`: the exact hint and trigger fire-event join
 // followThroughReport runs (same exclusions, same 30min window, same session
-// grouping), minus the report's rate/CI bookkeeping — briefing is a push
-// surface with no reader intent behind it (see brief), so it's not part of
-// this join and never will be. Each returned event is one that was followed,
-// carrying the specific read that satisfied it (followingRead), because a
-// promotion decision is about which doc got acted on, not just that one of
-// several pushed docs did.
+// grouping), minus the report's rate/CI bookkeeping. Briefing is left out on
+// purpose — it's a push surface that arrives at SessionStart whether or not
+// the reader wanted it, so being followed says nothing about reliance the
+// way opening a specifically-pushed doc does. Each returned event is one
+// that was followed, carrying the specific read that satisfied it
+// (followingRead), because a promotion decision is about which doc got
+// acted on, not just that one of several pushed docs did.
 export function followedFireEvents(db = getDb(), { excludeSessions = [] } = {}) {
   const reads = readsBySession(db, excludeSessions);
 

@@ -1,15 +1,16 @@
-// `kb promotions` — dry-run for the promotion the outcome loop can now
+// `kb promotions` — dry-run for a promotion the follow-through join can now
 // support: a session followed a hint or trigger push and wasn't corrected.
-// That's the inferred->observed candidacy signal ("followed, not corrected"
-// is all the loop has) — see the outcome-loop brief's epistemic-tier section.
-// Briefing is deliberately excluded: mechanical exposure at SessionStart is
-// not an act of reliance the way opening a specific pushed doc is.
+// "Followed, not corrected" is the only confirmation signal retrieval logging
+// captures, and it proves exactly the observed bar — an agent saw the note
+// act out — not the verified one, which needs a landed fix or test this loop
+// has no way to name. Briefing is deliberately excluded: mechanical exposure
+// at SessionStart is not an act of reliance the way opening a specific
+// pushed doc is.
 //
 // This only ever LOGS what a live run would do. Nothing here calls
 // promoteDocumentTier or writes to `documents` — flipping to live is a
-// separate, deliberate change once the log looks sane (see brief). The one
-// thing this command writes is the jsonl log below; everything else is a
-// SELECT.
+// separate, deliberate change once the log looks sane. The one thing this
+// command writes is the jsonl log below; everything else is a SELECT.
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getDb } from '../db.js';
@@ -21,9 +22,7 @@ import { acceptFlags } from './flags.js';
 export const PROMOTIONS_LOG_DIR = join(LOGS_DIR, 'promotions');
 export const WOULD_PROMOTE_LOG = join(PROMOTIONS_LOG_DIR, 'would-promote.jsonl');
 
-// The only rank this dry-run ever proposes: "followed, not corrected" is
-// exactly the observed bar (an agent saw it act out), not the verified one
-// (which needs a landed fix/test this loop has no way to name).
+// The only rank this dry-run ever proposes — see the file header for why.
 const WOULD_BECOME = TIER.OBSERVED;
 
 // One line per doc_id ever, across every run this log has seen — a doc
