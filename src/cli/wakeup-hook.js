@@ -7,6 +7,7 @@ import { join } from 'path';
 import { getDb, getDocument, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
+import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 import { unresolvableHookCommands } from './setup-hooks.js';
 
@@ -73,6 +74,10 @@ export async function wakeupHook() {
   } catch {
     // fall through with hookInput = {}
   }
+  // Refresh the claude_pid -> session_id map on every SessionStart (startup,
+  // resume, clear, compact) — each of those can mint a fresh id without a
+  // fresh process, and this is one of the two places that ever sees it.
+  recordSessionMap(hookInput?.session_id);
   try {
     const db = getDb();
     const total = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;

@@ -21,6 +21,16 @@ function runHook(name, hookInput, extraEnv = {}) {
   });
 }
 
+// tests/helpers/fake-ps-claude/ps reports the hook subprocess's own $PPID as
+// a child of this fixed synthetic pid whose comm is "claude" — see that
+// file's header. Prepending its directory to PATH makes resolveClaudeAncestry
+// (src/process-ancestry.js) succeed deterministically for these tests, with
+// no real Claude Code CLI process required (CI has none).
+const FAKE_PS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'fake-ps-claude');
+const FAKE_PS_ENV = { PATH: `${FAKE_PS_DIR}:${process.env.PATH}` };
+const FAKE_CLAUDE_PID = 424242;
+const sessionMapFile = () => join(process.env.KB_DIR, 'session-map', `${FAKE_CLAUDE_PID}.json`);
+
 // Our own `claude -p` subprocesses inherit the user's hooks despite the
 // --settings '{"hooks":{}}' they are spawned with. Without this gate the hooks
 // brief and hint a model that has no tools to act on either, and the read-path
@@ -211,6 +221,26 @@ describe('prompt-hint retrieval logging', () => {
     assert.ok(row, 'expected a miss row for a prompt that surfaced nothing');
     assert.strictEqual(row.doc_id, null, 'a miss is recorded as a NULL doc_id, not an absent row');
     assert.strictEqual(row.query, prompt);
+  });
+});
+
+describe('prompt-hint session-map write', () => {
+  it('skips the session-map write (and its ps cost) for a prompt short enough to decline the hint', () => {
+    assert.strictEqual(existsSync(sessionMapFile()), false, 'precondition: no prior write for this fixture pid');
+    runHook('prompt-hint', { session_id: 'sess-trivial', prompt: 'hi' }, FAKE_PS_ENV);
+    assert.strictEqual(existsSync(sessionMapFile()), false, 'a declined (too-short) prompt must not touch the session map');
+  });
+
+  it('writes the session map for a prompt long enough to be considered', () => {
+    runHook(
+      'prompt-hint',
+      { session_id: 'sess-real-prompt', prompt: 'a prompt long enough to clear the hint length gate' },
+      FAKE_PS_ENV,
+    );
+    assert.ok(existsSync(sessionMapFile()), 'expected a session-map entry after a non-trivial prompt');
+    const entry = JSON.parse(readFileSync(sessionMapFile(), 'utf8'));
+    assert.strictEqual(entry.pid, FAKE_CLAUDE_PID);
+    assert.strictEqual(entry.session_id, 'sess-real-prompt');
   });
 });
 

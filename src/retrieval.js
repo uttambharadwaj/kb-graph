@@ -4,6 +4,8 @@
 // surface funnels through logRetrieval so `surface` values and `session`
 // derivation can't drift between call sites.
 import { getDb } from './db.js';
+import { resolveClaudeAncestry } from './process-ancestry.js';
+import { resolveMapEntry } from './session-map.js';
 
 // Named individually so the report's SQL can reference a surface instead of
 // restating the literal: a rename there would otherwise report zero rather
@@ -62,11 +64,43 @@ export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
 // session_id from Claude Code's hook stdin JSON is the only *documented*
 // source — stable across every hook fired in one session. Stdio MCP
 // subprocesses (kb_read/kb_search/kb_context handlers) get no such id from
-// Claude Code itself, so those calls fall back to CLAUDE_CODE_SESSION_ID,
-// which is set in some orchestration contexts (subagent/background jobs)
-// and absent in a plain interactive session — best-effort, not a guarantee.
-export function resolveSessionId(hookInput = null) {
-  return hookInput?.session_id || process.env.CLAUDE_CODE_SESSION_ID || null;
+// Claude Code itself.
+//
+// They used to fall back to CLAUDE_CODE_SESSION_ID, but the MCP server
+// process is long-lived and one process hosts many session ids over time
+// (/clear and compaction mint a new id without a new process) — an env var
+// captured at server-spawn time goes stale, and every call after the first
+// stamped a frozen, wrong id. Instead: the hook entrypoints
+// (prompt-hint.js, wakeup-hook.js) write claude_pid -> session_id into
+// session-map.js every time they run, keyed on the pid of the Claude Code
+// CLI process found by walking their own ancestry (process-ancestry.js);
+// this walks the SAME ancestry from the server side and reads it back.
+//
+// Ancestry (which pid is our claude-harness ancestor, and its start time) is
+// resolved once and reused for the life of the process — it cannot change
+// while this process is alive. The map FILE at that pid is re-read on every
+// call, since the session id behind one pid is exactly what changes.
+let cachedAncestry = null;
+function defaultAncestry() {
+  if (!cachedAncestry) cachedAncestry = resolveClaudeAncestry();
+  return cachedAncestry;
+}
+
+// No env fallback: CLAUDE_CODE_SESSION_ID is set in some orchestration
+// contexts (subagent/background jobs) and absent in a plain interactive
+// session, but nothing about its presence proves it's *current* for this
+// process — a stale value inherited from a parent environment reads
+// identically to a fresh one. A pid_start-mismatched map entry names a dead
+// process's session id, and corroborating env against it just re-admits the
+// same stale-id failure mode this walk exists to kill — stale is worse than
+// NULL, which is the whole premise of the switch away from the env var.
+// Only a pid_start-verified map hit is trusted; anything else is NULL.
+export function resolveSessionId(hookInput = null, { getAncestry = defaultAncestry } = {}) {
+  if (hookInput?.session_id) return hookInput.session_id;
+  const { claudePid, pidStart } = getAncestry();
+  if (claudePid == null) return null;
+  const { entry, pidStartOk } = resolveMapEntry(claudePid, pidStart);
+  return entry && pidStartOk ? entry.session_id : null;
 }
 
 // Never let telemetry break a read: insert failures are swallowed so the

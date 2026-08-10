@@ -6,6 +6,7 @@ import { relevantNotes } from '../hint-relevance.js';
 import { liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
+import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
 import { HOOK_ERROR_LOG, recordHookFailure, deliver } from './hook-io.js';
 
@@ -41,10 +42,19 @@ export async function promptHint() {
     const hookInput = JSON.parse(raw);
     const prompt = hookInput?.prompt || '';
     // Too short to mean anything, a slash command with its own routing, or
-    // something the harness said rather than the user.
+    // something the harness said rather than the user. Checked before the
+    // session-map write below: that write costs a `ps` call, and the large
+    // majority of prompts hitting this hook are short/slash-command noise —
+    // no reason to pay it on ones this hook is about to decline anyway.
+    // wakeup-hook.js's SessionStart fires far less often, so it keeps its
+    // write unconditional.
     const trimmed = prompt.trim();
     if (trimmed.length < 20 || trimmed.startsWith('/') || HARNESS_ENVELOPE.test(trimmed)) process.exit(0);
 
+    // Every prompt that reaches here carries the true session id — refresh
+    // the claude_pid -> session_id map so MCP-surface calls landing before
+    // the next prompt stay resolvable.
+    recordSessionMap(hookInput?.session_id);
     const results = relevantNotes(prompt, { limit: MAX_HINTS });
     // A prompt the KB had nothing for is the measurement, not the absence of one:
     // logging only the times we fired leaves a hit rate with no denominator, and
