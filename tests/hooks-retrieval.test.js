@@ -83,6 +83,72 @@ describe('wakeup-hook retrieval logging', () => {
   });
 });
 
+function insertStateNote(db, { title, content, updatedAt }) {
+  const doc = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES (?, ?, 'note')`).run(title, content);
+  if (updatedAt) db.prepare('UPDATE documents SET updated_at = ? WHERE id = ?').run(updatedAt, doc.lastInsertRowid);
+  db.prepare(
+    `INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type) VALUES (?, ?, ?, ?, 'state')`
+  ).run(`state/${doc.lastInsertRowid}.md`, `hash-${doc.lastInsertRowid}`, doc.lastInsertRowid, title);
+  return doc.lastInsertRowid;
+}
+
+describe('wakeup-hook post-compact recovery', () => {
+  it('appends the active state note content when source is compact', () => {
+    const db = getDb();
+    // Fixed far-future date so this note unambiguously outranks whatever
+    // other tests in this file have already inserted with "now" timestamps.
+    insertStateNote(db, { title: 'State: recovery test', content: 'body worth recovering', updatedAt: '2031-01-01T00:00:00Z' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-compact-basic', source: 'compact' });
+
+    assert.match(stdout, /--- Active workstream state \(post-compact recovery\): State: recovery test \(#\d+\) ---/);
+    assert.match(stdout, /body worth recovering/);
+  });
+
+  it('does not append anything when source is not compact', () => {
+    const db = getDb();
+    insertStateNote(db, { title: 'State: no injection', content: 'should not appear' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-not-compact' });
+
+    assert.doesNotMatch(stdout, /post-compact recovery/);
+    assert.doesNotMatch(stdout, /should not appear/);
+  });
+
+  it('prefers the state note this session read over the most recently updated one', () => {
+    const db = getDb();
+    const older = insertStateNote(db, { title: 'State: session read', content: 'what this session was actually doing', updatedAt: '2020-01-01T00:00:00Z' });
+    // Deliberately the most-recently-updated live state note in the whole DB —
+    // the fallback path would pick this one. A genuine session-scoped read
+    // must win over it.
+    insertStateNote(db, { title: 'State: unrelated newer', content: 'a different workstream', updatedAt: '2032-01-01T00:00:00Z' });
+
+    // Simulate this session having read the older note earlier (e.g. via kb_read).
+    // Must be a READ surface, not 'briefing' — the hook's own states loop logs
+    // BRIEFING rows for every live state under the current session on every
+    // run, so a query that didn't filter by surface would just match its own push.
+    db.prepare("INSERT INTO retrievals (doc_id, surface, session) VALUES (?, 'kb_read', ?)").run(older, 'sess-scoped-pick');
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-scoped-pick', source: 'compact' });
+
+    assert.match(stdout, /State: session read/);
+    assert.match(stdout, /what this session was actually doing/);
+    assert.doesNotMatch(stdout, /a different workstream/);
+  });
+
+  it('truncates the injected note at the cap and points at kb_read for the rest', () => {
+    const db = getDb();
+    const longContent = 'x'.repeat(7000);
+    const id = insertStateNote(db, { title: 'State: oversized', content: longContent, updatedAt: '2033-01-01T00:00:00Z' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-truncate', source: 'compact' });
+
+    assert.match(stdout, new RegExp(`\\[truncated at 6000 chars — kb_read\\(${id}\\) for the rest\\]`));
+    assert.ok(!stdout.includes(longContent), 'full untruncated content should not appear');
+    assert.ok(stdout.includes('x'.repeat(6000)), 'truncated content up to the cap should appear');
+  });
+});
+
 describe('prompt-hint retrieval logging', () => {
   it('logs a hint row per surfaced doc id, carrying the prompt as query and the hook session id', () => {
     const db = getDb();

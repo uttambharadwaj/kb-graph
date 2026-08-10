@@ -4,11 +4,41 @@
 import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { getDb, getHealth, liveTierCounts } from '../db.js';
+import { getDb, getDocument, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
-import { SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
+import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 import { unresolvableHookCommands } from './setup-hooks.js';
+
+// Post-compact context loses everything not in the transcript summary,
+// including which workstream was active. Prefer the state note this session
+// itself read (a compact can land on a note that isn't the freshest overall);
+// fall back to the same "most recent" note the briefing's `states` list
+// already surfaces.
+//
+// Must filter to READ_SURFACES, not any retrieval: this same function runs
+// after the states loop below has already logged BRIEFING rows for the
+// current session, so an unfiltered query would just match its own push.
+function activeStateNote(db, session, states) {
+  if (session) {
+    const placeholders = READ_SURFACES.map(() => '?').join(', ');
+    const hit = db.prepare(`
+      SELECT vf.document_id, vf.title
+      FROM retrievals r
+      JOIN vault_files vf ON vf.document_id = r.doc_id
+      JOIN documents d ON d.id = vf.document_id
+      WHERE r.session = ? AND r.surface IN (${placeholders}) AND vf.note_type = 'state' AND d.superseded_at IS NULL
+      ORDER BY r.created_at DESC
+      LIMIT 1
+    `).get(session, ...READ_SURFACES);
+    if (hit) return hit;
+  }
+  return states[0] ? { document_id: states[0].document_id, title: states[0].title } : null;
+}
+
+// Cap so a large state note can't itself blow the post-compact context budget
+// — this is injected on top of a context that just got compacted for size.
+const ACTIVE_NOTE_CAP = 6000;
 
 // A hook whose paths have gone stale fails exactly like one with nothing to
 // say, so the only place it can surface is a briefing that goes looking. This
@@ -89,6 +119,30 @@ export async function wakeupHook() {
       ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`),
       'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity). Capture learnings at session end via /debrief.',
     ];
+
+    if (hookInput.source === 'compact') {
+      try {
+        const active = activeStateNote(db, session, states);
+        const doc = active ? getDocument(active.document_id) : null;
+        if (doc?.content) {
+          const truncated = doc.content.length > ACTIVE_NOTE_CAP;
+          const body = truncated ? doc.content.slice(0, ACTIVE_NOTE_CAP) : doc.content;
+          // Already logged above if this note is also in `states`; log it here
+          // only when it isn't, so the session-scoped pick doesn't double-count.
+          if (!states.some(s => s.document_id === active.document_id)) {
+            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session });
+          }
+          lines.push(
+            `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,
+            body,
+            ...(truncated ? [`[truncated at ${ACTIVE_NOTE_CAP} chars — kb_read(${active.document_id}) for the rest]`] : []),
+          );
+        }
+      } catch {
+        // Never let post-compact recovery be the reason the briefing fails.
+      }
+    }
+
     console.log(lines.join('\n'));
   } catch {
     // Never block session start on KB problems.
