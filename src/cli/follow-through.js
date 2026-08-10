@@ -68,7 +68,11 @@ function groupEvents(rows) {
     const key = eventKey(row);
     let ev = events.get(key);
     if (!ev) {
-      ev = { session: row.session, surface: row.surface, query: row.query, createdAt: row.created_at, docIds: new Set(), isTest: false };
+      // `key` (the same id/reconstructed string groupEvents keys the Map on)
+      // rides along on the event itself — `kb promotions` needs it to name
+      // what a would-promote decision is about; nothing else reads it, so
+      // adding it here doesn't touch any existing consumer's shape.
+      ev = { key, session: row.session, surface: row.surface, query: row.query, createdAt: row.created_at, docIds: new Set(), isTest: false };
       events.set(key, ev);
     }
     if (row.doc_id != null) ev.docIds.add(row.doc_id);
@@ -130,6 +134,23 @@ function markFollowed(event, reads) {
   }
   event.followed30 = followed30;
   event.followedUnbounded = followedUnbounded;
+}
+
+// The specific read that makes an already-followed30 event followed — same
+// predicate as markFollowed's loop, kept separate rather than folded into it
+// so markFollowed's own boolean-only behavior (and therefore every existing
+// follow-through output) doesn't move. Only meaningful after markFollowed has
+// set followed30 true; returns the first in-window match found, which exists
+// by construction whenever it's called.
+function followingRead(event, reads) {
+  const t0 = toMs(event.createdAt);
+  for (const r of reads) {
+    if (!event.docIds.has(r.doc_id)) continue;
+    const t1 = toMs(r.created_at);
+    if (t1 < t0 || t1 - t0 > WINDOW_MS) continue;
+    return r;
+  }
+  return null;
 }
 
 function readRows(db, surfaces, excludeSessions) {
@@ -267,7 +288,10 @@ function triggerEvents(excludeSessions) {
     if (excluded.has(row.session)) continue;
     const firedId = row.matched?.[0]?.id;
     if (firedId == null) continue;
-    events.push({ session: row.session, createdAt: row.ts, docIds: new Set([firedId]) });
+    // Trigger fires have no event_id (no DB row at all — see file header), so
+    // `key` is a reconstructed session|timestamp pair, same spirit as the
+    // legacy branch of eventKey. Only `kb promotions` reads it.
+    events.push({ key: `trigger:${row.session}|${row.ts}`, session: row.session, createdAt: row.ts, docIds: new Set([firedId]) });
   }
   return events;
 }
@@ -317,6 +341,29 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
     },
     uncertainty: uncertainty && { nEvents: uncertainty.nEvents, nClusters: uncertainty.nClusters, lo: uncertainty.lo, hi: uncertainty.hi, seed: uncertainty.seed, iterations: uncertainty.iterations },
   };
+}
+
+// Shared with `kb promotions`: the exact hint and trigger fire-event join
+// followThroughReport runs (same exclusions, same 30min window, same session
+// grouping), minus the report's rate/CI bookkeeping — briefing is a push
+// surface with no reader intent behind it (see brief), so it's not part of
+// this join and never will be. Each returned event is one that was followed,
+// carrying the specific read that satisfied it (followingRead), because a
+// promotion decision is about which doc got acted on, not just that one of
+// several pushed docs did.
+export function followedFireEvents(db = getDb(), { excludeSessions = [] } = {}) {
+  const reads = readsBySession(db, excludeSessions);
+
+  const hint = surfaceStats(readRows(db, [SURFACE.HINT], excludeSessions), reads, { declines: true });
+
+  const trigger = triggerEvents(excludeSessions);
+  for (const ev of trigger) markFollowed(ev, reads.get(ev.session) || []);
+
+  const followedOnly = events => events
+    .filter(e => e.followed30)
+    .map(e => ({ ...e, followingRead: followingRead(e, reads.get(e.session) || []) }));
+
+  return { hint: followedOnly(hint.fireEvents), trigger: followedOnly(trigger) };
 }
 
 function printSurface(label, s) {
@@ -374,4 +421,4 @@ export function runFollowThroughCli(args = []) {
 
 // Exported for direct unit testing of the pieces `followThroughReport`
 // composes, rather than only through the CLI's stdout/JSON.
-export { readTriggerFires, triggerEvents, clusterBootstrapCI, groupEvents, classify };
+export { readTriggerFires, triggerEvents, clusterBootstrapCI, groupEvents, classify, toMs };

@@ -76,6 +76,11 @@ const COMMANDS = {
     boolean: ['--json'],
     run: a => import('../src/cli/follow-through.js').then(m => m.runFollowThroughCli(a)),
   },
+  promotions: {
+    summary: 'Dry-run: log inferred docs that a followed hint/trigger push would promote to observed, without applying it (--json for machine-readable)',
+    boolean: ['--json'],
+    run: a => import('../src/cli/promotions.js').then(m => m.runPromotionsCli(a)),
+  },
   'surface-report': {
     summary: 'Per-tool and per-model-caller demand, failures and latency, plus where the duplicate threshold really sits',
     run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),
