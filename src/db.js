@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'crypto';
 import { statSync } from 'fs';
 import { DB_PATH } from './paths.js';
 import { normalizeTagString, splitTags, canonicalTag, tagSpellings, getTagAliasMap } from './tags.js';
@@ -663,7 +664,10 @@ export function preferConfirmed(results) {
 // surface label. See logRetrievalResults for when to log here vs. yourself.
 export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false, surface = null } = {}) {
   const results = ftsSearch(query, limit, { tags, includeSuperseded });
-  logRetrievalResults({ results, surface, query });
+  // One id per call, not per row: two calls landing in the same session in
+  // the same second are otherwise indistinguishable to a report that has to
+  // reconstruct events from (session, surface, timestamp).
+  logRetrievalResults({ results, surface, query, eventId: randomUUID() });
   return results;
 }
 

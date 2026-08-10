@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { generateEmbedding, cosineSimilarity, bufferToEmbedding } from './embed.js';
 import { getDb } from '../db.js';
 import { byScoreThenTier, RANK_BUCKET, SCORE_BUCKET } from '../tiers.js';
@@ -215,6 +216,6 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
   // Logged on the fused set, not on the FTS half inside searchDocuments: the
   // semantic-only hits never pass through that call, and the FTS hits the
   // fusion drops are never returned to anyone.
-  logRetrievalResults({ results: ranked, surface, query });
+  logRetrievalResults({ results: ranked, surface, query, eventId: randomUUID() });
   return ranked;
 }

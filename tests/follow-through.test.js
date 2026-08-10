@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { initSchema } from '../src/db.js';
 import { isTestSession, SURFACE } from '../src/retrieval.js';
@@ -208,6 +208,23 @@ describe('followThroughReport: pull benchmark (kb_search)', () => {
     assert.strictEqual(pullBenchmark.followed30, 1);
   });
 
+  // The HIGH from the adversarial review: two DIFFERENT legacy (event_id
+  // NULL) search calls landing in the same session in the same second used
+  // to collapse into one event under (session, surface, created_at) alone —
+  // 14/115 live events held 2-3 distinct query strings before this fix.
+  // Folding query into the key separates them; write-path event_id (see
+  // db.js's searchDocuments) is the real fix for rows written after it.
+  it('two distinct same-second search calls (no event_id, different queries) reconstruct as two events, not one', () => {
+    const db = freshDb();
+    const docA = insertDoc(db, { title: 'a' });
+    const docB = insertDoc(db, { title: 'b' });
+    insertRetrieval(db, { docId: docA, surface: SURFACE.SEARCH, session: 's1', query: 'first query', created_at: '2026-08-01 10:00:00' });
+    insertRetrieval(db, { docId: docB, surface: SURFACE.SEARCH, session: 's1', query: 'second query', created_at: '2026-08-01 10:00:00' });
+
+    const { pullBenchmark } = followThroughReport(db);
+    assert.strictEqual(pullBenchmark.events, 2, 'same second, different queries -> two calls, not one');
+  });
+
   it('a search miss (doc_id NULL) is not counted as a fire', () => {
     const db = freshDb();
     insertRetrieval(db, { docId: null, surface: SURFACE.SEARCH, session: 's1', query: 'nothing found', created_at: '2026-08-01 10:00:00' });
@@ -253,6 +270,36 @@ describe('followThroughReport: trigger surface (fires-*.jsonl)', () => {
     const rows = readTriggerFires();
     assert.ok(rows.some(r => r.session === 's1'));
   });
+
+  // Adversarial-review LOW: PR #87 (honest session identity) fixed
+  // kb_read/rest_read's session logging on 2026-08-10 04:46 UTC. A trigger
+  // fire from before that can join against a read logged under a now-stale
+  // session id, so the report must say so rather than present the number as
+  // clean.
+  it('flags the trigger section when a fire predates the honest-session-id fix', () => {
+    mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
+    writeFileSync(join(TRIGGERS_LOG_DIR, 'fires-2026-08-03.jsonl'), fireLine({
+      ts: '2026-08-03T00:00:00.000Z', session: 'pre-cutoff-session', matched: [{ id: 1, hits: 1 }], emitted: true,
+    }) + '\n');
+
+    const { trigger } = followThroughReport(freshDb());
+    assert.ok(trigger.preCutoffCaveat, 'a pre-cutoff fire must produce a non-null caveat string');
+  });
+
+  it('does not flag the trigger section when every fire is after the cutoff', () => {
+    // Earlier tests in this file share TRIGGERS_LOG_DIR (one KB_DIR per test
+    // file, see tmp-kb.js) and left pre-cutoff fixtures behind; readTriggerFires
+    // reads every fires-*.jsonl in the directory, so this test needs a clean
+    // one to make a true claim about "no pre-cutoff fires anywhere".
+    rmSync(TRIGGERS_LOG_DIR, { recursive: true, force: true });
+    mkdirSync(TRIGGERS_LOG_DIR, { recursive: true });
+    writeFileSync(join(TRIGGERS_LOG_DIR, 'fires-2026-08-11.jsonl'), fireLine({
+      ts: '2026-08-11T00:00:00.000Z', session: 'post-cutoff-session', matched: [{ id: 1, hits: 1 }], emitted: true,
+    }) + '\n');
+
+    const { trigger } = followThroughReport(freshDb());
+    assert.strictEqual(trigger.preCutoffCaveat, null);
+  });
 });
 
 describe('cluster-bootstrap CI reproducibility', () => {
@@ -294,10 +341,12 @@ describe('--json output shape', () => {
 
     const report = followThroughReport(db);
     const roundTripped = JSON.parse(JSON.stringify(report));
-    assert.deepStrictEqual(Object.keys(roundTripped).sort(), ['briefing', 'hint', 'pullBenchmark', 'trigger', 'uncertainty'].sort());
+    assert.deepStrictEqual(Object.keys(roundTripped).sort(), ['briefing', 'hint', 'pullBenchmark', 'trigger', 'uncertainty', 'windowNote'].sort());
     assert.ok(!('fireEvents' in roundTripped.hint), 'internal working set must not leak into the report');
     for (const surface of [roundTripped.hint, roundTripped.briefing, roundTripped.pullBenchmark]) {
       assert.ok('events' in surface && 'excluded' in surface && 'followed30' in surface && 'followedUnbounded' in surface);
     }
+    assert.strictEqual(typeof roundTripped.windowNote, 'string');
+    assert.ok('preCutoffCaveat' in roundTripped.trigger);
   });
 });

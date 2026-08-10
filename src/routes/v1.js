@@ -1,5 +1,6 @@
 // src/routes/v1.js
 import { Router } from 'express';
+import { randomUUID } from 'crypto';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -68,7 +69,7 @@ router.get('/search', (req, res) => {
 
     // Logged after filtering, so no surface on the search above: a doc the
     // type/project filter dropped was never shown to the caller.
-    logRetrievalResults({ results, surface: SURFACE.REST_SEARCH, query: q });
+    logRetrievalResults({ results, surface: SURFACE.REST_SEARCH, query: q, eventId: randomUUID() });
     res.json({ results });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -123,7 +124,7 @@ router.get('/context', async (req, res) => {
     }
 
     // Same reason as /search: log the post-filter set, not the search's.
-    logRetrievalResults({ results: filtered, surface: SURFACE.REST_CONTEXT, query: q });
+    logRetrievalResults({ results: filtered, surface: SURFACE.REST_CONTEXT, query: q, eventId: randomUUID() });
 
     // Pull summaries from vault_files table for matched documents
     const db = getDb();

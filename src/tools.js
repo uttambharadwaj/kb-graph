@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { homedir } from 'os';
 import { searchDocuments, listDocuments, getDocument, getStats, getDb, getHealth, liveTierCounts, supersedeDocument, supersedeCandidates, promoteDocumentTier, tagCounts } from './db.js';
@@ -176,7 +177,7 @@ function defineTools() {
           // there is no document to have been retrieved, and a miss row would
           // claim the caller asked for one.
           if (result.bridge_docs) {
-            logRetrievalResults({ results: result.bridge_docs, surface: SURFACE.TUNNELS, query: `${from} -> ${to}` });
+            logRetrievalResults({ results: result.bridge_docs, surface: SURFACE.TUNNELS, query: `${from} -> ${to}`, eventId: randomUUID() });
           }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
@@ -644,7 +645,7 @@ function defineTools() {
           // Logged here rather than by threading a surface into the search:
           // the project/type pass appends docs the search never returned, and
           // the briefing set is what the caller actually gets.
-          logRetrievalResults({ results: briefings, surface: SURFACE.CONTEXT, query });
+          logRetrievalResults({ results: briefings, surface: SURFACE.CONTEXT, query, eventId: randomUUID() });
 
           const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful. tier "${DEFAULT_TIER}" means ${TIER_MEANING[DEFAULT_TIER]}.`;
           return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(briefings, null, 2) }] };

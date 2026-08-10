@@ -5,13 +5,23 @@
 //
 // UNIT = event, not row. A hint prompt writes up to MAX_HINTS doc rows (or one
 // null-doc decline row); a briefing SessionStart writes one row per state
-// note. Migration 17 (see db.js) started stamping those rows with a shared
-// event_id at write time; rows written before it carry event_id NULL and are
-// reconstructed by (session, surface, created_at) — the same batching every
-// pre-migration caller already used, since a decision's rows are inserted in
-// one synchronous loop and land on the same DB-side timestamp. A surface that
-// only ever writes one row per call (kb_read) gets one-row groups for free
-// from the same key, so nothing surface-specific is needed to handle it.
+// note; a kb_search/kb_context/kb_tunnels call writes one row per result.
+// Every one of those write sites now stamps a shared event_id at call time
+// (see retrieval.js's logRetrievalResults doc comment); rows written before
+// that carry event_id NULL and are reconstructed from (session, surface,
+// created_at, query) — the same batching every pre-event_id caller already
+// used, since one call's rows are inserted in a single synchronous loop and
+// land on the same DB-side timestamp with the same query string. query is
+// folded into the legacy key (not just session/surface/timestamp) because two
+// DIFFERENT calls in the same session in the same second are otherwise
+// indistinguishable from one call with several results. Rows from one real
+// call always share one query, so this can only ever separate two calls that
+// were wrongly merged before — it can never split a real call's own rows
+// apart. It is not a complete fix: two different calls in the same second
+// with the identical query string still merge, which is the residual risk
+// event_id at write time is the actual fix for. A surface that only ever
+// writes one row per call (kb_read) gets one-row groups for free from the
+// same key, so nothing surface-specific is needed to handle it.
 import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getDb } from '../db.js';
@@ -42,12 +52,14 @@ function toMs(ts) {
 }
 
 // One key per decision: event_id when the row has one, else the
-// (session, surface, created_at) triple every legacy caller already batched
-// on. Rows with no session collapse together under this key regardless of
-// surface/time — harmless, since NULL-session events are reported as
+// (session, surface, created_at, query) quadruple every legacy caller already
+// batched on — query included because same-second parallel calls on a
+// multi-row surface are otherwise indistinguishable (see the file header).
+// Rows with no session collapse together under this key regardless of
+// surface/time/query — harmless, since NULL-session events are reported as
 // unattributable and excluded from every rate below, never joined.
 function eventKey(row) {
-  return row.event_id != null ? `id:${row.event_id}` : `ts:${row.session}|${row.surface}|${row.created_at}`;
+  return row.event_id != null ? `id:${row.event_id}` : `ts:${row.session}|${row.surface}|${row.created_at}|${row.query}`;
 }
 
 function groupEvents(rows) {
@@ -260,6 +272,16 @@ function triggerEvents(excludeSessions) {
   return events;
 }
 
+// kb-graph PR #87 (merged 2026-08-10 04:46:50 UTC) fixed session identity for
+// MCP-surface reads (kb_read/rest_read): before it, those rows could carry a
+// stale session id frozen at server-spawn time, while trigger-hook always had
+// the current one straight off hook stdin. A trigger fire from before the cut
+// can join against a read whose logged session no longer matches its own —
+// an honest under-count, not a bug in this file, but one the reader can't see
+// without being told. Hard-coded to the fix's landing time rather than
+// derived, since it names a point in history, not a property of the data.
+const HONEST_SESSION_ID_CUTOFF_MS = Date.parse('2026-08-10T04:46:50Z');
+
 export function followThroughReport(db = getDb(), { excludeSessions = [] } = {}) {
   const reads = readsBySession(db, excludeSessions);
 
@@ -270,6 +292,7 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
   const trigger = triggerEvents(excludeSessions);
   for (const ev of trigger) markFollowed(ev, reads.get(ev.session) || []);
   const triggerFollowed30 = trigger.filter(e => e.followed30).length;
+  const preCutoff = trigger.some(e => toMs(e.createdAt) < HONEST_SESSION_ID_CUTOFF_MS);
 
   const uncertainty = clusterBootstrapCI(hint.fireEvents);
 
@@ -279,6 +302,7 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
   const strip = ({ fireEvents: _drop, ...rest }) => rest;
 
   return {
+    windowNote: `window: ${WINDOW_MS / 60000}min canonical; unbounded is shown alongside for continuity with earlier ad hoc measurements, which were unbounded — expect the canonical rate to read a few points below it, not as a regression`,
     hint: strip(hint),
     briefing: strip(briefing),
     pullBenchmark: strip(pull),
@@ -287,6 +311,9 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
       followed30: triggerFollowed30,
       followedUnbounded: trigger.filter(e => e.followedUnbounded).length,
       rate30: pct(triggerFollowed30, trigger.length),
+      preCutoffCaveat: preCutoff
+        ? 'includes fire(s) from before the honest-session-id fix (kb-graph #87, 2026-08-10 04:46 UTC) — the read side of the join for those may be under-counted, see source comment'
+        : null,
     },
     uncertainty: uncertainty && { nEvents: uncertainty.nEvents, nClusters: uncertainty.nClusters, lo: uncertainty.lo, hi: uncertainty.hi, seed: uncertainty.seed, iterations: uncertainty.iterations },
   };
@@ -301,7 +328,8 @@ function printSurface(label, s) {
 function printReport(report) {
   console.log('KB Follow-Through Report');
   console.log('=========================');
-  console.log('Push surfaces (hint fires ANY of its docs read = followed):');
+  console.log(report.windowNote);
+  console.log('\nPush surfaces (hint fires ANY of its docs read = followed):');
   printSurface('hint', report.hint);
   printSurface('briefing', report.briefing);
 
@@ -310,6 +338,7 @@ function printReport(report) {
 
   console.log(`\nTrigger surface (${report.trigger.events} delivered warnings — small n, read the counts not just the rate):`);
   console.log(`  followed (30min): ${report.trigger.followed30}/${report.trigger.events} (${report.trigger.rate30}) — unbounded: ${report.trigger.followedUnbounded}/${report.trigger.events}`);
+  if (report.trigger.preCutoffCaveat) console.log(`  ⚠ ${report.trigger.preCutoffCaveat}`);
 
   if (report.uncertainty) {
     const u = report.uncertainty;
