@@ -6,9 +6,9 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { initSchema, getDb } from '../src/db.js';
 import { SURFACE } from '../src/retrieval.js';
-import { TIER } from '../src/tiers.js';
+import { REF_MAX_CHARS, TIER } from '../src/tiers.js';
 import {
-  computePromotionDecisions, runPromotionsCli, PROMOTIONS_LOG_DIR, WOULD_PROMOTE_LOG,
+  applyDecision, computePromotionDecisions, runPromotionsCli, PROMOTIONS_LOG_DIR, WOULD_PROMOTE_LOG,
 } from '../src/cli/promotions.js';
 import { TRIGGERS_LOG_DIR } from '../src/cli/trigger-hook.js';
 
@@ -361,5 +361,130 @@ describe('pre-cutoff exception', () => {
     const line = lines.find(l => l.doc_id === doc);
     assert.strictEqual(line.applied, false);
     assert.match(line.basis.caveat, /pre-honest-session-id/);
+  });
+});
+
+describe('confirmed_by clamping', () => {
+  it('a legacy hint key with a very long query is truncated to fit REF_MAX_CHARS, and still applies', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'long-query note' });
+    // event_id NULL -> follow-through's eventKey falls back to
+    // ts:${session}|hint|${created_at}|${query}, embedding the query
+    // verbatim. 400 chars alone overflows confirmed_by's ~150 chars of
+    // fixed prefix/suffix past REF_MAX_CHARS (500).
+    insertRetrieval(db, { docId: doc, surface: SURFACE.HINT, session: 's1', query: 'x'.repeat(400), eventId: null, created_at: '2026-08-10 10:00:00' });
+    insertRetrieval(db, { docId: doc, surface: SURFACE.READ, session: 's1', created_at: '2026-08-10 10:05:00' });
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    const row = db.prepare('SELECT tier, tier_ref FROM documents WHERE id = ?').get(doc);
+    assert.strictEqual(row.tier, TIER.OBSERVED, 'clamping must let the candidate through, not poison it');
+    assert.ok(row.tier_ref.length <= REF_MAX_CHARS, `tier_ref is ${row.tier_ref.length} chars, over the ${REF_MAX_CHARS} limit`);
+    assert.match(row.tier_ref, /…, session s1, followed/, 'the query tail is clipped with an ellipsis, session/followed_at survive intact');
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const line = lines.find(l => l.doc_id === doc);
+    assert.strictEqual(line.applied, true);
+    assert.strictEqual(line.error, undefined);
+  });
+});
+
+describe('per-candidate error isolation', () => {
+  it('a candidate whose confirmed_by still overflows after clamping fails alone; clean candidates before and after still apply with audit lines', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    // Clamping only clips the event_id — session, followed_at and
+    // read_latency_s are kept intact by design (see buildConfirmedBy's
+    // comment), so a pathological session is the deterministic way to make
+    // confirmed_by overflow REF_MAX_CHARS even after the clamp: this is the
+    // isolation backstop's own test, not a regression of the clamp fix.
+    const before = insertDoc(db, { title: 'clean before' });
+    const poison = insertDoc(db, { title: 'poison' });
+    const after = insertDoc(db, { title: 'clean after' });
+    pushAndFollow(db, before, { session: 's-before', eventId: 'e-before' });
+    pushAndFollow(db, poison, { session: 's'.repeat(480), eventId: 'e-poison' });
+    pushAndFollow(db, after, { session: 's-after', eventId: 'e-after' });
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(before).tier, TIER.OBSERVED, 'the candidate before the poison one must still apply');
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(after).tier, TIER.OBSERVED, 'the candidate after the poison one must still apply');
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(poison).tier, TIER.INFERRED, 'the poison candidate itself must not be applied');
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const byDoc = Object.fromEntries(lines.map(l => [l.doc_id, l]));
+    assert.strictEqual(byDoc[before].applied, true);
+    assert.strictEqual(byDoc[after].applied, true);
+    assert.strictEqual(byDoc[poison].applied, false);
+    assert.match(byDoc[poison].error, /must record what confirmed/, 'the real promoteDocumentTier failure reason is preserved on the line');
+  });
+});
+
+describe('applyDecision outcome contract', () => {
+  it('a doc gone by apply time reports applied:false with a reason, never a bare success', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'vanishing note' });
+    pushAndFollow(db, doc);
+    const { candidates } = computePromotionDecisions(db);
+    assert.strictEqual(candidates.length, 1);
+
+    db.prepare('DELETE FROM documents WHERE id = ?').run(doc); // gone between compute and apply
+
+    const outcome = await applyDecision(candidates[0]);
+    assert.strictEqual(outcome.applied, false);
+    assert.match(outcome.error, /gone since the decision was computed/);
+  });
+
+  it('a vault-file failure past a successful DB promotion still reports applied:true, with the failure noted', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const doc = insertDoc(db, { title: 'no vault file for this one' });
+    pushAndFollow(db, doc);
+    const { candidates } = computePromotionDecisions(db);
+
+    // insertDoc never creates a vault_files row, so this exercises the
+    // "no vault file" branch, not a genuine I/O failure — applyDecision must
+    // still report applied:true either way, since the DB write is what
+    // makes a promotion real.
+    const outcome = await applyDecision(candidates[0]);
+    assert.strictEqual(outcome.applied, true);
+    assert.strictEqual(outcome.error, undefined);
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(doc).tier, TIER.OBSERVED);
+  });
+});
+
+describe('incremental audit log', () => {
+  it('every candidate this run gets its own log line, applied or not', async () => {
+    const db = getDb();
+    db.exec('DELETE FROM retrievals; DELETE FROM documents;');
+    const a = insertDoc(db, { title: 'first' });
+    const b = insertDoc(db, { title: 'second' });
+    pushAndFollow(db, a, { session: 's-a', eventId: 'e-a' });
+    pushAndFollow(db, b, { session: 's-b', eventId: 'e-b' });
+
+    const orig = console.log;
+    console.log = () => {};
+    try {
+      await runPromotionsCli([]);
+    } finally {
+      console.log = orig;
+    }
+
+    const lines = readFileSync(WOULD_PROMOTE_LOG, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    assert.strictEqual(lines.filter(l => l.doc_id === a || l.doc_id === b).length, 2, 'one line per candidate, written as the run went');
   });
 });

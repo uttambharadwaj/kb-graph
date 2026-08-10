@@ -19,7 +19,7 @@ import { join } from 'path';
 import { getDb, promoteDocumentTier } from '../db.js';
 import { LOGS_DIR } from '../paths.js';
 import { SURFACE } from '../retrieval.js';
-import { TIER } from '../tiers.js';
+import { REF_MAX_CHARS, TIER } from '../tiers.js';
 import { setNoteTier } from '../write-note.js';
 import { indexVaultFile } from '../vault/indexer.js';
 import { followedFireEvents, toMs } from './follow-through.js';
@@ -152,25 +152,59 @@ function surfaceOf(eventId) {
   return eventId.startsWith('trigger:') ? 'trigger' : SURFACE.HINT;
 }
 
+// A legacy hint key embeds the full retrieval query verbatim (eventKey in
+// follow-through.js: `ts:${session}|${surface}|${created_at}|${query}`), so
+// a long prompt can push confirmed_by past REF_MAX_CHARS — normalizeRef
+// refuses rather than truncates it (src/tiers.js), which would otherwise
+// throw promoteDocumentTier for every candidate whose query happened to be
+// long. Only the event_id's own tail is clipped; session, followed_at and
+// read_latency_s are never touched, so a pathological value in one of those
+// can still overflow — that is a real failure and is left to the
+// per-candidate isolation in runPromotionsCli rather than papered over here.
+function buildConfirmedBy(basis) {
+  const prefix = `Follow-through join: ${surfaceOf(basis.event_id)} event `;
+  const suffix = `, session ${basis.session}, followed ${basis.followed_at} ` +
+    `(read latency ${basis.read_latency_s}s); auto-applied by kb promotions`;
+  const budget = Math.max(0, REF_MAX_CHARS - prefix.length - suffix.length);
+  const eventId = basis.event_id.length > budget
+    ? `${basis.event_id.slice(0, Math.max(0, budget - 1))}…`
+    : basis.event_id;
+  return `${prefix}${eventId}${suffix}`;
+}
+
 // The same tier-promotion path kb_promote uses (src/tools.js), including the
-// vault-file rewrite, so a promotion made here survives the next reindex.
-async function applyDecision(d) {
-  const confirmedBy = `Follow-through join: ${surfaceOf(d.basis.event_id)} event ${d.basis.event_id}, ` +
-    `session ${d.basis.session}, followed ${d.basis.followed_at} (read latency ${d.basis.read_latency_s}s); ` +
-    `auto-applied by kb promotions`;
-  const doc = promoteDocumentTier(d.doc_id, { tier: d.would_become, confirmedBy });
-  if (!doc) return; // doc gone since the decision was computed
+// vault-file rewrite. Once promoteDocumentTier lands the DB write, a vault
+// failure past that point (I/O, embeddings) must not be reported as a failed
+// promotion or abort the batch — same tolerance kb_promote's own
+// indexVaultForResponse helper gives the reindex half. promoteDocumentTier
+// itself is left to throw here: the caller's per-candidate try/catch is what
+// isolates that from the rest of the run.
+//
+// Exported so a test can assert its outcome contract directly — in
+// particular that a doc gone by apply time (deleted, or promoted out from
+// under this run some other way) reports applied:false with a reason,
+// never a bare success a caller could mistake for one.
+export async function applyDecision(d) {
+  const doc = promoteDocumentTier(d.doc_id, { tier: d.would_become, confirmedBy: buildConfirmedBy(d.basis) });
+  if (!doc) return { applied: false, error: 'document gone since the decision was computed' };
 
   const vf = getDb().prepare('SELECT vault_path FROM vault_files WHERE document_id = ?').get(d.doc_id);
-  if (!vf) return; // no vault file for this note — recorded in the index only, same as kb_promote
-  const vaultPath = getVaultPath();
-  setNoteTier(vaultPath, vf.vault_path, { tier: doc.tier, ref: doc.tier_ref });
-  await indexVaultFile(vaultPath, vf.vault_path);
+  if (!vf) return { applied: true }; // no vault file for this note — recorded in the index only, same as kb_promote
+
+  try {
+    const vaultPath = getVaultPath();
+    setNoteTier(vaultPath, vf.vault_path, { tier: doc.tier, ref: doc.tier_ref });
+    await indexVaultFile(vaultPath, vf.vault_path);
+    return { applied: true };
+  } catch (error) {
+    return { applied: true, error: `vault file not updated: ${error.message}` };
+  }
 }
 
 function printDecision(d) {
   const tag = d.applied ? 'applied' : 'logged only';
-  console.log(`  #${d.doc_id} "${d.title}": ${d.current_tier} -> ${d.would_become} [${tag}] (session ${d.basis.session}, followed ${d.basis.followed_at}, latency ${d.basis.read_latency_s}s, event ${d.basis.event_id})`);
+  const err = d.error ? ` ERROR: ${d.error}` : '';
+  console.log(`  #${d.doc_id} "${d.title}": ${d.current_tier} -> ${d.would_become} [${tag}]${err} (session ${d.basis.session}, followed ${d.basis.followed_at}, latency ${d.basis.read_latency_s}s, event ${d.basis.event_id})`);
 }
 
 const USAGE = 'Usage: kb promotions [--json] [--dry-run]';
@@ -186,14 +220,23 @@ export async function runPromotionsCli(args = []) {
   let appliedCount = 0;
   for (const d of candidates) {
     const preCutoff = d.basis.caveat != null;
-    const applied = !dryRun && !preCutoff;
-    if (applied) {
-      await applyDecision(d);
-      appliedCount += 1;
+    let outcome = { applied: false };
+    if (!dryRun && !preCutoff) {
+      try {
+        outcome = await applyDecision(d);
+      } catch (error) {
+        // One bad candidate (confirmed_by still over REF_MAX_CHARS despite
+        // clamping, or any other apply-time failure) must not stall every
+        // candidate behind it in the same run — this is the batch's own
+        // crash isolation, not just the audit trail's.
+        outcome = { applied: false, error: error.message };
+      }
+      if (outcome.applied) appliedCount += 1;
     }
-    decisions.push({ ...d, applied });
+    const decision = outcome.error ? { ...d, applied: outcome.applied, error: outcome.error } : { ...d, applied: outcome.applied };
+    decisions.push(decision);
+    appendDecisions([decision]); // one line per candidate, immediately — a crash mid-batch loses at most the in-flight line
   }
-  appendDecisions(decisions);
 
   if (asJson) {
     console.log(JSON.stringify({
@@ -206,7 +249,7 @@ export async function runPromotionsCli(args = []) {
     return;
   }
 
-  console.log(`kb promotions: ${candidates.length + skipped.length} candidates, ${appliedCount} applied, ${candidates.length - appliedCount} dry-run/pre-cutoff logged only, ${skipped.length} skipped (already logged)`);
+  console.log(`kb promotions: ${candidates.length + skipped.length} candidates, ${appliedCount} applied, ${candidates.length - appliedCount} dry-run/pre-cutoff/failed logged only, ${skipped.length} skipped (already logged)`);
   if (decisions.length) {
     console.log('\nDecisions this run:');
     for (const d of decisions) printDecision(d);
