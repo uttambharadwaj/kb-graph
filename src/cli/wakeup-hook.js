@@ -2,6 +2,7 @@
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
 import { readFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getDb, getDocument, getHealth, liveTierCounts } from '../db.js';
@@ -110,7 +111,11 @@ export async function wakeupHook() {
     // the only part of this hook an agent can act on with kb_read(id), so
     // it's the only part worth logging as a retrieval.
     const session = resolveSessionId(hookInput);
-    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session });
+    // One event id for the whole SessionStart -- the briefing is one decision
+    // (these are the workstreams surfaced this run), not one per state note,
+    // and the post-compact active-note row below shares it for the same reason.
+    const eventId = randomUUID();
+    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId });
 
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
@@ -135,7 +140,7 @@ export async function wakeupHook() {
           // Already logged above if this note is also in `states`; log it here
           // only when it isn't, so the session-scoped pick doesn't double-count.
           if (!states.some(s => s.document_id === active.document_id)) {
-            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session });
+            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId });
           }
           lines.push(
             `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,

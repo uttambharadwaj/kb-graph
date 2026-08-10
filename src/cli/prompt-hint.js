@@ -2,6 +2,7 @@
 // knowledge base holds, print a one-line hint naming those notes. Silent
 // otherwise, which is most prompts — a surface that fires every time carries no
 // information, so declining is the product, not a failure mode.
+import { randomUUID } from 'crypto';
 import { relevantNotes } from '../hint-relevance.js';
 import { liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
@@ -59,11 +60,15 @@ export async function promptHint() {
     // A prompt the KB had nothing for is the measurement, not the absence of one:
     // logging only the times we fired leaves a hit rate with no denominator, and
     // declining is now the common case rather than one that never happened.
+    // One event id for every doc row (or the single miss row) this prompt
+    // produces -- the decision unit is "this prompt got a hint or didn't",
+    // not each row it happened to log.
     logRetrievalResults({
       results,
       surface: SURFACE.HINT,
       query: prompt,
       session: resolveSessionId(hookInput),
+      eventId: randomUUID(),
     });
     if (results.length === 0) process.exit(0);
 
