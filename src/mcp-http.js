@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { getHttpToolDefinitions } from './tools.js';
 
 /**
@@ -14,7 +14,7 @@ function createMcpServer() {
   });
 
   for (const tool of getHttpToolDefinitions()) {
-    server.tool(tool.name, tool.description, tool.schema, tool.handler);
+    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.schema }, tool.handler);
   }
 
   return server;
@@ -73,17 +73,16 @@ export async function mcpHttpHandler(req, res) {
     scheduleSessionCleanup(sessionId);
   } else if (!sessionId) {
     // New session — create server + transport
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-
     const server = createMcpServer();
 
-    // Store session once the transport assigns a session ID (happens during handleRequest)
-    transport._webStandardTransport._onsessioninitialized = (sid) => {
-      sessions.set(sid, { server, transport });
-      scheduleSessionCleanup(sid);
-    };
+    transport = new NodeStreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      // Store session once the transport assigns a session ID (happens during handleRequest)
+      onsessioninitialized: (sid) => {
+        sessions.set(sid, { server, transport });
+        scheduleSessionCleanup(sid);
+      },
+    });
 
     // Clean up when transport closes
     transport.onclose = () => {
