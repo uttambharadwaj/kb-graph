@@ -71,13 +71,33 @@ export function parseProcessTable(raw) {
   return table;
 }
 
+// This runs on a hook's critical path (every UserPromptSubmit) — a hook must
+// never hang indefinitely, so a stuck/wedged `ps` cannot be allowed to block
+// it forever. timeout+killSignal bound the wait; execFileSync throws on
+// timeout, which resolveClaudeAncestry's catch below turns into the same
+// "identity unverifiable" outcome as `ps` being missing entirely.
+// maxBuffer is sized generously (a dev box with thousands of processes is
+// still well under it) rather than tightly, since undershooting silently
+// truncates output mid-row instead of erroring.
+//
+// Built by a function (not a bare object literal at the call site) so a test
+// can assert on the exact options `execFileSync` receives without mocking
+// child_process — this repo has no mocking convention, only injectable
+// defaults.
+const PS_TIMEOUT_MS = 2000;
+const PS_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+
+export function psExecOptions() {
+  return { encoding: 'utf8', timeout: PS_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: PS_MAX_BUFFER_BYTES };
+}
+
 // `-e` (not `-a`/`-ax`): BSD ps's `-a` silently drops any process with no
 // controlling terminal unless paired with `-x` — exactly the shape of a hook
 // subprocess or a stdio MCP server. `-e` (verified live, both here and on
 // Linux procps) selects every process regardless, which combined with `-o`
 // is what's needed to see the whole ancestor chain.
 function defaultListProcesses() {
-  return parseProcessTable(execFileSync('ps', ['-eo', 'pid,ppid,lstart,comm'], { encoding: 'utf8' }));
+  return parseProcessTable(execFileSync('ps', ['-eo', 'pid,ppid,lstart,comm'], psExecOptions()));
 }
 
 // The one impure entry point everything else calls: find the nearest

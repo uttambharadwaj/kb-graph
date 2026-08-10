@@ -6,7 +6,7 @@
 // Claude Code CLI process they found by walking their own ancestry
 // (process-ancestry.js); resolveSessionId (retrieval.js) walks the SAME
 // ancestry from the server side and reads it back.
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { KB_DIR } from './paths.js';
 import { resolveClaudeAncestry } from './process-ancestry.js';
@@ -46,22 +46,16 @@ function readMapEntry(claudePid) {
 
 // Server side. `pidStart` is the caller's own freshly-resolved start time for
 // this same claudePid; a mismatch means the pid was reused since the entry
-// was written — a different process entirely, which is worse than no entry —
-// so it's swept off disk rather than left to mislead the next reader too.
-// `entry` is still returned on a mismatch (with pidStartOk: false): the
-// caller (resolveSessionId) uses it only as a corroboration source for an
-// independently-supplied env var, never trusts it standalone.
+// was written — a different (and by now possibly dead) process, so the entry
+// is reported as a miss, same as no file at all. Read-side never deletes it:
+// this process's own ancestry cache can itself be stale (a long-lived server
+// outliving its claude parent, pid later reused by a new session), and a
+// delete driven by a stale comparison would erase a DIFFERENT, live process's
+// current mapping. A mismatched file is inert — every reader already ignores
+// it — so it's left for the hygiene slice's age-based sweeper instead.
 export function resolveMapEntry(claudePid, pidStart) {
   const entry = readMapEntry(claudePid);
   if (!entry) return { entry: null, pidStartOk: false };
   const pidStartOk = Boolean(pidStart) && entry.pid_start === pidStart;
-  if (!pidStartOk) {
-    try {
-      if (existsSync(mapPath(claudePid))) unlinkSync(mapPath(claudePid));
-    } catch {
-      // Best-effort sweep — a failed delete just leaves a stale file, not a
-      // reason to fail this read.
-    }
-  }
-  return { entry, pidStartOk };
+  return pidStartOk ? { entry, pidStartOk: true } : { entry: null, pidStartOk: false };
 }

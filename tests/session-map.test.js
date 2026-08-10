@@ -63,13 +63,16 @@ describe('resolveMapEntry', () => {
     assert.strictEqual(pidStartOk, true);
   });
 
-  it('returns pidStartOk false (but still the entry) on a pid_start mismatch, and sweeps the file', () => {
+  it('reports a pid_start mismatch as a plain miss — entry null, pidStartOk false — and leaves the file alone', () => {
     recordSessionMap('sess-stale', { resolve: () => ({ claudePid: 2002, pidStart: 'OLD-START' }) });
     const path = join(SESSION_MAP_DIR, '2002.json');
-    const { entry, pidStartOk } = resolveMapEntry(2002, 'NEW-START');
-    assert.strictEqual(entry.session_id, 'sess-stale');
-    assert.strictEqual(pidStartOk, false);
-    assert.strictEqual(existsSync(path), false, 'stale entry should be swept off disk');
+    assert.deepStrictEqual(resolveMapEntry(2002, 'NEW-START'), { entry: null, pidStartOk: false });
+    // Read-side never deletes: this resolver's own ancestry cache can itself
+    // be the stale side of the comparison (a long-lived orphaned server), and
+    // a delete driven by that would erase a DIFFERENT, live process's current
+    // mapping after pid reuse. Cleanup is the hygiene slice's sweeper's job.
+    assert.strictEqual(existsSync(path), true, 'a mismatched entry must survive a failed resolve');
+    assert.strictEqual(entryFor(2002).session_id, 'sess-stale', 'and still read back exactly as written');
   });
 
   it('returns entry null when no file exists for the pid', () => {

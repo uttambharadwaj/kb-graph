@@ -1,0 +1,10 @@
+#!/bin/sh
+# Deterministic ps -eo pid,ppid,lstart,comm stand-in for hook subprocess tests.
+# $PPID here is the process that execve'd this script — the hook subprocess
+# itself (run-hook.mjs) — so reporting it as a child of a synthetic pid whose
+# comm is "claude" makes resolveClaudeAncestry (src/process-ancestry.js)
+# succeed deterministically, with no real Claude Code CLI process required.
+# See tests/hooks-retrieval.test.js, which prepends this file's directory to
+# PATH so `ps` resolves here instead of the real binary.
+echo "  $PPID  424242 Mon Jan  1 00:00:00 2024 node"
+echo "  424242  1 Mon Jan  1 00:00:00 2024 /usr/bin/claude"

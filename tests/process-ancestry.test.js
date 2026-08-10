@@ -1,8 +1,23 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
-  isClaudeHarness, findClaudeAncestor, parseProcessTable, resolveClaudeAncestry,
+  isClaudeHarness, findClaudeAncestor, parseProcessTable, resolveClaudeAncestry, psExecOptions,
 } from '../src/process-ancestry.js';
+
+// This runs on a hook's critical path (every UserPromptSubmit) — a hung `ps`
+// must not be able to block a hook forever. No mocking of child_process (this
+// repo has no mocking convention): psExecOptions is the exact object passed
+// to execFileSync, exported so the bound is asserted directly rather than by
+// reading the source.
+describe('psExecOptions', () => {
+  it('bounds ps with a timeout, a hard kill signal and a generous but finite maxBuffer', () => {
+    const opts = psExecOptions();
+    assert.ok(Number.isFinite(opts.timeout) && opts.timeout > 0 && opts.timeout <= 5000, 'timeout should be a few seconds at most');
+    assert.strictEqual(opts.killSignal, 'SIGKILL');
+    assert.ok(Number.isFinite(opts.maxBuffer) && opts.maxBuffer > 0);
+    assert.strictEqual(opts.encoding, 'utf8');
+  });
+});
 
 // Real comm values captured with `ps -eo pid,ppid,lstart,comm` against a live,
 // heavily-nested Claude Code process tree (a daemon/multiplexer setup: CLI
