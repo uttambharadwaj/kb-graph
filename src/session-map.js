@@ -15,10 +15,10 @@ export const SESSION_MAP_DIR = join(KB_DIR, 'session-map');
 
 const mapPath = (claudePid) => join(SESSION_MAP_DIR, `${claudePid}.json`);
 
-// One file per claude pid, forever, was the accepted follow-up from #87 —
-// nothing ever removes an entry once its process is gone. Age rather than a
-// liveness check: confirming a pid is dead is a race against reuse, but a
-// mapping nobody has read in a week is safe to drop either way.
+// Nothing ever removes an entry once its process is gone, so this directory
+// grows one file per claude pid forever. Age rather than a liveness check:
+// confirming a pid is dead is a race against reuse, but a mapping nobody has
+// read in a week is safe to drop either way.
 const SESSION_MAP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Opportunistic, riding the write path only (never the read path — a reader

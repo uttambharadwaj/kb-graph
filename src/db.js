@@ -543,7 +543,7 @@ export const MIGRATIONS = [{
   // should count toward a "did a human follow a hint" measurement.
   //
   // Envelope rows -- query LIKE '<agent-message%' / '<task-notification%',
-  // ~15 historical rows from before the harness-envelope guard in
+  // 15 historical rows from before the harness-envelope guard in
   // prompt-hint.js existed -- are deliberately left untouched by this
   // migration. Those are real sessions with the wrong provenance (a subagent
   // report logged as if a human sent it), not test traffic, and is_test
