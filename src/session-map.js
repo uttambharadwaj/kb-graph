@@ -6,7 +6,7 @@
 // Claude Code CLI process they found by walking their own ancestry
 // (process-ancestry.js); resolveSessionId (retrieval.js) walks the SAME
 // ancestry from the server side and reads it back.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { KB_DIR } from './paths.js';
 import { resolveClaudeAncestry } from './process-ancestry.js';
@@ -14,6 +14,29 @@ import { resolveClaudeAncestry } from './process-ancestry.js';
 export const SESSION_MAP_DIR = join(KB_DIR, 'session-map');
 
 const mapPath = (claudePid) => join(SESSION_MAP_DIR, `${claudePid}.json`);
+
+// Nothing ever removes an entry once its process is gone, so this directory
+// grows one file per claude pid forever. Age rather than a liveness check:
+// confirming a pid is dead is a race against reuse, but a mapping nobody has
+// read in a week is safe to drop either way.
+const SESSION_MAP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Opportunistic, riding the write path only (never the read path — a reader
+// has no business mutating the directory it's scanning). One readdir, one
+// stat per sibling, and any error anywhere abandons the rest of the sweep
+// silently: the next write tries again, same as a write that fails outright.
+function sweepStaleEntries(justWrittenPath) {
+  try {
+    const now = Date.now();
+    for (const name of readdirSync(SESSION_MAP_DIR)) {
+      const candidate = join(SESSION_MAP_DIR, name);
+      if (candidate === justWrittenPath) continue;
+      if (now - statSync(candidate).mtimeMs > SESSION_MAP_MAX_AGE_MS) unlinkSync(candidate);
+    }
+  } catch {
+    // best-effort — see comment above.
+  }
+}
 
 // Hook side. Never lets a map-write problem break the hook it's called from:
 // wrapped fully, failures silent — same contract as every other hook-adjacent
@@ -29,6 +52,7 @@ export function recordSessionMap(sessionId, { resolve = resolveClaudeAncestry } 
     const tmp = `${path}.tmp.${process.pid}`;
     writeFileSync(tmp, JSON.stringify({ pid: claudePid, pid_start: pidStart, session_id: sessionId, ts: new Date().toISOString() }));
     renameSync(tmp, path);
+    sweepStaleEntries(path);
     return true;
   } catch {
     return false;

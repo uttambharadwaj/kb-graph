@@ -1,7 +1,7 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { recordSessionMap, resolveMapEntry, SESSION_MAP_DIR } from '../src/session-map.js';
 
@@ -84,4 +84,62 @@ describe('resolveMapEntry', () => {
     writeFileSync(join(SESSION_MAP_DIR, '2004.json'), 'not json', 'utf8');
     assert.deepStrictEqual(resolveMapEntry(2004, 'ANY'), { entry: null, pidStartOk: false });
   });
+});
+
+// Backdates a file's mtime by `days` so the sweeper's age check treats it as
+// stale without waiting a week for a real one.
+function age(path, days) {
+  const past = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  utimesSync(path, past, past);
+}
+
+describe('recordSessionMap — session-map retention sweep', () => {
+  it('unlinks a sibling entry older than 7 days on a successful write', () => {
+    recordSessionMap('sess-old', { resolve: () => ({ claudePid: 3001, pidStart: 'START' }) });
+    const stale = join(SESSION_MAP_DIR, '3001.json');
+    age(stale, 8);
+
+    recordSessionMap('sess-new', { resolve: () => ({ claudePid: 3002, pidStart: 'START' }) });
+
+    assert.strictEqual(existsSync(stale), false, 'an 8-day-old sibling should have been swept');
+    assert.strictEqual(existsSync(join(SESSION_MAP_DIR, '3002.json')), true);
+  });
+
+  it('leaves a sibling entry younger than 7 days alone', () => {
+    recordSessionMap('sess-recent', { resolve: () => ({ claudePid: 3003, pidStart: 'START' }) });
+    const recent = join(SESSION_MAP_DIR, '3003.json');
+    age(recent, 6);
+
+    recordSessionMap('sess-trigger', { resolve: () => ({ claudePid: 3004, pidStart: 'START' }) });
+
+    assert.strictEqual(existsSync(recent), true, 'a 6-day-old sibling is not stale yet');
+  });
+
+  it('does not delete the entry it just wrote, in the same pass that wrote it', () => {
+    // A fresh write's own file has mtime = now, well inside the retention
+    // window, so this also exercises the ordinary "not stale" path — the
+    // sweep runs against this exact file in this exact call.
+    const before = readdirSync(SESSION_MAP_DIR).length;
+    recordSessionMap('sess-fresh', { resolve: () => ({ claudePid: 3007, pidStart: 'START' }) });
+    assert.strictEqual(existsSync(join(SESSION_MAP_DIR, '3007.json')), true);
+    assert.strictEqual(readdirSync(SESSION_MAP_DIR).length, before + 1);
+  });
+
+  it('survives a sibling it cannot stat (broken symlink) without throwing, and still completes the write', () => {
+    mkdirSync(SESSION_MAP_DIR, { recursive: true });
+    const brokenLink = join(SESSION_MAP_DIR, '9999.json');
+    try {
+      symlinkSync('/does/not/exist', brokenLink);
+    } catch {
+      return; // symlinks unavailable in this environment — nothing to assert
+    }
+
+    let ok;
+    assert.doesNotThrow(() => {
+      ok = recordSessionMap('sess-despite-broken-sibling', { resolve: () => ({ claudePid: 3008, pidStart: 'START' }) });
+    });
+    assert.strictEqual(ok, true, 'a sweep failure must not fail the write it rides on');
+    rmSync(brokenLink, { force: true });
+  });
+
 });

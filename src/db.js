@@ -533,7 +533,62 @@ export const MIGRATIONS = [{
     addColumn(db, 'retrievals', 'event_id', 'TEXT');
     addColumn(db, 'retrievals', 'is_test', 'INTEGER NOT NULL DEFAULT 0');
   },
+}, {
+  version: 18,
+  // Migration 17 added is_test but only flags it going forward -- every row
+  // logged before that landed stays is_test 0 even though it's exactly the
+  // smoke/manual-verification traffic the column exists to exclude. This
+  // flags those rows in place; it does not delete them, since a flagged row
+  // is still a true record of a run against the KB, just not one that
+  // should count toward a "did a human follow a hint" measurement.
+  //
+  // Envelope rows -- query LIKE '<agent-message%' / '<task-notification%',
+  // 15 historical rows from before the harness-envelope guard in
+  // prompt-hint.js existed -- are deliberately left untouched by this
+  // migration. Those are real sessions with the wrong provenance (a subagent
+  // report logged as if a human sent it), not test traffic, and is_test
+  // means "exclude from measurement", not "wrong shape". The exclusion for
+  // them is a report-time LIKE on query, the follow-through report's
+  // contract, not a column here.
+  name: 'backfill is_test on historical smoke rows',
+  // Same guard shape as migration 12's dependency on `facts`: pendingMigrations
+  // evaluates every migration's `applied` against the database as it is right
+  // now, not after the migrations ahead of it in the list have run -- so on a
+  // pre-17 fixture the is_test column this depends on doesn't exist yet, and
+  // querying it would throw rather than report "nothing to do here yet".
+  // applyMigrations (the sequential path `kb migrate` actually uses) re-checks
+  // `applied` once it reaches this entry, by which point 17 has already run.
+  applied: db => !hasTable(db, 'retrievals') || !hasColumn(db, 'retrievals', 'is_test') || testSessionBackfillCount(db) === 0,
+  preview: db => `${testSessionBackfillCount(db)} rows flagged is_test`,
+  up: db => db.exec(`UPDATE retrievals SET is_test = 1 WHERE ${TEST_SESSION_BACKFILL_WHERE}`),
 }];
+
+// SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
+// REGEXP by default, so the prefix match becomes LIKE. The two must change
+// together: a new smoke-id convention added to one and not the other
+// silently un-syncs write-time flagging from what this backfill considers
+// already covered. `_` is a LIKE wildcard (matches any one character), not a
+// literal underscore, so every `_`-separator clause below escapes it --
+// without that, `smoke_%` also matches e.g. "smokeXfoo", which the regex
+// (literal `[-_]`) does not.
+const TEST_SESSION_BACKFILL_WHERE = `
+  is_test = 0 AND (
+    session IN ('smoke-test', 'smoke-2', 'smoke-compact-test', 'live-verify')
+    OR session LIKE 'smoke-%'
+    OR session LIKE 'smoke\\_%' ESCAPE '\\'
+    OR session LIKE 'test-%'
+    OR session LIKE 'test\\_%' ESCAPE '\\'
+    OR session LIKE 'fake-%'
+    OR session LIKE 'fake\\_%' ESCAPE '\\'
+  )
+`;
+
+// Recomputed rather than a stored marker, same as migration 12: a row that
+// still needs flagging is one the fixture-shaped test can plant, so idempotence
+// falls out of the query going to zero rather than out of trusting a flag.
+function testSessionBackfillCount(db) {
+  return db.prepare(`SELECT COUNT(*) c FROM retrievals WHERE ${TEST_SESSION_BACKFILL_WHERE}`).get().c;
+}
 
 // The stored spellings that are not their own canonical form. One column, no
 // row bodies: this runs on every connect, through pendingMigrations.
