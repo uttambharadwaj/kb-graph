@@ -42,6 +42,11 @@ function activeStateNote(db, session, states) {
 // — this is injected on top of a context that just got compacted for size.
 const ACTIVE_NOTE_CAP = 6000;
 
+// Measured: 6 of 9 state notes had zero reads across ~150 briefing exposures
+// (4.9% event follow-through) — printing 8 was mostly wasted tokens. Cut to
+// the 3 most-recent; the rest are one kb_search/kb_read away.
+const BRIEFING_STATE_LIMIT = 3;
+
 // A hook whose paths have gone stale fails exactly like one with nothing to
 // say, so the only place it can surface is a briefing that goes looking. This
 // runs inside the briefing and must never be the reason one fails to print.
@@ -105,8 +110,13 @@ export async function wakeupHook() {
       : `health: ⚠ ${warnings.join(' | ')}`;
 
     const states = db.prepare(
-      "SELECT vf.title, vf.document_id, d.tier, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT 8"
-    ).all();
+      "SELECT vf.title, vf.document_id, d.tier, d.updated_at FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL ORDER BY d.updated_at DESC LIMIT ?"
+    ).all(BRIEFING_STATE_LIMIT);
+    // Total live state notes, independent of the LIMIT above — decides whether
+    // the "more workstreams" pointer line prints below.
+    const stateCount = db.prepare(
+      "SELECT COUNT(*) as c FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL"
+    ).get().c;
     // Only `states` carries an id into the printed briefing (`#id`) — that's
     // the only part of this hook an agent can act on with kb_read(id), so
     // it's the only part worth logging as a retrieval.
@@ -124,6 +134,7 @@ export async function wakeupHook() {
       ...(states.length ? [
         'Active workstreams (kb_read for current state):',
         ...states.map(s => `- #${s.document_id} ${s.title} (${showTier ? `${tierLabel(s.tier)}, ` : ''}as of ${s.updated_at?.slice(0, 10)})`),
+        ...(stateCount > states.length ? ['More workstreams: kb_search(query, tags="state") or kb_read a state note by name.'] : []),
       ] : []),
       'Recently updated:',
       ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`),

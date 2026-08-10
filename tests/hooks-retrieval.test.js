@@ -355,7 +355,7 @@ describe('event identity', () => {
 
   it('wakeup-hook post-compact recovery folds the active-note row into the same briefing event id, when it is not already one of the states rows', () => {
     const db = getDb();
-    // Deliberately old, so it falls out of the top-8 `states` list and the
+    // Deliberately old, so it falls out of the top-3 `states` list and the
     // states loop above does not log it — the only way it gets logged is
     // through the post-compact branch, which is the code this test exists
     // to exercise. Found instead via the session-scoped read, same as
@@ -399,6 +399,48 @@ describe('is_test flag', () => {
     const row = db.prepare("SELECT is_test FROM retrievals WHERE surface = 'hint' AND session = 'sess-ordinary-real'").get();
     assert.ok(row);
     assert.strictEqual(row.is_test, 0);
+  });
+});
+
+// 6 of 9 state notes had zero reads across ~150 briefing exposures — cutting
+// the printed list to the 3 most-recent trims mostly-ignored tokens without
+// losing reachability (the pointer line covers the rest). Placed after every
+// other describe in this file: its fixtures are dated to unconditionally win
+// the top-3 slot, which would otherwise break earlier tests relying on their
+// own fixture being the freshest state note in the shared per-file DB.
+describe('wakeup-hook briefing cut to top 3 state notes', () => {
+  function activeWorkstreamsSection(stdout) {
+    const start = stdout.indexOf('Active workstreams (kb_read for current state):');
+    const end = stdout.indexOf('Recently updated:');
+    return stdout.slice(start, end);
+  }
+
+  it('prints at most 3 active workstreams, newest first, plus a pointer to the rest', () => {
+    const db = getDb();
+    const titles = ['State: cut-a', 'State: cut-b', 'State: cut-c', 'State: cut-d', 'State: cut-e'];
+    titles.forEach((title, i) => insertStateNote(db, { title, content: 'body', updatedAt: `2040-01-0${5 - i}T00:00:00Z` }));
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-briefing-cut' });
+    const section = activeWorkstreamsSection(stdout);
+
+    const activeLines = section.split('\n').filter(l => l.startsWith('- #'));
+    assert.strictEqual(activeLines.length, 3, `expected exactly 3 active-workstream lines, got:\n${activeLines.join('\n')}`);
+    for (const t of ['State: cut-a', 'State: cut-b', 'State: cut-c']) assert.match(section, new RegExp(t));
+    for (const t of ['State: cut-d', 'State: cut-e']) assert.doesNotMatch(section, new RegExp(t));
+    assert.match(stdout, /More workstreams: kb_search\(query, tags="state"\) or kb_read a state note by name\./);
+  });
+
+  it('logs a briefing row for only the 3 exposed notes, not the ones cut from the list', () => {
+    const db = getDb();
+    const titles = ['State: logcut-a', 'State: logcut-b', 'State: logcut-c', 'State: logcut-d'];
+    const ids = titles.map((title, i) => insertStateNote(db, { title, content: 'body', updatedAt: `2041-01-0${4 - i}T00:00:00Z` }));
+
+    runHook('wakeup-hook', { session_id: 'sess-briefing-cut-log' });
+
+    const rows = db.prepare("SELECT doc_id FROM retrievals WHERE surface = 'briefing' AND session = 'sess-briefing-cut-log'").all();
+    assert.strictEqual(rows.length, 3, 'expected exactly 3 briefing rows for one SessionStart');
+    const loggedIds = new Set(rows.map(r => r.doc_id));
+    assert.deepStrictEqual(loggedIds, new Set(ids.slice(0, 3)), 'expected the 3 most-recent notes logged, not the 4th');
   });
 });
 
