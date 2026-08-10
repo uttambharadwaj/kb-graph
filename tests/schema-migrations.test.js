@@ -1,3 +1,4 @@
+import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';

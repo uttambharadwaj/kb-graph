@@ -1,4 +1,5 @@
 // tests/setup-jobs.test.js
+import './helpers/tmp-kb.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'fs';
