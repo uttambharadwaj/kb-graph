@@ -31,6 +31,11 @@ const COMMANDS = {
     summary: 'Start MCP stdio server (used by AI tools)',
     run: () => import('../src/mcp-supervisor.js').then(m => m.superviseMcpServer()),
   },
+  'mcp-shim': {
+    summary: 'Connect this session to the resident `kb serve` daemon over stdio, falling back to in-process MCP when it is unreachable',
+    valueEq: ['--socket'],
+    run: a => import('../src/cli/mcp-shim.js').then(m => m.runMcpShimCli(a)),
+  },
   serve: {
     summary: 'Run the resident MCP daemon on a unix socket (--status probes a running one, exit 1 when down)',
     boolean: ['--status'],

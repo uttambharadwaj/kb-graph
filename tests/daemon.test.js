@@ -2,14 +2,14 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { connectDaemonClient } from '../src/daemon-client.js';
-import { startDaemon } from '../src/daemon.js';
+import { probeSocket, startDaemon } from '../src/daemon.js';
 
 // A listening server holds the event loop open, so a daemon a test failed to
 // close does not fail that test — it hangs the whole file, long after the TAP
@@ -314,6 +314,16 @@ describe('resident daemon', () => {
 
     await assertStartRefused({ socketPath }, /is not a socket/);
     assert.ok(statSync(socketPath).isDirectory(), 'the directory must survive');
+  });
+
+  it('classifies a symlink at the socket path as occupied, not stale', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    // lstat, not stat: a symlink is not ours to follow or remove, whether or
+    // not it resolves to something live.
+    symlinkSync('/nowhere', socketPath);
+
+    assert.strictEqual(await probeSocket(socketPath), 'occupied');
+    await assertStartRefused({ socketPath }, /is not a socket/);
   });
 
   it('refuses to start when a live daemon holds the socket', { timeout: CASE_TIMEOUT_MS }, async () => {
