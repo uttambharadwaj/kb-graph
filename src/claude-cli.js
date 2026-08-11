@@ -35,7 +35,12 @@ export const isBatchCall = () => process.env.KB_BATCH === '1';
 // `caller` identifies who is asking, for the model_calls meter (model-meter.js)
 // below — required, not defaulted, so a new call site cannot go dark by
 // forgetting to pass one.
-export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = 120000, caller } = {}) {
+// The longest a single tool call can block on the model. Exported so callers
+// that have to outlast one — the daemon's shutdown drain — size themselves
+// against it rather than restating the number.
+export const CLAUDE_CALL_TIMEOUT_MS = 120000;
+
+export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = CLAUDE_CALL_TIMEOUT_MS, caller } = {}) {
   if (!caller) throw new Error('runClaude requires a caller label');
   const promptChars = prompt.length;
   return new Promise((resolve, reject) => {

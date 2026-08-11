@@ -5,6 +5,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite runs in well under a minute. Anything approaching this is a
+    # hang, and the default six-hour ceiling burns a runner for all of it.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

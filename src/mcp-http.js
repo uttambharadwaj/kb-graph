@@ -1,24 +1,7 @@
 import { randomUUID } from 'crypto';
-import { McpServer } from '@modelcontextprotocol/server';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { createHttpKbServer } from './mcp-factory.js';
 import { getHttpToolDefinitions } from './tools.js';
-
-/**
- * Create a fresh MCP server instance with all HTTP-safe tools registered.
- * A new instance is created per session to keep state isolated.
- */
-function createMcpServer() {
-  const server = new McpServer({
-    name: 'knowledge-base-brain',
-    version: '1.0.0',
-  });
-
-  for (const tool of getHttpToolDefinitions()) {
-    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.schema }, tool.handler);
-  }
-
-  return server;
-}
 
 /**
  * Session store: maps session ID -> { server, transport }
@@ -72,8 +55,9 @@ export async function mcpHttpHandler(req, res) {
     transport = sessions.get(sessionId).transport;
     scheduleSessionCleanup(sessionId);
   } else if (!sessionId) {
-    // New session — create server + transport
-    const server = createMcpServer();
+    // New session — create server + transport. A new instance per session
+    // keeps state isolated.
+    const server = createHttpKbServer();
 
     transport = new NodeStreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),

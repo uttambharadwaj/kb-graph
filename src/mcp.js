@@ -1,15 +1,8 @@
-import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import { registerBusResources } from './bus/resources.js';
+import { createKbServer } from './mcp-factory.js';
 import { restartOnSourceChange } from './restart-on-change.js';
-import { getToolDefinitions } from './tools.js';
 
 export async function start() {
-  const server = new McpServer({
-    name: 'knowledge-base',
-    version: '1.0.0',
-  });
-
   let inFlight = 0;
   const track = (handler) => async (...args) => {
     inFlight++;
@@ -20,11 +13,7 @@ export async function start() {
     }
   };
 
-  // Register all tools from shared definitions (already metered — see tools.js).
-  for (const tool of getToolDefinitions()) {
-    server.registerTool(tool.name, { description: tool.description, inputSchema: tool.schema }, track(tool.handler));
-  }
-  registerBusResources(server);
+  const server = createKbServer({ wrapHandler: track });
 
   // Under a supervisor the parent owns reloading; watching here too would race
   // it into exiting out from under a connection the parent is keeping open.
