@@ -31,6 +31,12 @@ const COMMANDS = {
     summary: 'Start MCP stdio server (used by AI tools)',
     run: () => import('../src/mcp-supervisor.js').then(m => m.superviseMcpServer()),
   },
+  serve: {
+    summary: 'Run the resident MCP daemon on a unix socket (--status probes a running one, exit 1 when down)',
+    boolean: ['--status'],
+    valueEq: ['--socket'],
+    run: a => import('../src/cli/serve.js').then(m => m.runServeCli(a)),
+  },
   migrate: {
     summary: `Apply pending database schema migrations (--dry-run to preview, --check to exit ${PENDING_EXIT} when a database is behind)`,
     boolean: ['--dry-run', '--check'],
