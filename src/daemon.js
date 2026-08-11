@@ -197,6 +197,13 @@ export async function startDaemon({
   // One request per connection: read up to the first newline, dispatch,
   // answer, close. A client that never sends one is bounded by
   // MAX_CONTROL_LINE_BYTES rather than growing this buffer forever.
+  //
+  // A compute core's OWN errors (a real hint/briefing/trigger failure) are
+  // already caught and filed by recordHookFailure inside it — this catch is
+  // the backstop for what's left (unknown op, a malformed request line, a
+  // bug in the dispatch itself), and onError is what makes that backstop
+  // visible server-side instead of only ever reaching the client that's
+  // about to fall back and forget it happened.
   function serveControlConnection(socket) {
     socket.on('error', () => {});
     let buffer = '';
@@ -221,6 +228,7 @@ export async function startDaemon({
         const output = await track(() => handler(payload))();
         response = { ok: true, output: output ?? null };
       } catch (err) {
+        onError(err);
         response = { ok: false, error: err.message };
       }
       socket.end(`${JSON.stringify(response)}\n`);

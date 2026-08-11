@@ -7,12 +7,13 @@
 import { computePromptHint } from './cli/prompt-hint.js';
 import { computeTriggerHook } from './cli/trigger-hook.js';
 import { computeWakeupHook } from './cli/wakeup-hook.js';
+import { HOOK_OP } from './daemon-paths.js';
 
 // Daemon-side calls always pass fastWrite: false (the default in each
 // compute core) — one warm connection, no cross-process write contention,
 // so the retrieval-log busy-tolerance the CLI fallback needs is a no-op here.
 export const HOOK_OPS = {
-  'prompt-hint': ({ prompt, session }) => computePromptHint({ prompt, session }),
-  'trigger-hook': ({ hookInput }) => computeTriggerHook(hookInput),
-  'wakeup-hook': ({ hookInput, session }) => computeWakeupHook({ hookInput, session }),
+  [HOOK_OP.PROMPT_HINT]: ({ prompt, session }) => computePromptHint({ prompt, session }),
+  [HOOK_OP.TRIGGER_HOOK]: ({ hookInput }) => computeTriggerHook(hookInput),
+  [HOOK_OP.WAKEUP_HOOK]: ({ hookInput, session }) => computeWakeupHook({ hookInput, session }),
 };

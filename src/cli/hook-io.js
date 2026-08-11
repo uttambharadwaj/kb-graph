@@ -12,7 +12,7 @@
 import { appendFileSync, mkdirSync } from 'fs';
 import { connect } from 'net';
 import { join } from 'path';
-import { CONTROL_SOCKET_PATH } from '../daemon-paths.js';
+import { CONTROL_SOCKET_PATH, HOOK_OP } from '../daemon-paths.js';
 import { LOGS_DIR } from '../paths.js';
 
 // Shared across every hook that reuses this module (prompt-hint.js and
@@ -52,9 +52,9 @@ export function deliver(line, out = process.stdout) {
 // wakeup-hook does the most DB work) to want different budgets, but a single
 // knob is enough for anyone tuning it under load.
 const DEFAULT_DAEMON_TIMEOUT_MS = {
-  'prompt-hint': 1500,
-  'trigger-hook': 800,
-  'wakeup-hook': 3000,
+  [HOOK_OP.PROMPT_HINT]: 1500,
+  [HOOK_OP.TRIGGER_HOOK]: 800,
+  [HOOK_OP.WAKEUP_HOOK]: 3000,
 };
 
 export function hookDaemonTimeoutMs(op) {

@@ -11,6 +11,7 @@ import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retri
 import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 import { callDaemonOp, hookDaemonTimeoutMs } from './hook-io.js';
+import { HOOK_OP } from '../daemon-paths.js';
 import { unresolvableHookCommands } from './setup-hooks.js';
 
 // Post-compact context loses everything not in the transcript summary,
@@ -180,7 +181,7 @@ export async function wakeupHook() {
     // Same reason as prompt-hint.js: resolved once, hook-side, and handed
     // down as a plain value so compute() never has to touch ancestry itself.
     const session = resolveSessionId(hookInput);
-    const daemon = await callDaemonOp('wakeup-hook', { hookInput, session }, { timeoutMs: hookDaemonTimeoutMs('wakeup-hook') });
+    const daemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.WAKEUP_HOOK) });
     const output = daemon.ok ? daemon.output : computeWakeupHook({ hookInput, session, fastWrite: true });
     if (output != null) console.log(output);
   } catch {

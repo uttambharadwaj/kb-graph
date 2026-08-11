@@ -10,6 +10,7 @@ import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js'
 import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
 import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, recordHookFailure, deliver } from './hook-io.js';
+import { HOOK_OP } from '../daemon-paths.js';
 
 const MAX_HINTS = 3;
 
@@ -107,7 +108,7 @@ export async function promptHint() {
     // has to touch ancestry again.
     const session = resolveSessionId(hookInput);
 
-    const daemon = await callDaemonOp('prompt-hint', { prompt, session }, { timeoutMs: hookDaemonTimeoutMs('prompt-hint') });
+    const daemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.PROMPT_HINT) });
     const output = daemon.ok ? daemon.output : computePromptHint({ prompt, session, fastWrite: true });
     if (output) await deliver(output);
   } catch (err) {

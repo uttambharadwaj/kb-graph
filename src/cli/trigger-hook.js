@@ -17,6 +17,7 @@ import { basename, join } from 'path';
 import { KB_DIR, LOGS_DIR } from '../paths.js';
 import { loadTriggerIndex, matchCommand } from '../trigger-match.js';
 import { callDaemonOp, hookDaemonTimeoutMs, recordHookFailure, deliver } from './hook-io.js';
+import { HOOK_OP } from '../daemon-paths.js';
 
 export const MAX_SESSION_WARNINGS = 2;
 export const TRIGGERS_LOG_DIR = join(LOGS_DIR, 'triggers');
@@ -244,7 +245,7 @@ export async function triggerHook() {
     // read (and a socket dial) on a misconfigured or manually-fed invocation.
     if (hookInput?.tool_name !== 'Bash' || !hookInput?.tool_input?.command) process.exit(0);
 
-    const daemon = await callDaemonOp('trigger-hook', { hookInput }, { timeoutMs: hookDaemonTimeoutMs('trigger-hook') });
+    const daemon = await callDaemonOp(HOOK_OP.TRIGGER_HOOK, { hookInput }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.TRIGGER_HOOK) });
     const output = daemon.ok ? daemon.output : computeTriggerHook(hookInput);
     if (output) await deliver(output);
   } catch (err) {

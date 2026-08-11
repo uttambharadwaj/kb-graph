@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { getDb } from '../src/db.js';
 import { DB_PATH } from '../src/paths.js';
+import { HOOK_OP } from '../src/daemon-paths.js';
 import { startDaemon } from '../src/daemon.js';
 import { callDaemonOp } from '../src/cli/hook-io.js';
 import { computePromptHint } from '../src/cli/prompt-hint.js';
@@ -96,7 +97,7 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const session = 'sess-golden-hint';
 
     const daemon = await startTestDaemon();
-    const viaDaemon = await callDaemonOp('prompt-hint', { prompt, session }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
+    const viaDaemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
     const viaCompute = computePromptHint({ prompt, session: `${session}-direct` });
@@ -109,7 +110,7 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const hookInput = { session_id: 'sess-golden-wakeup' };
 
     const daemon = await startTestDaemon();
-    const viaDaemon = await callDaemonOp('wakeup-hook', { hookInput, session: hookInput.session_id }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
+    const viaDaemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session: hookInput.session_id }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
     const viaCompute = computeWakeupHook({ hookInput: { session_id: 'sess-golden-wakeup-direct' }, session: 'sess-golden-wakeup-direct' });
@@ -126,7 +127,7 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const hookInput = BASH('gh pr merge 1 --delete-branch', 'sess-golden-trigger');
 
     const daemon = await startTestDaemon();
-    const viaDaemon = await callDaemonOp('trigger-hook', { hookInput }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
+    const viaDaemon = await callDaemonOp(HOOK_OP.TRIGGER_HOOK, { hookInput }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
     const viaCompute = computeTriggerHook(BASH('gh pr merge 1 --delete-branch', 'sess-golden-trigger-direct'));
@@ -134,10 +135,18 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     assert.match(viaDaemon.output, /"additionalContext":"⚠ KB TRIGGER: note #501/);
   });
 
-  it('an unknown op is refused rather than silently answering ok', async () => {
-    const daemon = await startTestDaemon();
+  it('an unknown op is refused rather than silently answering ok, and logged server-side', async () => {
+    const { socketPath, controlSocketPath } = freshSocketPaths();
+    const errors = [];
+    const daemon = await startDaemon({ socketPath, controlSocketPath, onError: (err) => errors.push(err) });
+    liveDaemons.add(daemon);
+
     const result = await callDaemonOp('not-a-real-op', {}, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(result.ok, false);
+    assert.ok(
+      errors.some(err => /unknown control op "not-a-real-op"/.test(err.message)),
+      'a bad op must reach onError, not only the client that is about to fall back',
+    );
   });
 });
 
