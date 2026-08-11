@@ -14,10 +14,16 @@ import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, has
 
 let db = null;
 
+// better-sqlite3's own default when no `timeout` option is passed — made
+// explicit so retrieval.js's fast-write path has a real value to restore,
+// not a number it has to keep in sync with an implicit default by hand.
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+
 function getDb() {
   if (!db) {
     const opened = new Database(DB_PATH);
     opened.pragma('journal_mode = WAL');
+    opened.pragma(`busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
     opened.pragma('wal_autocheckpoint = 100');  // Checkpoint every 100 pages (~400KB) to prevent WAL bloat
     try {
       // Verify only. A connection that failed verification must not become the

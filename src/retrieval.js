@@ -3,9 +3,16 @@
 // read back. This is the one shared chokepoint for that — every read
 // surface funnels through logRetrieval so `surface` values and `session`
 // derivation can't drift between call sites.
-import { getDb } from './db.js';
+import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from './db.js';
 import { resolveClaudeAncestry } from './process-ancestry.js';
 import { resolveMapEntry } from './session-map.js';
+
+// A cold-booted hook process's connection carries the same 5s busy_timeout as
+// every other caller — fine for a warm, single-writer process (the daemon),
+// wrong for a one-shot hook racing a long writer under a 10s hook budget.
+// `fastWrite` narrows the wait to this before the INSERT, so a busy DB drops
+// the write (still caught below) instead of blocking most of the budget.
+const FAST_WRITE_BUSY_TIMEOUT_MS = 100;
 
 // Named individually so the report's SQL can reference a surface instead of
 // restating the literal: a rename there would otherwise report zero rather
@@ -131,12 +138,20 @@ export function isTestSession(session) {
 // timestamps — reconstruction can't tell two same-second calls apart.
 // Left NULL only for a call whose result is already exactly one row
 // (kb_read/getDocument).
-export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null }) {
+export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null, fastWrite = false }) {
   try {
     if (!SURFACES.includes(surface)) throw new Error(`unknown surface "${surface}"`);
-    getDb().prepare(
-      'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0);
+    const database = getDb();
+    // Single-threaded, synchronous driver: no other call on this connection
+    // can interleave between the lowered pragma and its restore below.
+    if (fastWrite) database.pragma(`busy_timeout = ${FAST_WRITE_BUSY_TIMEOUT_MS}`);
+    try {
+      database.prepare(
+        'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test) VALUES (?, ?, ?, ?, ?, ?)'
+      ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0);
+    } finally {
+      if (fastWrite) database.pragma(`busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
+    }
   } catch (err) {
     console.error(`[KB] retrieval log failed (surface=${surface}, doc_id=${docId}): ${err.message}`);
   }
@@ -158,11 +173,12 @@ export function logRetrievalResults({
   query = null,
   session = resolveSessionId(),
   eventId = null,
+  fastWrite = false,
 }) {
   if (!surface) return;
   if (results.length === 0) {
-    logRetrieval({ surface, query, session, eventId });
+    logRetrieval({ surface, query, session, eventId, fastWrite });
     return;
   }
-  for (const r of results) logRetrieval({ docId: r.id, surface, query, session, eventId });
+  for (const r of results) logRetrieval({ docId: r.id, surface, query, session, eventId, fastWrite });
 }

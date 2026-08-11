@@ -10,6 +10,7 @@ import { isBatchCall } from '../claude-cli.js';
 import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
+import { callDaemonOp, hookDaemonTimeoutMs } from './hook-io.js';
 import { unresolvableHookCommands } from './setup-hooks.js';
 
 // Post-compact context loses everything not in the transcript summary,
@@ -68,22 +69,13 @@ async function readStdin() {
   return data;
 }
 
-export async function wakeupHook() {
-  // Our own model subprocesses are not sessions. Briefing one costs ~480 tokens
-  // it cannot use, and logs it as a briefed session the meter then counts.
-  if (isBatchCall()) process.exit(0);
-  // Parsed separately from the briefing query below: a malformed/absent stdin
-  // payload should cost us the session id, not the whole briefing.
-  let hookInput = {};
-  try {
-    hookInput = JSON.parse((await readStdin()) || '{}');
-  } catch {
-    // fall through with hookInput = {}
-  }
-  // Refresh the claude_pid -> session_id map on every SessionStart (startup,
-  // resume, clear, compact) — each of those can mint a fresh id without a
-  // fresh process, and this is one of the two places that ever sees it.
-  recordSessionMap(hookInput?.session_id);
+// The compute core: given the parsed hook stdin and its resolved session id,
+// builds the briefing text (or null on any failure — "never block session
+// start" holds whether this runs daemon-side or as this file's own CLI
+// fallback). No stdin, no process.exit, no console.log — the CLI wrapper is
+// the only place that ever prints, so daemon-served and fallback-served
+// briefings go out through the exact same call.
+export function computeWakeupHook({ hookInput, session, fastWrite = false }) {
   try {
     const db = getDb();
     const total = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;
@@ -117,15 +109,11 @@ export async function wakeupHook() {
     const stateCount = db.prepare(
       "SELECT COUNT(*) as c FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE vf.note_type = 'state' AND d.superseded_at IS NULL"
     ).get().c;
-    // Only `states` carries an id into the printed briefing (`#id`) — that's
-    // the only part of this hook an agent can act on with kb_read(id), so
-    // it's the only part worth logging as a retrieval.
-    const session = resolveSessionId(hookInput);
     // One event id for the whole SessionStart -- the briefing is one decision
     // (these are the workstreams surfaced this run), not one per state note,
     // and the post-compact active-note row below shares it for the same reason.
     const eventId = randomUUID();
-    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId });
+    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
 
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
@@ -151,7 +139,7 @@ export async function wakeupHook() {
           // Already logged above if this note is also in `states`; log it here
           // only when it isn't, so the session-scoped pick doesn't double-count.
           if (!states.some(s => s.document_id === active.document_id)) {
-            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId });
+            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
           }
           lines.push(
             `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,
@@ -164,7 +152,37 @@ export async function wakeupHook() {
       }
     }
 
-    console.log(lines.join('\n'));
+    return lines.join('\n');
+  } catch {
+    // Never block session start on KB problems.
+    return null;
+  }
+}
+
+export async function wakeupHook() {
+  // Our own model subprocesses are not sessions. Briefing one costs ~480 tokens
+  // it cannot use, and logs it as a briefed session the meter then counts.
+  if (isBatchCall()) process.exit(0);
+  // Parsed separately from the briefing query below: a malformed/absent stdin
+  // payload should cost us the session id, not the whole briefing.
+  let hookInput = {};
+  try {
+    hookInput = JSON.parse((await readStdin()) || '{}');
+  } catch {
+    // fall through with hookInput = {}
+  }
+  // Refresh the claude_pid -> session_id map on every SessionStart (startup,
+  // resume, clear, compact) — each of those can mint a fresh id without a
+  // fresh process, and this is one of the two places that ever sees it.
+  // Ancestry-dependent — must run here, never daemon-side.
+  recordSessionMap(hookInput?.session_id);
+  try {
+    // Same reason as prompt-hint.js: resolved once, hook-side, and handed
+    // down as a plain value so compute() never has to touch ancestry itself.
+    const session = resolveSessionId(hookInput);
+    const daemon = await callDaemonOp('wakeup-hook', { hookInput, session }, { timeoutMs: hookDaemonTimeoutMs('wakeup-hook') });
+    const output = daemon.ok ? daemon.output : computeWakeupHook({ hookInput, session, fastWrite: true });
+    if (output != null) console.log(output);
   } catch {
     // Never block session start on KB problems.
   }

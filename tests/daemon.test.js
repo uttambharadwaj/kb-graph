@@ -4,7 +4,7 @@ import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -25,8 +25,13 @@ after(async () => {
   for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
 });
 
+// The control socket defaults to a KB_DIR-based path shared by the whole
+// file — fine in production (one daemon per KB_DIR) but wrong for tests,
+// which start many daemons against one KB_DIR. Co-locate it with the main
+// socket's own fresh dir unless a test overrides it explicitly.
 async function startTestDaemon(options) {
-  const daemon = await startDaemon(options);
+  const controlSocketPath = options.socketPath ? join(dirname(options.socketPath), 'ctl.sock') : undefined;
+  const daemon = await startDaemon({ controlSocketPath, ...options });
   liveDaemons.add(daemon);
   return daemon;
 }
