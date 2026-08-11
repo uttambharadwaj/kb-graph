@@ -1,7 +1,7 @@
 // The resident KB service: one process, one unix socket, one MCP connection
-// per accepted socket. Replaces the per-session supervisor+child pair that
-// each editor session spawns today (PF-3154) — nothing registers against it
-// yet, the stdio shim that does lands separately.
+// per accepted socket, in place of the supervisor+child pair every editor
+// session spawns today. Nothing registers against it yet — the stdio shim
+// that dials it lands separately.
 //
 // Each connection is served by serveStdio() over a StdioServerTransport bound
 // to the socket rather than to process stdio. That is the SDK's sanctioned
@@ -17,6 +17,7 @@ import { chmodSync, unlinkSync } from 'fs';
 import { connect, createServer } from 'net';
 import { join } from 'path';
 import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
+import { CLAUDE_CALL_TIMEOUT_MS } from './claude-cli.js';
 import { createKbServer } from './mcp-factory.js';
 import { KB_DIR } from './paths.js';
 
@@ -27,8 +28,12 @@ export const DAEMON_SOCKET_PATH = join(KB_DIR, 'daemon.sock');
 const MAX_SOCKET_PATH_BYTES = 104;
 
 const DRAIN_POLL_MS = 25;
-const DEFAULT_DRAIN_TIMEOUT_MS = 10_000;
 const PROBE_TIMEOUT_MS = 1_000;
+
+// Must outlast the longest a single tool call can take, or shutdown cuts off
+// work the tool itself was still willing to wait for. Whatever supervises the
+// process may SIGKILL sooner; that is its budget to set, not ours to pre-empt.
+const DEFAULT_DRAIN_TIMEOUT_MS = CLAUDE_CALL_TIMEOUT_MS + 10_000;
 
 /**
  * What is behind a socket path, judged by connect() alone.
@@ -117,7 +122,9 @@ export async function startDaemon({
 
   const connections = new Set();
   const server = createServer((socket) => {
-    // A client vanishing mid-write is routine, not a daemon fault.
+    // Keeps a peer disconnect from throwing as an unhandled 'error'. The error
+    // is not lost: the transport below listens on the same socket and reports
+    // it through onerror.
     socket.on('error', () => {});
 
     const handle = serveStdio(buildServer, {
