@@ -20,6 +20,7 @@ async function printStatus(socketPath) {
     const detail = {
       absent: 'no socket',
       stale: 'not accepting connections — stopped, or draining a shutdown',
+      occupied: 'something that is not a socket is in the way',
       unknown: 'socket present but unreachable',
     };
     console.log(`kb daemon: down (${detail[occupancy]}) — ${socketPath}`);

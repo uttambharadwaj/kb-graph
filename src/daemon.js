@@ -13,7 +13,7 @@
 // No src/ watcher here on purpose: the per-session supervisor reloads its
 // child because it owns one connection, while a restart of this process drops
 // every session at once. Whatever supervises `kb serve` owns that decision.
-import { chmodSync, unlinkSync } from 'fs';
+import { chmodSync, lstatSync, unlinkSync } from 'fs';
 import { connect, createServer } from 'net';
 import { join } from 'path';
 import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
@@ -35,17 +35,7 @@ const PROBE_TIMEOUT_MS = 1_000;
 // process may SIGKILL sooner; that is its budget to set, not ours to pre-empt.
 const DEFAULT_DRAIN_TIMEOUT_MS = CLAUDE_CALL_TIMEOUT_MS + 10_000;
 
-/**
- * What is behind a socket path, judged by connect() alone.
- *
- * A successful connect is the only proof another daemon holds the socket, and
- * silence is NOT proof of absence — a live daemon busy enough to fill its
- * accept backlog also fails to answer. So `unknown` counts as occupied and the
- * unlink decision below never rests on a timeout.
- *
- * @returns {Promise<'live'|'stale'|'absent'|'unknown'>}
- */
-export function probeSocket(socketPath, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+function connectProbe(socketPath, timeoutMs) {
   return new Promise((resolve) => {
     const socket = connect(socketPath);
     let settled = false;
@@ -64,6 +54,28 @@ export function probeSocket(socketPath, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
       finish('unknown');
     });
   });
+}
+
+/**
+ * What is behind a socket path. Only `stale` is safe to unlink.
+ *
+ * The type check has to come first, because connect's errno cannot carry it:
+ * a regular file answers ENOTSOCK on darwin but ECONNREFUSED on linux, which
+ * is the same code a dead socket gives. Classifying on errno alone therefore
+ * deletes an innocent file on linux and refuses on darwin. lstat rather than
+ * stat: a symlink parked here is not ours to follow or remove either.
+ *
+ * A successful connect is the only proof another daemon holds the socket, and
+ * silence is NOT proof of absence — a live daemon busy enough to fill its
+ * accept backlog also fails to answer. So `unknown` counts as occupied and the
+ * unlink decision never rests on a timeout.
+ *
+ * @returns {Promise<'live'|'stale'|'absent'|'occupied'|'unknown'>}
+ */
+export async function probeSocket(socketPath, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  const stats = lstatSync(socketPath, { throwIfNoEntry: false });
+  if (stats && !stats.isSocket()) return 'occupied';
+  return connectProbe(socketPath, timeoutMs);
 }
 
 function assertSocketPathFits(socketPath) {
@@ -101,10 +113,10 @@ export async function startDaemon({
   assertSocketPathFits(socketPath);
 
   const occupancy = await probeSocket(socketPath);
-  if (occupancy === 'live' || occupancy === 'unknown') {
-    throw new Error(`A daemon is already listening on ${socketPath}`);
-  }
-  // Nothing answered a connect, so no process owns this file.
+  if (occupancy === 'live') throw new Error(`A daemon is already listening on ${socketPath}`);
+  if (occupancy === 'occupied') throw new Error(`${socketPath} exists and is not a socket; refusing to remove it`);
+  if (occupancy === 'unknown') throw new Error(`Cannot tell what holds ${socketPath}; refusing to start`);
+  // Proven a socket that nothing accepts on, so no process owns this file.
   if (occupancy === 'stale') unlinkSync(socketPath);
 
   let inFlight = 0;

@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,10 +11,45 @@ import { z } from 'zod';
 import { connectDaemonClient } from '../src/daemon-client.js';
 import { startDaemon } from '../src/daemon.js';
 
+// A listening server holds the event loop open, so a daemon a test failed to
+// close does not fail that test — it hangs the whole file, long after the TAP
+// output says every case passed. Nothing here may rely on a test's happy path
+// to release a handle.
 const scratchDirs = [];
-after(() => {
+const liveDaemons = new Set();
+const CASE_TIMEOUT_MS = 60_000;
+
+after(async () => {
+  for (const daemon of liveDaemons) await daemon.close().catch(() => {});
+  liveDaemons.clear();
   for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
 });
+
+async function startTestDaemon(options) {
+  const daemon = await startDaemon(options);
+  liveDaemons.add(daemon);
+  return daemon;
+}
+
+async function closeDaemon(daemon) {
+  liveDaemons.delete(daemon);
+  await daemon.close();
+}
+
+/**
+ * Asserts a start is refused. The finally matters: when startDaemon wrongly
+ * SUCCEEDS, assert.rejects throws, and without this the daemon it just bound
+ * is never closed — which is exactly how a one-line assertion failure turns
+ * into a test run that never terminates.
+ */
+async function assertStartRefused(options, match) {
+  let daemon = null;
+  try {
+    await assert.rejects(async () => { daemon = await startDaemon(options); }, match);
+  } finally {
+    if (daemon) await daemon.close().catch(() => {});
+  }
+}
 
 // Its own short dir per test: sockaddr_un caps the path, and two tests sharing
 // one path would make the stale-socket cases race each other.
@@ -34,22 +69,36 @@ function withDeadline(promise, ms, what) {
   ]);
 }
 
-/** Leaves a socket file on disk with nothing behind it, the way a SIGKILLed daemon does. */
-function abandonSocket(socketPath) {
+/**
+ * Leaves a socket file on disk with nothing behind it, the way a SIGKILLed
+ * daemon does. Bounded end to end and killed in a finally: a child that never
+ * reaches its readiness line must fail this in seconds, not wait forever on a
+ * stdout chunk that is not coming.
+ */
+async function abandonSocket(socketPath) {
   const script = `require('net').createServer().listen(${JSON.stringify(socketPath)}, () => console.log('ready'))`;
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
-    child.on('error', reject);
-    child.stdout.once('data', () => {
-      child.on('exit', () => resolve());
-      child.kill('SIGKILL');
-    });
-  });
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  try {
+    await withDeadline(
+      new Promise((resolve, reject) => {
+        child.once('error', reject);
+        exited.then(code => reject(new Error(`helper exited before binding, code ${code}`)));
+        child.stdout.once('data', resolve);
+      }),
+      10_000,
+      'the socket-holding helper to bind',
+    );
+    child.kill('SIGKILL');
+    await withDeadline(exited, 10_000, 'the helper to die');
+  } finally {
+    child.kill('SIGKILL');
+  }
 }
 
 describe('resident daemon', () => {
-  it('serves initialize, tools/list and tools/call over a socket', async () => {
-    const daemon = await startDaemon({ socketPath: freshSocketPath() });
+  it('serves initialize, tools/list and tools/call over a socket', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
     const client = await connectDaemonClient(daemon.socketPath);
     try {
       assert.deepStrictEqual(client.getServerVersion(), { name: 'knowledge-base', version: '1.0.0' });
@@ -62,11 +111,11 @@ describe('resident daemon', () => {
       assert.strictEqual(result.content[0].type, 'text');
     } finally {
       await client.close();
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('pins one instance per connection and does not cross concurrent calls', async () => {
+  it('pins one instance per connection and does not cross concurrent calls', { timeout: CASE_TIMEOUT_MS }, async () => {
     let built = 0;
     let releaseHold;
     const hold = new Promise((resolve) => { releaseHold = resolve; });
@@ -85,7 +134,7 @@ describe('resident daemon', () => {
       return server;
     };
 
-    const daemon = await startDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath(), serverFactory });
     const first = await connectDaemonClient(daemon.socketPath);
     const second = await connectDaemonClient(daemon.socketPath);
     try {
@@ -109,11 +158,11 @@ describe('resident daemon', () => {
     } finally {
       await first.close();
       await second.close();
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('delivers a server-initiated notification to that connection only', async () => {
+  it('delivers a server-initiated notification to that connection only', { timeout: CASE_TIMEOUT_MS }, async () => {
     const instances = [];
     const serverFactory = () => {
       const server = new McpServer({ name: 'probe', version: '1.0.0' });
@@ -124,7 +173,7 @@ describe('resident daemon', () => {
       return server;
     };
 
-    const daemon = await startDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath(), serverFactory });
     const changes = { first: 0, second: 0 };
     const listChangedFor = (key, onFire) => ({
       tools: { autoRefresh: false, debounceMs: 0, onChanged: () => { changes[key] += 1; onFire?.(); } },
@@ -147,11 +196,11 @@ describe('resident daemon', () => {
     } finally {
       await first.close();
       await second.close();
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('lets an in-flight call finish before shutdown completes', async () => {
+  it('lets an in-flight call finish before shutdown completes', { timeout: CASE_TIMEOUT_MS }, async () => {
     let releaseHold;
     const hold = new Promise((resolve) => { releaseHold = resolve; });
 
@@ -164,7 +213,7 @@ describe('resident daemon', () => {
       return server;
     };
 
-    const daemon = await startDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath(), serverFactory });
     const client = await connectDaemonClient(daemon.socketPath);
     const parked = client.callTool({ name: 'slow', arguments: {} });
     await delay(50);
@@ -183,7 +232,7 @@ describe('resident daemon', () => {
     await client.close();
   });
 
-  it('survives a response too large for the client read buffer', async () => {
+  it('survives a response too large for the client read buffer', { timeout: CASE_TIMEOUT_MS }, async () => {
     // One byte over the SDK's 10MB ceiling, which ReadBuffer.append enforces by
     // throwing. Unguarded that throw is an uncaughtException in a socket 'data'
     // handler, which kills this whole process rather than the connection.
@@ -196,7 +245,7 @@ describe('resident daemon', () => {
       return server;
     };
 
-    const daemon = await startDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath(), serverFactory });
     const client = await connectDaemonClient(daemon.socketPath);
     const errors = [];
     client.onerror = (err) => errors.push(err);
@@ -216,65 +265,73 @@ describe('resident daemon', () => {
       assert.strictEqual(typeof process.pid, 'number');
     } finally {
       await client.close();
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('creates the socket at 0600 and leaves the process umask alone', async () => {
+  it('creates the socket at 0600 and leaves the process umask alone', { timeout: CASE_TIMEOUT_MS }, async () => {
     const before = process.umask();
-    const daemon = await startDaemon({ socketPath: freshSocketPath() });
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
     try {
       assert.strictEqual(statSync(daemon.socketPath).mode & 0o777, 0o600);
       // The mode is bought by narrowing the process-wide umask across bind, so
       // failing to put it back would silently narrow every later file too.
       assert.strictEqual(process.umask(), before, 'the umask must be restored');
     } finally {
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('reclaims a socket file left behind by a dead daemon', async () => {
+  it('reclaims a socket file left behind by a dead daemon', { timeout: CASE_TIMEOUT_MS }, async () => {
     const socketPath = freshSocketPath();
     await abandonSocket(socketPath);
     assert.ok(existsSync(socketPath), 'the dead process must have left its socket file');
 
-    const daemon = await startDaemon({ socketPath });
+    const daemon = await startTestDaemon({ socketPath });
     try {
       const client = await connectDaemonClient(socketPath);
       await client.listTools();
       await client.close();
     } finally {
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('refuses a non-socket file at the socket path instead of deleting it', async () => {
+  // connect() cannot answer "is this a socket": darwin says ENOTSOCK, linux
+  // says ECONNREFUSED, the same code a dead socket gives. Classifying on errno
+  // passed here on darwin while deleting the file on linux.
+  it('refuses a non-socket file at the socket path instead of deleting it', { timeout: CASE_TIMEOUT_MS }, async () => {
     const socketPath = freshSocketPath();
     writeFileSync(socketPath, 'not a socket');
 
-    await assert.rejects(() => startDaemon({ socketPath }), /already listening/);
-    assert.strictEqual(readFileSync(socketPath, 'utf8'), 'not a socket', 'only a refused connect may clear a path');
+    await assertStartRefused({ socketPath }, /is not a socket/);
+    assert.strictEqual(readFileSync(socketPath, 'utf8'), 'not a socket', 'only a proven dead socket may be cleared');
   });
 
-  it('refuses to start when a live daemon holds the socket', async () => {
-    const daemon = await startDaemon({ socketPath: freshSocketPath() });
+  it('refuses a directory at the socket path', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    mkdirSync(socketPath);
+
+    await assertStartRefused({ socketPath }, /is not a socket/);
+    assert.ok(statSync(socketPath).isDirectory(), 'the directory must survive');
+  });
+
+  it('refuses to start when a live daemon holds the socket', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
     try {
-      await assert.rejects(
-        () => startDaemon({ socketPath: daemon.socketPath }),
-        /already listening/,
-      );
+      await assertStartRefused({ socketPath: daemon.socketPath }, /already listening/);
       // The refusal must leave the running daemon usable, not unlink it.
       const client = await connectDaemonClient(daemon.socketPath);
       await client.listTools();
       await client.close();
     } finally {
-      await daemon.close();
+      await closeDaemon(daemon);
     }
   });
 
-  it('removes its socket on close', async () => {
-    const daemon = await startDaemon({ socketPath: freshSocketPath() });
-    await daemon.close();
+  it('removes its socket on close', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
+    await closeDaemon(daemon);
     assert.ok(!existsSync(daemon.socketPath), 'a clean shutdown must not leave a socket file');
   });
 });
