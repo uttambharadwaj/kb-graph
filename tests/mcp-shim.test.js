@@ -1,18 +1,20 @@
 import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/server';
 import { startDaemon } from '../src/daemon.js';
+import { startWedgedDaemon } from './helpers/wedged-daemon.js';
 
 // Drives `kb mcp-shim` as a real child process against a real in-process
 // daemon — the daemon is the same code daemon.test.js exercises, just fronted
 // here by the shim's byte-forwarding pipe instead of the SDK client directly.
 const KB_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'kb.js');
+const MCP_SHIM_MODULE = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'cli', 'mcp-shim.js');
 const CASE_TIMEOUT_MS = 60_000;
 const REQUEST_PROTOCOL_VERSION = '2025-06-18';
 
@@ -50,9 +52,10 @@ function withDeadline(promise, ms, what) {
   ]);
 }
 
-function spawnShim(extraArgs = []) {
+function spawnShim(extraArgs = [], extraEnv = {}) {
   const child = spawn(process.execPath, [KB_BIN, 'mcp-shim', ...extraArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, ...extraEnv },
   });
   strayChildren.add(child);
   child.once('exit', () => strayChildren.delete(child));
@@ -172,9 +175,12 @@ describe('kb mcp-shim', () => {
     const driver = jsonRpcDriver(child);
     try {
       await initialize(driver);
-      await until(() => instances.length === 1, 'the daemon to build a server instance for this connection');
+      // Two instances: the liveness probe's short-lived connection, then the
+      // real pipe connection — in that order, since the shim awaits the
+      // probe before ever dialing the second socket. The last one is ours.
+      await until(() => instances.length === 2, 'the daemon to build server instances for the probe and the real connection');
 
-      await instances[0].sendToolListChanged();
+      await instances.at(-1).sendToolListChanged();
       await withDeadline(
         until(() => driver.notifications.some((n) => n.method === 'notifications/tools/list_changed'), 'the notification on stdout'),
         5_000,
@@ -197,6 +203,45 @@ describe('kb mcp-shim', () => {
     } finally {
       child.kill();
     }
+  });
+
+  it('falls back when the daemon accepts but never answers (wedged)', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    const wedged = await startWedgedDaemon(socketPath);
+    // Short override so the probe's fallback deadline doesn't slow the suite.
+    const child = spawnShim([`--socket=${socketPath}`], { KB_SHIM_PROBE_TIMEOUT_MS: '300' });
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    try {
+      const init = await withDeadline(initialize(driver), 15_000, 'the fallback in-process server to answer initialize despite the wedged daemon');
+      assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
+      await until(() => stderr().includes('kb mcp-shim: daemon unresponsive, serving in-process'), 'the unresponsive fallback stderr line');
+    } finally {
+      child.kill();
+      await wedged.close();
+    }
+  });
+
+  it('honors KB_SHIM_PROBE_TIMEOUT_MS as the probe deadline', () => {
+    // Reads the exported constant in a fresh process rather than timing a
+    // real fallback against wall-clock — a loaded test runner makes any
+    // absolute-duration assertion flaky, and this proves the same thing: the
+    // env var, not the 2s default, decides the deadline.
+    const readTimeoutMs = (envOverride = {}) => {
+      const url = pathToFileURL(MCP_SHIM_MODULE).href;
+      // Base env deliberately excludes any ambient KB_SHIM_PROBE_TIMEOUT_MS
+      // so the unset case is a real unset, not an accident of this shell.
+      const { KB_SHIM_PROBE_TIMEOUT_MS: _unused, ...baseEnv } = process.env;
+      const result = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(url)}).then(m => console.log(m.PROBE_TIMEOUT_MS))`], {
+        env: { ...baseEnv, ...envOverride },
+        encoding: 'utf8',
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      return Number(result.stdout.trim());
+    };
+
+    assert.strictEqual(readTimeoutMs(), 2000, 'defaults to 2000ms when unset');
+    assert.strictEqual(readTimeoutMs({ KB_SHIM_PROBE_TIMEOUT_MS: '150' }), 150);
   });
 
   it('exits nonzero promptly when the daemon dies mid-session', { timeout: CASE_TIMEOUT_MS }, async () => {
