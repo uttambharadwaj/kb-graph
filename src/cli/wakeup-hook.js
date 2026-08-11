@@ -76,7 +76,17 @@ async function readStdin() {
 // fallback). No stdin, no process.exit, no console.log — the CLI wrapper is
 // the only place that ever prints, so daemon-served and fallback-served
 // briefings go out through the exact same call.
-export function computeWakeupHook({ hookInput, session, fastWrite = false }) {
+//
+// commit (default true, the CLI fallback's mode) logs each briefing
+// retrieval immediately, inline, and returns { output, plan: null }.
+// commit: false (the daemon dispatcher's mode) makes no write at all and
+// returns the writes as `plan` instead — see computePromptHint's header for
+// why: a slow daemon answer the client's deadline already gave up on must
+// not write rows nothing ever delivered, and an answer the client DOES use
+// must not be logged by two processes for one SessionStart. Only the
+// process that ends up printing `output` may commit `plan`, and only once
+// (see commitWakeupHookPlan).
+export function computeWakeupHook({ hookInput, session, fastWrite = false, commit = true }) {
   try {
     const db = getDb();
     const total = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;
@@ -114,7 +124,11 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false }) {
     // (these are the workstreams surfaced this run), not one per state note,
     // and the post-compact active-note row below shares it for the same reason.
     const eventId = randomUUID();
-    for (const s of states) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+    const plannedDocIds = [];
+    for (const s of states) {
+      if (commit) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+      else plannedDocIds.push(s.document_id);
+    }
 
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
@@ -137,10 +151,12 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false }) {
         if (doc?.content) {
           const truncated = doc.content.length > ACTIVE_NOTE_CAP;
           const body = truncated ? doc.content.slice(0, ACTIVE_NOTE_CAP) : doc.content;
-          // Already logged above if this note is also in `states`; log it here
-          // only when it isn't, so the session-scoped pick doesn't double-count.
+          // Already logged/planned above if this note is also in `states`;
+          // add it here only when it isn't, so the session-scoped pick
+          // doesn't double-count.
           if (!states.some(s => s.document_id === active.document_id)) {
-            logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+            if (commit) logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+            else plannedDocIds.push(active.document_id);
           }
           lines.push(
             `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,
@@ -153,10 +169,21 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false }) {
       }
     }
 
-    return lines.join('\n');
+    const plan = commit ? null : { docIds: plannedDocIds, eventId };
+    return { output: lines.join('\n'), plan };
   } catch {
     // Never block session start on KB problems.
-    return null;
+    return { output: null, plan: null };
+  }
+}
+
+// Commits a plan computeWakeupHook returned with commit: false. Caller's job
+// to call this at most once, and only for the plan it is actually about to
+// print — see the header comment on computeWakeupHook.
+export function commitWakeupHookPlan(plan, { session, fastWrite }) {
+  if (!plan) return;
+  for (const docId of plan.docIds) {
+    logRetrieval({ docId, surface: SURFACE.BRIEFING, session, eventId: plan.eventId, fastWrite });
   }
 }
 
@@ -182,7 +209,15 @@ export async function wakeupHook() {
     // down as a plain value so compute() never has to touch ancestry itself.
     const session = resolveSessionId(hookInput);
     const daemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.WAKEUP_HOOK) });
-    const output = daemon.ok ? daemon.output : computeWakeupHook({ hookInput, session, fastWrite: true });
+    let output;
+    if (daemon.ok) {
+      // This is the one commit for this SessionStart — see commitPromptHintPlan's
+      // sibling comment in prompt-hint.js for why only the delivering process may do this.
+      commitWakeupHookPlan(daemon.plan, { session, fastWrite: true });
+      output = daemon.output;
+    } else {
+      ({ output } = computeWakeupHook({ hookInput, session, fastWrite: true }));
+    }
     if (output != null) console.log(output);
   } catch {
     // Never block session start on KB problems.

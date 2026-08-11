@@ -65,14 +65,22 @@ export function hookDaemonTimeoutMs(op) {
 
 /**
  * One request, one connection, line-delimited JSON — the control-socket
- * protocol daemon.js serves. Resolves `{ ok: true, output }` only on a clean
- * answer inside timeoutMs; every other outcome (unreachable, wedged/timed
- * out, malformed response line) resolves `{ ok: false }` so the caller falls
- * back to its in-process compute path without inspecting why. The socket is
- * always destroyed before resolving — a timeout must not leave a connection
- * that could still deliver a late, out-of-band response line.
+ * protocol daemon.js serves. Resolves `{ ok: true, output, plan }` only on a
+ * clean answer inside timeoutMs; every other outcome (unreachable,
+ * wedged/timed out, malformed response line) resolves `{ ok: false }` so the
+ * caller falls back to its in-process compute path without inspecting why.
+ * The socket is always destroyed before resolving — a timeout must not leave
+ * a connection that could still deliver a late, out-of-band response line.
  *
- * @returns {Promise<{ok: true, output: string|null} | {ok: false}>}
+ * `plan` is the daemon's un-committed write (it ran the compute core with
+ * commit: false — see daemon-hook-ops.js): the caller must commit it itself,
+ * via its own connection, and only once it has actually decided to deliver
+ * `output` — see each hook's own commit*Plan function. A response this
+ * function never resolves (daemon too slow, this call already timed out)
+ * carries a plan nobody ever commits, which is the fix, not a bug: the
+ * daemon made no write of its own to leave behind.
+ *
+ * @returns {Promise<{ok: true, output: string|null, plan: object|null} | {ok: false}>}
  */
 export function callDaemonOp(op, payload, {
   // Every real caller passes this explicitly via hookDaemonTimeoutMs(op); the
@@ -111,7 +119,11 @@ export function callDaemonOp(op, payload, {
         return finish({ ok: false });
       }
       if (!parsed || parsed.ok !== true) return finish({ ok: false });
-      finish({ ok: true, output: 'output' in parsed ? parsed.output : null });
+      finish({
+        ok: true,
+        output: 'output' in parsed ? parsed.output : null,
+        plan: 'plan' in parsed ? parsed.plan : null,
+      });
     });
     socket.once('error', () => finish({ ok: false }));
     socket.once('close', () => finish({ ok: false }));

@@ -201,7 +201,20 @@ async function readStdin() {
 // wakeup-hook's session-map/ancestry dependency (resolveSession here reads
 // only session_id/transcript_path off the payload), so this is safe to call
 // identically from the daemon dispatcher or this file's own CLI fallback.
-export function computeTriggerHook(hookInput) {
+//
+// commit (default true, the CLI fallback's mode) writes the JSONL fire-log
+// line and, on emit, the session marker, immediately and inline — the A9
+// contract below applies exactly as before. commit: false (the daemon
+// dispatcher's mode) makes neither write and instead returns them as `plan`:
+// a slow daemon answer the client's deadline already gave up on must not
+// burn the marker for a warning nothing ever delivered (that command would
+// then silently never re-fire), and an answer the client DOES use must not
+// be written by two processes for one Bash call. Only the process that ends
+// up printing `output` may commit `plan`, and only once — see
+// commitTriggerHookPlan, which also re-applies the A9 contract on the
+// client's own connection, since the daemon could not have proven the
+// marker write would succeed before optimistically returning `output`.
+export function computeTriggerHook(hookInput, { commit = true } = {}) {
   try {
     const session = resolveSession(hookInput);
     const decision = decideAndRecord(hookInput, {
@@ -209,30 +222,53 @@ export function computeTriggerHook(hookInput) {
       fired: readMarker(session),
       enabled: existsSync(TRIGGER_HOOK_ENABLED_FLAG),
     });
-    if (!decision) return null;
+    if (!decision) return { output: null, plan: null };
 
-    appendJsonlLog(decision.logLine);
-    if (!decision.emit) return null;
+    if (commit) appendJsonlLog(decision.logLine);
+    const plan = commit ? null : { logLine: decision.logLine, marker: null };
 
-    // A9: write before returning an answer to deliver, and only answer if
-    // the write actually landed. A persistently failing marker write
-    // (unwritable dir, disk full) must never be silently read back as
-    // "nothing has fired yet" — that would spam the same warning on every
-    // matching Bash call all session, both cap and dedupe dead. Failing to
-    // warn once is the right direction for this surface; recordHookFailure
-    // (inside appendMarker) still captures the write failure for triage.
-    const persisted = appendMarker(decision.session, decision.firedId);
-    if (!persisted) return null;
+    if (!decision.emit) return { output: null, plan };
 
-    return JSON.stringify({
+    if (commit) {
+      // A9: write before returning an answer to deliver, and only answer if
+      // the write actually landed. A persistently failing marker write
+      // (unwritable dir, disk full) must never be silently read back as
+      // "nothing has fired yet" — that would spam the same warning on every
+      // matching Bash call all session, both cap and dedupe dead. Failing to
+      // warn once is the right direction for this surface; recordHookFailure
+      // (inside appendMarker) still captures the write failure for triage.
+      const persisted = appendMarker(decision.session, decision.firedId);
+      if (!persisted) return { output: null, plan: null };
+    } else {
+      plan.marker = { session: decision.session, firedId: decision.firedId };
+    }
+
+    const output = JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: decision.message },
     });
+    return { output, plan };
   } catch (err) {
     // Never block a tool call on a KB problem — but leave a marker, same
     // stance as prompt-hint's hint path.
     recordHookFailure('trigger-hook', err);
-    return null;
+    return { output: null, plan: null };
   }
+}
+
+// Commits a plan computeTriggerHook returned with commit: false. Caller's
+// job to call this at most once, and only for the plan behind the output it
+// is actually about to deliver — see the header comment on
+// computeTriggerHook. The JSONL fire-log line is written unconditionally
+// (it records the decision was made, not that it was delivered — same
+// principle as prompt-hint's miss row); the marker follows the A9 contract:
+// returns false when a marker was owed and its write failed, which the
+// caller must treat as "do not deliver" rather than delivering an unmarked
+// warning that can now spam on every later matching call this session.
+export function commitTriggerHookPlan(plan) {
+  if (!plan) return true;
+  appendJsonlLog(plan.logLine);
+  if (!plan.marker) return true;
+  return appendMarker(plan.marker.session, plan.marker.firedId);
 }
 
 export async function triggerHook() {
@@ -246,7 +282,17 @@ export async function triggerHook() {
     if (hookInput?.tool_name !== 'Bash' || !hookInput?.tool_input?.command) process.exit(0);
 
     const daemon = await callDaemonOp(HOOK_OP.TRIGGER_HOOK, { hookInput }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.TRIGGER_HOOK) });
-    const output = daemon.ok ? daemon.output : computeTriggerHook(hookInput);
+    let output;
+    if (daemon.ok) {
+      // This is the one commit for this Bash call — see commitPromptHintPlan's
+      // sibling comment in prompt-hint.js for why only the delivering process
+      // may do this. A9 still applies: an unpersisted marker suppresses
+      // delivery even though the daemon already answered with a message.
+      const persisted = commitTriggerHookPlan(daemon.plan);
+      output = persisted ? daemon.output : null;
+    } else {
+      ({ output } = computeTriggerHook(hookInput));
+    }
     if (output) await deliver(output);
   } catch (err) {
     // Never block a tool call on a KB problem — but leave a marker, same

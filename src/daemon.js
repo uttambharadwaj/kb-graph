@@ -204,6 +204,12 @@ export async function startDaemon({
   // bug in the dispatch itself), and onError is what makes that backstop
   // visible server-side instead of only ever reaching the client that's
   // about to fall back and forget it happened.
+  //
+  // Trust model: this socket is 0600, same-user only (bindSocket). The
+  // `session` a caller supplies in payload is taken on faith — there is no
+  // narrower boundary to check it against, because a caller who can reach
+  // this socket at all already has direct read/write access to kb.db under
+  // the same user account. The filesystem permission is the whole gate.
   function serveControlConnection(socket) {
     socket.on('error', () => {});
     let buffer = '';
@@ -225,8 +231,12 @@ export async function startDaemon({
         const { op, payload } = JSON.parse(buffer.slice(0, newline));
         const handler = HOOK_OPS[op];
         if (!handler) throw new Error(`unknown control op "${op}"`);
-        const output = await track(() => handler(payload))();
-        response = { ok: true, output: output ?? null };
+        // HOOK_OPS handlers run in commit: false mode — { output, plan },
+        // never a bare string. `plan` rides along unread by anything here;
+        // only the client, once it has committed to delivering `output`,
+        // knows it is safe to write.
+        const result = await track(() => handler(payload))();
+        response = { ok: true, output: result?.output ?? null, plan: result?.plan ?? null };
       } catch (err) {
         onError(err);
         response = { ok: false, error: err.message };

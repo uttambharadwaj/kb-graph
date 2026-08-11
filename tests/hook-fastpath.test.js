@@ -12,9 +12,10 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { getDb } from '../src/db.js';
@@ -24,8 +25,9 @@ import { startDaemon } from '../src/daemon.js';
 import { callDaemonOp } from '../src/cli/hook-io.js';
 import { computePromptHint } from '../src/cli/prompt-hint.js';
 import { computeWakeupHook } from '../src/cli/wakeup-hook.js';
-import { computeTriggerHook, TRIGGER_HOOK_ENABLED_FLAG } from '../src/cli/trigger-hook.js';
+import { computeTriggerHook, TRIGGER_HOOK_ENABLED_FLAG, TRIGGERS_LOG_DIR } from '../src/cli/trigger-hook.js';
 import { startWedgedDaemon } from './helpers/wedged-daemon.js';
+import { startSlowDaemon } from './helpers/slow-daemon.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 
@@ -100,8 +102,9 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const viaDaemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
-    const viaCompute = computePromptHint({ prompt, session: `${session}-direct` });
+    const { output: viaCompute } = computePromptHint({ prompt, session: `${session}-direct` });
     assert.strictEqual(viaDaemon.output, viaCompute, 'the daemon and the direct compute must answer identically for the same fixture');
+    assert.ok(viaDaemon.plan, 'a daemon answer with a hint must carry an uncommitted plan for the client to commit');
     assert.match(viaDaemon.output, /^KB HINT:/);
   });
 
@@ -113,8 +116,9 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const viaDaemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session: hookInput.session_id }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
-    const viaCompute = computeWakeupHook({ hookInput: { session_id: 'sess-golden-wakeup-direct' }, session: 'sess-golden-wakeup-direct' });
+    const { output: viaCompute } = computeWakeupHook({ hookInput: { session_id: 'sess-golden-wakeup-direct' }, session: 'sess-golden-wakeup-direct' });
     assert.strictEqual(stripHealthLine(viaDaemon.output), stripHealthLine(viaCompute));
+    assert.ok(viaDaemon.plan, 'a daemon briefing answer must carry an uncommitted plan for the client to commit');
     assert.match(viaDaemon.output, /^KB BRIEFING/);
     assert.match(viaDaemon.output, /State: fastpath golden/);
   });
@@ -130,9 +134,10 @@ describe('control-socket round trip: daemon-served output equals the in-process 
     const viaDaemon = await callDaemonOp(HOOK_OP.TRIGGER_HOOK, { hookInput }, { timeoutMs: 2000, socketPath: daemon.controlSocketPath });
     assert.strictEqual(viaDaemon.ok, true);
 
-    const viaCompute = computeTriggerHook(BASH('gh pr merge 1 --delete-branch', 'sess-golden-trigger-direct'));
+    const { output: viaCompute } = computeTriggerHook(BASH('gh pr merge 1 --delete-branch', 'sess-golden-trigger-direct'));
     assert.strictEqual(viaDaemon.output, viaCompute);
     assert.match(viaDaemon.output, /"additionalContext":"⚠ KB TRIGGER: note #501/);
+    assert.ok(viaDaemon.plan?.marker, 'a daemon trigger answer must carry an uncommitted marker for the client to commit');
   });
 
   it('an unknown op is refused rather than silently answering ok, and logged server-side', async () => {
@@ -164,7 +169,7 @@ describe('CLI hooks fall back cleanly when the daemon is unreachable', () => {
     );
     const elapsed = Date.now() - started;
 
-    const expected = computePromptHint({ prompt, session: 'sess-fallback-hint-direct', fastWrite: true });
+    const { output: expected } = computePromptHint({ prompt, session: 'sess-fallback-hint-direct', fastWrite: true });
     assert.strictEqual(stdout.trim(), expected);
     assert.ok(elapsed < 3000, `expected the fallback to stay well inside the 400ms deadline, took ${elapsed}ms`);
   });
@@ -179,7 +184,7 @@ describe('CLI hooks fall back cleanly when the daemon is unreachable', () => {
       { KB_CONTROL_SOCKET_PATH: controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '400' },
     );
 
-    const expected = computeWakeupHook({ hookInput: { session_id: 'sess-fallback-wakeup-direct' }, session: 'sess-fallback-wakeup-direct', fastWrite: true });
+    const { output: expected } = computeWakeupHook({ hookInput: { session_id: 'sess-fallback-wakeup-direct' }, session: 'sess-fallback-wakeup-direct', fastWrite: true });
     assert.strictEqual(stripHealthLine(stdout.trim()), stripHealthLine(expected.trim()));
     assert.match(stdout, /State: fastpath fallback/);
   });
@@ -263,7 +268,7 @@ describe('the fallback path still answers when its own retrieval-log write is bu
     let output;
     const started = Date.now();
     try {
-      output = computePromptHint({ prompt, session: 'sess-busy-hint', fastWrite: true });
+      ({ output } = computePromptHint({ prompt, session: 'sess-busy-hint', fastWrite: true }));
     } finally {
       blocker.exec('ROLLBACK');
       blocker.close();
@@ -274,5 +279,114 @@ describe('the fallback path still answers when its own retrieval-log write is bu
     assert.ok(elapsed < 1000, `expected the busy write to fail fast rather than block, took ${elapsed}ms`);
     const row = getDb().prepare("SELECT * FROM retrievals WHERE session = 'sess-busy-hint'").get();
     assert.strictEqual(row, undefined, 'the retrieval row must be dropped, not eventually written');
+  });
+});
+
+// Direct regression coverage for the double-log/burned-marker race: a
+// healthy daemon computes with commit: false and writes nothing itself; the
+// CLIENT commits its plan exactly once, right before delivering. A slow
+// daemon whose answer arrives after the client's own deadline already fired
+// must therefore write NOTHING when it finally responds — the client has
+// already fallen back, computed, and committed its own answer by then.
+// Before this fix, both the daemon (writing directly, unconditionally) and
+// the fallback (also writing directly) could log the same decision twice, or
+// — for the trigger marker — the daemon could burn it for a warning the
+// deadline discarded, permanently and silently suppressing every later
+// occurrence in that session.
+describe('exactly one process ever commits the outcome of one hook decision', () => {
+  it('prompt-hint: a healthy daemon writes nothing itself — the client commits the plan once', async () => {
+    insertHintableDoc('Coolant flush interval guide', 'coolant flush interval guide for the bay crew');
+    const prompt = 'coolant flush interval guide for the bay crew';
+    const daemon = await startTestDaemon();
+
+    const stdout = runHook(
+      'prompt-hint',
+      { session_id: 'sess-onelog-healthy', prompt },
+      { KB_CONTROL_SOCKET_PATH: daemon.controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '2000' },
+    );
+    assert.match(stdout, /^KB HINT:/);
+
+    const rows = getDb().prepare("SELECT * FROM retrievals WHERE session = 'sess-onelog-healthy'").all();
+    assert.strictEqual(rows.length, 1, 'exactly one retrieval row for one delivered hint');
+  });
+
+  it('prompt-hint: a daemon slower than the deadline logs nothing — the fallback\'s row is the only one', async () => {
+    insertHintableDoc('Bearing seal replacement checklist', 'bearing seal replacement checklist for the bay crew');
+    const prompt = 'bearing seal replacement checklist for bay crew';
+    const { controlSocketPath } = freshSocketPaths();
+    const session = 'sess-onelog-slow-hint';
+    const slow = await startSlowDaemon(controlSocketPath, {
+      delayMs: 500,
+      buildResponse: (op, payload) => {
+        assert.strictEqual(op, HOOK_OP.PROMPT_HINT);
+        const result = computePromptHint({ ...payload, commit: false });
+        return { ok: true, output: result.output, plan: result.plan };
+      },
+    });
+    try {
+      const stdout = runHook(
+        'prompt-hint',
+        { session_id: session, prompt },
+        { KB_CONTROL_SOCKET_PATH: controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '150' },
+      );
+      assert.match(stdout, /^KB HINT:/, 'the fallback must still deliver the hint the client itself computed');
+
+      // Long enough for the slow daemon's delayed answer to actually reach
+      // the (by now closed) socket and attempt to matter.
+      await delay(700);
+
+      const rows = getDb().prepare(`SELECT * FROM retrievals WHERE session = '${session}'`).all();
+      assert.strictEqual(rows.length, 1, 'exactly one row — the fallback\'s; the discarded daemon answer must write nothing');
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it('trigger-hook: a daemon slower than the deadline never burns the marker — the fallback re-decides and fires', async () => {
+    writeFileSync(join(process.env.KB_DIR, 'trigger-index.json'), JSON.stringify([
+      { id: 504, title: 'Force-delete branch (race)', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 2, sessions: 1 }] },
+    ]));
+    writeFileSync(TRIGGER_HOOK_ENABLED_FLAG, '');
+    const { controlSocketPath } = freshSocketPaths();
+    const session = 'sess-onelog-slow-trigger';
+    const slow = await startSlowDaemon(controlSocketPath, {
+      delayMs: 500,
+      buildResponse: (op, payload) => {
+        assert.strictEqual(op, HOOK_OP.TRIGGER_HOOK);
+        const result = computeTriggerHook(payload.hookInput, { commit: false });
+        return { ok: true, output: result.output, plan: result.plan };
+      },
+    });
+    try {
+      const stdout = runHook(
+        'trigger-hook',
+        BASH('gh pr merge 1 --delete-branch', session),
+        { KB_CONTROL_SOCKET_PATH: controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '150' },
+      );
+      // Proves the marker was NOT already burned by the discarded daemon
+      // answer: if it had been, the fallback's own decideAndRecord would
+      // see this id as already-fired and decline to re-emit, and stdout
+      // would be empty — a warning silently lost to the deadline race.
+      assert.match(stdout, /"additionalContext":"⚠ KB TRIGGER: note #504/, 'the warning must still be re-eligible after the discarded daemon answer');
+
+      await delay(700);
+
+      const marker = JSON.parse(readFileSync(join(TRIGGERS_LOG_DIR, `${session}.json`), 'utf8'));
+      assert.deepStrictEqual(marker, [504], 'exactly one marker entry — the fallback\'s own write, not a second from the discarded daemon answer');
+
+      // The marker alone doesn't catch a duplicate: appendMarker no-ops on an
+      // id already present, so two writers racing to add the SAME id can
+      // look like one. The JSONL fire-log has no such dedup — it records the
+      // decision was made, not that it landed uniquely — so a second,
+      // discarded write shows up here even when the marker hides it.
+      const jsonlPath = join(TRIGGERS_LOG_DIR, `fires-${new Date().toISOString().slice(0, 10)}.jsonl`);
+      const fireLines = readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+      assert.strictEqual(
+        fireLines.filter(l => l.session === session).length, 1,
+        'exactly one fire-log line for this session — the fallback\'s, not a second from the discarded daemon answer',
+      );
+    } finally {
+      await slow.close();
+    }
   });
 });
