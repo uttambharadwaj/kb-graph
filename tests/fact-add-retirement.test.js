@@ -126,4 +126,47 @@ describe('kb_fact_add retires a contradicted single-valued fact', () => {
     addFact('pf-5005', 'status', 'closed', { validFrom: '2026-08-11' });
     assert.deepStrictEqual(current('pf-5005', 'status').sort(), ['closed', 'open']);
   });
+
+  it('a backdated valid_from does not retire the newer row, and the fact is not written at all', async () => {
+    // The second blocker: invalidateFact itself refuses ended < valid_from
+    // (ended_before_valid_from), so retireContradicted's loop retires nothing
+    // — but the old code kept calling addFact regardless, writing the backdated
+    // fact as a SECOND current row beside the one it failed to retire. That is
+    // the exact dual-current bug this whole fix exists to close, reached from
+    // a different angle.
+    await tool('kb_fact_add').handler({
+      subject: 'pf-6001', predicate: 'status', object: 'shipped', valid_from: '2026-08-11',
+    });
+
+    const res = stored(await tool('kb_fact_add').handler({
+      subject: 'pf-6001', predicate: 'status', object: 'in_review', valid_from: '2026-08-01',
+    }));
+
+    assert.strictEqual(res.written, false);
+    assert.strictEqual(res.skipped.reason, 'stale_valid_from');
+    assert.strictEqual(res.skipped.existing, 'shipped');
+    assert.strictEqual(res.skipped.existing_since, '2026-08-11');
+    assert.match(res.note, /not written/);
+    assert.match(res.note, /shipped/);
+
+    // Exactly one current row — the bug reproduced two.
+    assert.deepStrictEqual(current('pf-6001', 'status'), ['shipped']);
+    // And no in_review row of any kind was written, current or otherwise.
+    const all = queryFact('pf-6001', { direction: 'outgoing', exact: true });
+    assert.strictEqual(all.find(r => r.object === 'in_review'), undefined);
+  });
+
+  it('a forward-dated (or same-day) value still retires and writes normally', async () => {
+    await tool('kb_fact_add').handler({
+      subject: 'pf-6002', predicate: 'status', object: 'shipped', valid_from: '2026-08-01',
+    });
+
+    const res = stored(await tool('kb_fact_add').handler({
+      subject: 'pf-6002', predicate: 'status', object: 'in_review', valid_from: '2026-08-11',
+    }));
+
+    assert.strictEqual(res.skipped, undefined);
+    assert.strictEqual(res.retired.length, 1);
+    assert.deepStrictEqual(current('pf-6002', 'status'), ['in_review']);
+  });
 });

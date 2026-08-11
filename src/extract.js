@@ -423,27 +423,62 @@ const contradictedFacts = (subject, pred, object, held) =>
     ? held.filter(r => !sameValue(r.object, object))
     : [];
 
+// A held row that postdates the fact now being asserted: the graph already
+// believes something that happened AFTER this one claims to. Shared by
+// consolidate (which layers its own recorded_at/observed_at clause on top, for
+// same-day replay ordering that only a batch with an observation instant can
+// need) and kb_fact_add (which has no batch and no observed_at, but has
+// exactly this much: a caller can still backdate valid_from below what the
+// graph already holds, and that must not retire the newer row).
+const predatesHeld = (r, factValidFrom) => Boolean(r.valid_from) && r.valid_from > factValidFrom;
+
 // kb_fact_add's retirement: a hand-written fact applies the same single-valued
 // contradiction rule consolidate's batch does, immediately. There is no batch
-// to weigh findSingleValuedConflicts against and no observed_at to order a
-// replay with, so every genuine contradiction retires unconditionally.
-// subject/pred/object must already be canonicalTriple'd, the shape
-// consolidate's loop works with.
+// to weigh findSingleValuedConflicts against, but a backdated valid_from is
+// still a real possibility here, so predatesHeld still applies — a hand-write
+// that claims an earlier date than what the graph already holds must not
+// retire the newer row and then write itself as current beside it. subject/
+// pred/object must already be canonicalTriple'd, the shape consolidate's loop
+// works with. Returns { retired, skipped }: skipped is set, and nothing is
+// retired, when the write should not happen at all.
 export function retireContradicted(subject, pred, object, { validFrom } = {}) {
+  const factValidFrom = validFrom || new Date().toISOString().split('T')[0];
   const held = heldCurrentFacts(subject, pred);
   const contradicted = contradictedFacts(subject, pred, object, held);
+
+  const stale = contradicted.find(r => predatesHeld(r, factValidFrom));
+  if (stale) {
+    return {
+      retired: [],
+      skipped: { reason: 'stale_valid_from', existing: stale.object, existing_since: stale.valid_from },
+    };
+  }
 
   const retired = [];
   for (const prior of contradicted) {
     // prior.predicate/prior.object are the row's own stored spelling, read off
     // held — invalidateFact matches on that, not on the canonical `pred`, so a
     // row written under a pre-fold predicate is still reachable.
-    const res = invalidateFact(subject, prior.predicate, prior.object, { ended: validFrom });
+    const res = invalidateFact(subject, prior.predicate, prior.object, { ended: factValidFrom });
     if (res.invalidated) {
       retired.push({ subject, predicate: pred, object: prior.object, valid_to: res.ended, superseded_by: object });
     }
   }
-  return retired;
+
+  // Re-read rather than trust the loop: invalidateFact can still refuse for a
+  // reason predatesHeld did not anticipate (another of the ~13 MCP
+  // subprocesses retiring the same row between this function's read and its
+  // write). Refuse the whole write outright rather than let a fact this call
+  // could not fully retire sit current beside a second current row.
+  const stillContradicted = contradictedFacts(subject, pred, object, heldCurrentFacts(subject, pred));
+  if (stillContradicted.length) {
+    return {
+      retired,
+      skipped: { reason: 'retire_failed', existing: stillContradicted.map(r => r.object) },
+    };
+  }
+
+  return { retired, skipped: null };
 }
 
 // Apply extracted facts to the facts table with consolidation:
@@ -513,7 +548,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // that disagrees with itself still loses to what the graph learned after it,
     // and gating this on the retirement decision would write a replay of old
     // text as current the moment the batch happened to be contested.
-    const newer = contradicted.find(r => (r.valid_from && r.valid_from > factValidFrom)
+    const newer = contradicted.find(r => predatesHeld(r, factValidFrom)
       || (r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({

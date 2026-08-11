@@ -721,7 +721,7 @@ function defineTools() {
 
     {
       name: 'kb_fact_add',
-      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The predicate vocabulary is CLOSED: once folded, a predicate outside it is refused with an error naming the nearest listed predicates and the file the list lives in. Use one of those, or widen the list on purpose — do not reach for a different predicate just because it is accepted. A contradicting value for a single-valued predicate on a state-bearing subject (a ticket or issue id — a repo, project or person accumulates instead) retires the prior current row the same way kb_extract consolidation does; the response carries a "retired" list and a one-line note when that happens. The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
+      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The predicate vocabulary is CLOSED: once folded, a predicate outside it is refused with an error naming the nearest listed predicates and the file the list lives in. Use one of those, or widen the list on purpose — do not reach for a different predicate just because it is accepted. A contradicting value for a single-valued predicate on a state-bearing subject (a ticket or issue id — a repo, project or person accumulates instead) retires the prior current row the same way kb_extract consolidation does; the response carries a "retired" list and a one-line note when that happens. A backdated valid_from that is older than what the graph already holds is refused rather than written beside it: the response carries "skipped" with a reason and nothing is written — invalidate the newer fact first if it was wrong. The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
       schema: {
         subject: z.string().describe('The entity doing/being something'),
         predicate: z.string().describe('The relationship (e.g. "uses", "depends_on", "decided", "owns")'),
@@ -745,7 +745,16 @@ function defineTools() {
           // Before the write, not after: retirement targets the row this fact
           // is about to contradict, and that row is still current only up to
           // this point.
-          const retired = retireContradicted(t.subject, t.predicate, t.object, { validFrom: valid_from });
+          const { retired, skipped } = retireContradicted(t.subject, t.predicate, t.object, { validFrom: valid_from });
+          if (skipped) {
+            // Never write beside a row this call could not retire — that is
+            // the exact dual-current bug this function exists to prevent.
+            const note = skipped.reason === 'stale_valid_from'
+              ? `not written: current ${t.predicate}=${skipped.existing} since ${skipped.existing_since} is newer than backdated valid_from ${valid_from}; use kb_fact_invalidate first if the newer fact is wrong`
+              : `not written: could not retire current ${t.predicate}=${skipped.existing.join(', ')} — try again, or use kb_fact_invalidate`;
+            const result = { subject: t.subject, predicate: t.predicate, object: t.object, written: false, skipped, note };
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          }
           const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
           if (retired.length) {
             result.retired = retired;
