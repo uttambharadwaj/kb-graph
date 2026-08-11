@@ -3,9 +3,11 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { getDb } from '../src/db.js';
+import Database from 'better-sqlite3';
+import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from '../src/db.js';
 import { PUSH_SURFACES, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
+import { DB_PATH } from '../src/paths.js';
 
 function seedMap(pid, entry) {
   mkdirSync(SESSION_MAP_DIR, { recursive: true });
@@ -227,5 +229,60 @@ describe('logRetrievalResults', () => {
     logRetrievalResults({ results: [], surface: 'hint', query: 'shared-event-miss', eventId: 'evt-miss' });
     const missRow = db.prepare("SELECT event_id FROM retrievals WHERE surface = 'hint' AND query = 'shared-event-miss'").get();
     assert.strictEqual(missRow.event_id, 'evt-miss');
+  });
+});
+
+// hook-fastpath.test.js covers this at the compute-function level (a hint
+// still prints when its log write is dropped); this is the narrower claim —
+// the write itself fails fast rather than blocking out the connection's
+// normal busy_timeout — isolated from everything else logRetrieval does.
+describe('fastWrite: busy-tolerance for the CLI hook fallback path', () => {
+  // A second, independent connection to the same file holding the sole
+  // writer lock — the shape of "a long writer" the daemon or another hook
+  // process would be in production. BEGIN IMMEDIATE claims it up front
+  // rather than racing better-sqlite3's implicit lock acquisition.
+  function withWriteLockHeld(fn) {
+    const blocker = new Database(DB_PATH);
+    blocker.pragma('journal_mode = WAL');
+    blocker.exec('BEGIN IMMEDIATE');
+    try {
+      return fn();
+    } finally {
+      blocker.exec('ROLLBACK');
+      blocker.close();
+    }
+  }
+
+  it('drops the write instead of blocking the connection\'s default busy_timeout', () => {
+    withWriteLockHeld(() => {
+      const started = Date.now();
+      logRetrieval({ surface: 'hint', query: 'fastwrite-busy-probe', fastWrite: true });
+      const elapsed = Date.now() - started;
+      // Comfortably above the ~100ms fast-write budget and comfortably below
+      // the connection's normal 5000ms default — proves this took the short
+      // path, not the long one, without pinning an exact number.
+      assert.ok(elapsed < 1000, `expected the fast-write path to fail well under 1s, took ${elapsed}ms`);
+    });
+    const row = getDb().prepare("SELECT * FROM retrievals WHERE query = 'fastwrite-busy-probe'").get();
+    assert.strictEqual(row, undefined, 'a busy fast write must be dropped silently, not eventually written');
+  });
+
+  it('still blocks for the default budget when fastWrite is not set (the daemon-path contract)', () => {
+    // Not exercised end to end here (5s is too slow to pay in this suite) —
+    // asserted structurally instead: the pragma this test reads back is the
+    // one logRetrieval restores in its `finally`, so a regression that skips
+    // the restore (or restores the wrong value) fails this without a 5s wait.
+    logRetrieval({ surface: 'hint', query: 'fastwrite-default-probe', fastWrite: false });
+    assert.strictEqual(getDb().pragma('busy_timeout', { simple: true }), DEFAULT_BUSY_TIMEOUT_MS);
+  });
+
+  it('restores the connection\'s default busy_timeout after a fast write, whether or not it was busy', () => {
+    logRetrieval({ surface: 'hint', query: 'fastwrite-restore-probe', fastWrite: true });
+    assert.strictEqual(getDb().pragma('busy_timeout', { simple: true }), DEFAULT_BUSY_TIMEOUT_MS);
+
+    withWriteLockHeld(() => {
+      logRetrieval({ surface: 'hint', query: 'fastwrite-restore-after-busy-probe', fastWrite: true });
+    });
+    assert.strictEqual(getDb().pragma('busy_timeout', { simple: true }), DEFAULT_BUSY_TIMEOUT_MS);
   });
 });

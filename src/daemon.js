@@ -15,13 +15,17 @@
 // every session at once. Whatever supervises `kb serve` owns that decision.
 import { chmodSync, lstatSync, unlinkSync } from 'fs';
 import { connect, createServer } from 'net';
-import { join } from 'path';
 import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';
 import { CLAUDE_CALL_TIMEOUT_MS } from './claude-cli.js';
+import { CONTROL_SOCKET_PATH, DAEMON_SOCKET_PATH } from './daemon-paths.js';
+import { HOOK_OPS } from './daemon-hook-ops.js';
 import { createKbServer } from './mcp-factory.js';
-import { KB_DIR } from './paths.js';
 
-export const DAEMON_SOCKET_PATH = join(KB_DIR, 'daemon.sock');
+// Re-exported for existing importers (serve.js, mcp-shim.js) — the constants
+// themselves live in daemon-paths.js so trigger-hook.js's cold path can
+// import CONTROL_SOCKET_PATH without pulling in this file's mcp-factory.js
+// -> db.js chain.
+export { CONTROL_SOCKET_PATH, DAEMON_SOCKET_PATH };
 
 // sockaddr_un.sun_path is 104 bytes on darwin, 108 on linux. Over the limit,
 // bind() fails with an EINVAL that says nothing about path length.
@@ -93,12 +97,55 @@ async function drain(isBusy, timeoutMs) {
   return !isBusy();
 }
 
+// Same ceiling daemon.test.js proves the MCP read buffer enforces (see
+// "survives a response too large for the client read buffer") — reused here
+// so a control-socket client that never sends a newline cannot grow this
+// buffer without bound.
+const MAX_CONTROL_LINE_BYTES = 10 * 1024 * 1024;
+
+async function claimSocket(socketPath) {
+  assertSocketPathFits(socketPath);
+  const occupancy = await probeSocket(socketPath);
+  if (occupancy === 'live') throw new Error(`A daemon is already listening on ${socketPath}`);
+  if (occupancy === 'occupied') throw new Error(`${socketPath} exists and is not a socket; refusing to remove it`);
+  if (occupancy === 'unknown') throw new Error(`Cannot tell what holds ${socketPath}; refusing to start`);
+  // Proven a socket that nothing accepts on, so no process owns this file.
+  if (occupancy === 'stale') unlinkSync(socketPath);
+}
+
+// bind() applies the umask, so this is what makes the socket 0600 from birth.
+// Chmod-after-listen would leave it accepting at the ambient mode for the
+// window in between, and both sockets this daemon exposes have no auth of
+// their own — the filesystem is the gate. The umask is process-wide, so it
+// must come back off before anything else creates a file: nothing does inside
+// this await, and leaving it on makes every later mkdir unreadable.
+async function bindSocket(server, socketPath) {
+  const priorUmask = process.umask(0o177);
+  try {
+    await new Promise((resolve, reject) => {
+      const onListenError = (err) => reject(err);
+      server.once('error', onListenError);
+      server.listen(socketPath, () => {
+        server.off('error', onListenError);
+        resolve();
+      });
+    });
+  } finally {
+    process.umask(priorUmask);
+  }
+  // Belt and braces: a platform that ignores the umask on bind still ends 0600.
+  chmodSync(socketPath, 0o600);
+}
+
 /**
  * Binds the socket and serves MCP on it until close(). Foreground: whatever
  * supervises the process owns daemonization and restart.
  *
  * @param {object} [options]
  * @param {string} [options.socketPath]
+ * @param {string} [options.controlSocketPath] Second socket serving the
+ *   line-delimited JSON hook-op protocol (prompt-hint, trigger-hook,
+ *   wakeup-hook) — see src/cli/hook-io.js's callDaemonOp for the client side.
  * @param {(context: { era: string, wrapHandler: Function }) => import('@modelcontextprotocol/server').McpServer} [options.serverFactory]
  *   Builds the instance for one connection. Defaults to the shared KB factory.
  *   Handlers passed through `wrapHandler` are the ones the drain waits on.
@@ -106,18 +153,14 @@ async function drain(isBusy, timeoutMs) {
  */
 export async function startDaemon({
   socketPath = DAEMON_SOCKET_PATH,
+  controlSocketPath = CONTROL_SOCKET_PATH,
   serverFactory,
   onError = (err) => console.error(`[kb serve] ${err.message}`),
   drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS,
 } = {}) {
-  assertSocketPathFits(socketPath);
-
-  const occupancy = await probeSocket(socketPath);
-  if (occupancy === 'live') throw new Error(`A daemon is already listening on ${socketPath}`);
-  if (occupancy === 'occupied') throw new Error(`${socketPath} exists and is not a socket; refusing to remove it`);
-  if (occupancy === 'unknown') throw new Error(`Cannot tell what holds ${socketPath}; refusing to start`);
-  // Proven a socket that nothing accepts on, so no process owns this file.
-  if (occupancy === 'stale') unlinkSync(socketPath);
+  // Validated for both before binding either — a daemon must not half-start.
+  await claimSocket(socketPath);
+  await claimSocket(controlSocketPath);
 
   let inFlight = 0;
   const track = (handler) => async (...args) => {
@@ -151,34 +194,84 @@ export async function startDaemon({
     });
   });
 
-  // bind() applies the umask, so this is what makes the socket 0600 from birth.
-  // Chmod-after-listen would leave it accepting at the ambient mode for the
-  // window in between, and this daemon exposes full KB tool access with no auth
-  // of its own — the filesystem is the gate. The umask is process-wide, so it
-  // must come back off before anything else creates a file: nothing does inside
-  // this await, and leaving it on makes every later mkdir unreadable.
-  const priorUmask = process.umask(0o177);
-  try {
-    await new Promise((resolve, reject) => {
-      const onListenError = (err) => reject(err);
-      server.once('error', onListenError);
-      server.listen(socketPath, () => {
-        server.off('error', onListenError);
-        resolve();
-      });
+  // One request per connection: read up to the first newline, dispatch,
+  // answer, close. A client that never sends one is bounded by
+  // MAX_CONTROL_LINE_BYTES rather than growing this buffer forever.
+  //
+  // A compute core's OWN errors (a real hint/briefing/trigger failure) are
+  // already caught and filed by recordHookFailure inside it — this catch is
+  // the backstop for what's left (unknown op, a malformed request line, a
+  // bug in the dispatch itself), and onError is what makes that backstop
+  // visible server-side instead of only ever reaching the client that's
+  // about to fall back and forget it happened.
+  //
+  // Trust model: this socket is 0600, same-user only (bindSocket). The
+  // `session` a caller supplies in payload is taken on faith — there is no
+  // narrower boundary to check it against, because a caller who can reach
+  // this socket at all already has direct read/write access to kb.db under
+  // the same user account. The filesystem permission is the whole gate.
+  function serveControlConnection(socket) {
+    socket.on('error', () => {});
+    let buffer = '';
+    let handled = false;
+    socket.on('data', async (chunk) => {
+      if (handled) return;
+      buffer += chunk;
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) {
+        if (Buffer.byteLength(buffer) > MAX_CONTROL_LINE_BYTES) {
+          handled = true;
+          socket.destroy();
+        }
+        return;
+      }
+      handled = true;
+      let response;
+      try {
+        const { op, payload } = JSON.parse(buffer.slice(0, newline));
+        const handler = HOOK_OPS[op];
+        if (!handler) throw new Error(`unknown control op "${op}"`);
+        // HOOK_OPS handlers run in commit: false mode — { output, plan },
+        // never a bare string. `plan` rides along unread by anything here;
+        // only the client, once it has committed to delivering `output`,
+        // knows it is safe to write.
+        const result = await track(() => handler(payload))();
+        response = { ok: true, output: result?.output ?? null, plan: result?.plan ?? null };
+      } catch (err) {
+        onError(err);
+        response = { ok: false, error: err.message };
+      }
+      socket.end(`${JSON.stringify(response)}\n`);
     });
-  } finally {
-    process.umask(priorUmask);
   }
+
+  const controlConnections = new Set();
+  const controlServer = createServer((socket) => {
+    controlConnections.add(socket);
+    socket.once('close', () => controlConnections.delete(socket));
+    serveControlConnection(socket);
+  });
+
+  await bindSocket(server, socketPath);
   server.on('error', onError);
-  // Belt and braces: a platform that ignores the umask on bind still ends 0600.
-  chmodSync(socketPath, 0o600);
+  try {
+    await bindSocket(controlServer, controlSocketPath);
+  } catch (err) {
+    // Must not leave the main socket bound behind a daemon that never
+    // finished starting — no process would ever close it. server.close()
+    // removes the socket file itself (proven by "removes its socket on
+    // close" below); nothing left to unlink by hand.
+    await new Promise((resolve) => server.close(resolve));
+    throw err;
+  }
+  controlServer.on('error', onError);
 
   let closed = false;
   const close = async () => {
     if (closed) return;
     closed = true;
     const stopped = new Promise((resolve) => server.close(resolve));
+    const controlStopped = new Promise((resolve) => controlServer.close(resolve));
     if (!await drain(() => inFlight > 0, drainTimeoutMs)) {
       onError(new Error(`Shut down with ${inFlight} tool call(s) still in flight after ${drainTimeoutMs}ms`));
     }
@@ -189,11 +282,15 @@ export async function startDaemon({
       entry.socket.destroy();
     }
     connections.clear();
+    for (const socket of [...controlConnections]) socket.destroy();
+    controlConnections.clear();
     await stopped;
+    await controlStopped;
   };
 
   return {
     socketPath,
+    controlSocketPath,
     close,
     connectionCount: () => connections.size,
     inFlightCount: () => inFlight,

@@ -9,7 +9,8 @@ import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
-import { HOOK_ERROR_LOG, recordHookFailure, deliver } from './hook-io.js';
+import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, recordHookFailure, deliver } from './hook-io.js';
+import { HOOK_OP } from '../daemon-paths.js';
 
 const MAX_HINTS = 3;
 
@@ -34,6 +35,68 @@ async function readStdin() {
   return data;
 }
 
+// The compute core: given an already-gated prompt and its resolved session
+// id, decides the hint (or lack of one). No stdin, no process.exit — callable
+// identically from the daemon's control-socket dispatcher and from this
+// file's own CLI fallback. Never throws: a failure here is recorded and
+// answered as "no hint", the same contract the daemon dispatcher and the CLI
+// wrapper both rely on.
+//
+// commit (default true, the CLI fallback's mode) logs the retrieval
+// immediately, inline, and returns { output, plan: null }. commit: false
+// (the daemon dispatcher's mode) makes no write at all and instead returns
+// the write as `plan` — a slow daemon response the client's deadline already
+// gave up on must not silently write a row nothing ever delivered, and a
+// daemon response the client DOES use must not be logged by two different
+// processes for one decision. Only the process that ends up delivering
+// `output` may ever commit `plan` (see commitPromptHintPlan) — exactly once,
+// which is the whole point of the split.
+export function computePromptHint({ prompt, session, fastWrite = false, commit = true }) {
+  try {
+    const results = relevantNotes(prompt, { limit: MAX_HINTS });
+    // One event id for every doc row (or the single miss row) this prompt
+    // produces -- the decision unit is "this prompt got a hint or didn't",
+    // not each row it happened to log.
+    const eventId = randomUUID();
+    if (commit) {
+      // A prompt the KB had nothing for is the measurement, not the absence
+      // of one: logging only the times we fired leaves a hit rate with no
+      // denominator, and declining is now the common case rather than one
+      // that never happened.
+      logRetrievalResults({ results, surface: SURFACE.HINT, query: prompt, session, eventId, fastWrite });
+    }
+    const plan = commit ? null : { docIds: results.map(r => r.id), query: prompt, eventId };
+
+    if (results.length === 0) return { output: null, plan };
+
+    // A tier is only told to the reader when it separates one note from
+    // another. While the whole store sits at one tier the label is on every
+    // row, which is the same defect as a hint that never declines.
+    const showTier = tiersDiscriminate(liveTierCounts());
+    const items = results
+      .map(r => `#${r.id} "${r.title}" (${r.doc_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`)
+      .join('; ');
+    const caveat = showTier ? ' ⚠ marks an unconfirmed model conclusion — treat it as a lead, not a finding.' : '';
+    const output = `KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch.${caveat}`;
+    return { output, plan };
+  } catch (err) {
+    // Never block a prompt on KB problems — but leave a marker, or a hint that
+    // crashed before it could be metered reads as a prompt the store had
+    // nothing for, and quietly shrinks the decline denominator.
+    recordHookFailure('hint', err);
+    return { output: null, plan: null };
+  }
+}
+
+// Commits a plan computePromptHint returned with commit: false. Caller's
+// job to call this at most once, and only for the plan it is actually about
+// to deliver — see the header comment on computePromptHint.
+export function commitPromptHintPlan(plan, { session, fastWrite }) {
+  if (!plan) return;
+  const results = plan.docIds.map(id => ({ id }));
+  logRetrievalResults({ results, surface: SURFACE.HINT, query: plan.query, session, eventId: plan.eventId, fastWrite });
+}
+
 export async function promptHint() {
   // Our own model subprocesses are not user prompts. They cannot act on a hint
   // (no MCP tools) and logging them makes the read-path meter measure ourselves.
@@ -54,33 +117,29 @@ export async function promptHint() {
 
     // Every prompt that reaches here carries the true session id — refresh
     // the claude_pid -> session_id map so MCP-surface calls landing before
-    // the next prompt stay resolvable.
+    // the next prompt stay resolvable. Ancestry-dependent (walks THIS
+    // process's own parent chain) — must run here, never daemon-side.
     recordSessionMap(hookInput?.session_id);
-    const results = relevantNotes(prompt, { limit: MAX_HINTS });
-    // A prompt the KB had nothing for is the measurement, not the absence of one:
-    // logging only the times we fired leaves a hit rate with no denominator, and
-    // declining is now the common case rather than one that never happened.
-    // One event id for every doc row (or the single miss row) this prompt
-    // produces -- the decision unit is "this prompt got a hint or didn't",
-    // not each row it happened to log.
-    logRetrievalResults({
-      results,
-      surface: SURFACE.HINT,
-      query: prompt,
-      session: resolveSessionId(hookInput),
-      eventId: randomUUID(),
-    });
-    if (results.length === 0) process.exit(0);
+    // Same reason: resolveSessionId falls back to ancestry when hookInput
+    // carries no session_id. Resolved once, here, and handed to compute as a
+    // plain value so neither the daemon nor the fallback branch below ever
+    // has to touch ancestry again.
+    const session = resolveSessionId(hookInput);
 
-    // A tier is only told to the reader when it separates one note from
-    // another. While the whole store sits at one tier the label is on every
-    // row, which is the same defect as a hint that never declines.
-    const showTier = tiersDiscriminate(liveTierCounts());
-    const items = results
-      .map(r => `#${r.id} "${r.title}" (${r.doc_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`)
-      .join('; ');
-    const caveat = showTier ? ' ⚠ marks an unconfirmed model conclusion — treat it as a lead, not a finding.' : '';
-    await deliver(`KB HINT: the knowledge base has entries relevant to this prompt: ${items}. Check them with kb_read(id) before exploring from scratch.${caveat}`);
+    const daemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.PROMPT_HINT) });
+    let output;
+    if (daemon.ok) {
+      // This is the one commit for this prompt: the daemon computed with
+      // commit: false (see computePromptHint), so nothing has been logged
+      // for it yet. A daemon response that arrives after this deadline
+      // already fired is simply never reached here — its plan, and the row
+      // it would have written, evaporate with it.
+      commitPromptHintPlan(daemon.plan, { session, fastWrite: true });
+      output = daemon.output;
+    } else {
+      ({ output } = computePromptHint({ prompt, session, fastWrite: true }));
+    }
+    if (output) await deliver(output);
   } catch (err) {
     // Never block a prompt on KB problems — but leave a marker, or a hint that
     // crashed before it could be metered reads as a prompt the store had

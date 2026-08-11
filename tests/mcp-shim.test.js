@@ -30,8 +30,13 @@ after(async () => {
   for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
 });
 
+// The control socket defaults to a KB_DIR-based path shared by the whole
+// file — fine in production (one daemon per KB_DIR) but wrong for tests,
+// which start many daemons against one KB_DIR. Co-locate it with the main
+// socket's own fresh dir unless a test overrides it explicitly.
 async function startTestDaemon(options) {
-  const daemon = await startDaemon(options);
+  const controlSocketPath = options.socketPath ? join(dirname(options.socketPath), 'ctl.sock') : undefined;
+  const daemon = await startDaemon({ controlSocketPath, ...options });
   liveDaemons.add(daemon);
   return daemon;
 }
