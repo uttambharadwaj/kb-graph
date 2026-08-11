@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -181,6 +181,56 @@ describe('resident daemon', () => {
 
     await withDeadline(shutdown, 5_000, 'shutdown to complete');
     await client.close();
+  });
+
+  it('survives a response too large for the client read buffer', async () => {
+    // One byte over the SDK's 10MB ceiling, which ReadBuffer.append enforces by
+    // throwing. Unguarded that throw is an uncaughtException in a socket 'data'
+    // handler, which kills this whole process rather than the connection.
+    const oversized = 'x'.repeat(11 * 1024 * 1024);
+    const serverFactory = () => {
+      const server = new McpServer({ name: 'probe', version: '1.0.0' });
+      server.registerTool('firehose', { description: 'Answers with more than the client can buffer', inputSchema: {} }, async () => ({
+        content: [{ type: 'text', text: oversized }],
+      }));
+      return server;
+    };
+
+    const daemon = await startDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const client = await connectDaemonClient(daemon.socketPath);
+    const errors = [];
+    client.onerror = (err) => errors.push(err);
+
+    try {
+      await assert.rejects(
+        () => withDeadline(client.callTool({ name: 'firehose', arguments: {} }), 15_000, 'the oversized call to fail'),
+        (err) => !/timed out/.test(err.message),
+        'the call must fail rather than hang',
+      );
+      assert.ok(
+        errors.some(err => /exceeded maximum size/.test(err.message)),
+        `expected a read-buffer error, got: ${errors.map(e => e.message).join(', ')}`,
+      );
+      // Reaching this line at all is the assertion that matters: an unguarded
+      // append() would have taken the test process down with it.
+      assert.strictEqual(typeof process.pid, 'number');
+    } finally {
+      await client.close();
+      await daemon.close();
+    }
+  });
+
+  it('creates the socket at 0600 and leaves the process umask alone', async () => {
+    const before = process.umask();
+    const daemon = await startDaemon({ socketPath: freshSocketPath() });
+    try {
+      assert.strictEqual(statSync(daemon.socketPath).mode & 0o777, 0o600);
+      // The mode is bought by narrowing the process-wide umask across bind, so
+      // failing to put it back would silently narrow every later file too.
+      assert.strictEqual(process.umask(), before, 'the umask must be restored');
+    } finally {
+      await daemon.close();
+    }
   });
 
   it('reclaims a socket file left behind by a dead daemon', async () => {

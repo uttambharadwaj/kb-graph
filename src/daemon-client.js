@@ -14,25 +14,36 @@ class SocketClientTransport {
   }
 
   async start() {
-    this._socket.on('data', (chunk) => {
-      this._readBuffer.append(chunk);
-      this._flush();
-    });
+    this._socket.on('data', this._ondata);
     this._socket.on('error', (err) => this.onerror?.(err));
     this._socket.on('close', () => this.onclose?.());
   }
 
+  // append() throws when the buffered message passes the SDK's 10MB ceiling,
+  // and an uncaught throw here is an uncaughtException that takes the whole
+  // client process down. Same shape as the SDK's own stdio transport: report
+  // it and close, so an oversized response costs the connection, not the host.
+  _ondata = (chunk) => {
+    try {
+      this._readBuffer.append(chunk);
+      this._flush();
+    } catch (err) {
+      this.onerror?.(err);
+      this.close().catch(() => {});
+    }
+  };
+
   _flush() {
     for (;;) {
-      let message;
       try {
-        message = this._readBuffer.readMessage();
+        const message = this._readBuffer.readMessage();
+        if (message === null) return;
+        this.onmessage?.(message);
       } catch (err) {
+        // readMessage consumes the line before parsing it, so continuing here
+        // skips one bad message rather than spinning on it.
         this.onerror?.(err);
-        return;
       }
-      if (message === null) return;
-      this.onmessage?.(message);
     }
   }
 

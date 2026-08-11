@@ -8,12 +8,20 @@ function socketPathFrom(args) {
 
 /**
  * Exit 0 when a daemon answers MCP on the socket, 1 otherwise, so a supervisor
- * can use this as a health check.
+ * can use this as a health check. This is a real MCP round trip (initialize
+ * plus tools/list), not a bare connect — it reports a daemon that holds the
+ * socket but cannot serve as down.
  */
 async function printStatus(socketPath) {
   const occupancy = await probeSocket(socketPath);
   if (occupancy !== 'live') {
-    const detail = { absent: 'no socket', stale: 'stale socket file, nothing listening', unknown: 'socket unreadable' };
+    // A refused connect cannot tell a dead daemon from one that has stopped
+    // accepting while it drains, so the message must not claim either.
+    const detail = {
+      absent: 'no socket',
+      stale: 'not accepting connections — stopped, or draining a shutdown',
+      unknown: 'socket present but unreachable',
+    };
     console.log(`kb daemon: down (${detail[occupancy]}) — ${socketPath}`);
     process.exit(1);
   }

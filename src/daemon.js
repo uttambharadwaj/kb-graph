@@ -139,16 +139,27 @@ export async function startDaemon({
     });
   });
 
-  await new Promise((resolve, reject) => {
-    const onListenError = (err) => reject(err);
-    server.once('error', onListenError);
-    server.listen(socketPath, () => {
-      server.off('error', onListenError);
-      resolve();
+  // bind() applies the umask, so this is what makes the socket 0600 from birth.
+  // Chmod-after-listen would leave it accepting at the ambient mode for the
+  // window in between, and this daemon exposes full KB tool access with no auth
+  // of its own — the filesystem is the gate. The umask is process-wide, so it
+  // must come back off before anything else creates a file: nothing does inside
+  // this await, and leaving it on makes every later mkdir unreadable.
+  const priorUmask = process.umask(0o177);
+  try {
+    await new Promise((resolve, reject) => {
+      const onListenError = (err) => reject(err);
+      server.once('error', onListenError);
+      server.listen(socketPath, () => {
+        server.off('error', onListenError);
+        resolve();
+      });
     });
-  });
+  } finally {
+    process.umask(priorUmask);
+  }
   server.on('error', onError);
-  // Full KB tool access with no auth of its own: the filesystem is the gate.
+  // Belt and braces: a platform that ignores the umask on bind still ends 0600.
   chmodSync(socketPath, 0o600);
 
   let closed = false;
