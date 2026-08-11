@@ -407,6 +407,45 @@ export function normalizeObservedAt(value) {
   return sqlTimestamp(parsed);
 }
 
+// The currently-current facts for one (subject, pred): what consolidate's
+// batch and kb_fact_add's single write both need before deciding what a new
+// object contradicts.
+const heldCurrentFacts = (subject, pred) =>
+  queryFact(subject, { direction: 'outgoing', exact: true })
+    .filter(r => r.current && canonicalPredicate(r.predicate) === pred);
+
+// Which of those `held` facts a new object actually contradicts, under the
+// single-valued rule retiresOnContradiction already owns. Both write paths ask
+// this exact question — a second copy of it is how a hand-written fact and an
+// extracted one could disagree about the same subject+predicate.
+const contradictedFacts = (subject, pred, object, held) =>
+  retiresOnContradiction({ subject, predicate: pred })
+    ? held.filter(r => !sameValue(r.object, object))
+    : [];
+
+// kb_fact_add's retirement: a hand-written fact applies the same single-valued
+// contradiction rule consolidate's batch does, immediately. There is no batch
+// to weigh findSingleValuedConflicts against and no observed_at to order a
+// replay with, so every genuine contradiction retires unconditionally.
+// subject/pred/object must already be canonicalTriple'd, the shape
+// consolidate's loop works with.
+export function retireContradicted(subject, pred, object, { validFrom } = {}) {
+  const held = heldCurrentFacts(subject, pred);
+  const contradicted = contradictedFacts(subject, pred, object, held);
+
+  const retired = [];
+  for (const prior of contradicted) {
+    // prior.predicate/prior.object are the row's own stored spelling, read off
+    // held — invalidateFact matches on that, not on the canonical `pred`, so a
+    // row written under a pre-fold predicate is still reachable.
+    const res = invalidateFact(subject, prior.predicate, prior.object, { ended: validFrom });
+    if (res.invalidated) {
+      retired.push({ subject, predicate: pred, object: prior.object, valid_to: res.ended, superseded_by: object });
+    }
+  }
+  return retired;
+}
+
 // Apply extracted facts to the facts table with consolidation:
 //   - identical triple already present  -> skipped (duplicate)
 //   - same object spelled differently   -> skipped (the graph's spelling wins)
@@ -453,17 +492,15 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // registered still carry the old spelling, and comparing raw would leave a
     // merged_as row unmatched by an incoming merged_via — no dedup, no
     // retirement, two live rows on a single-valued predicate.
-    const held = queryFact(subject, { direction: 'outgoing', exact: true })
-      .filter(r => r.current && canonicalPredicate(r.predicate) === pred);
+    const held = heldCurrentFacts(subject, pred);
 
     // The currently-valid facts with this subject+predicate that this value
     // contradicts. Computed before the spelling check below: a live object this
     // value genuinely contradicts must still be found, even when a variant of
-    // the value is also held — kb_fact_add writes without consolidating, so both
-    // can coexist.
-    const contradicted = retiresOnContradiction(f)
-      ? held.filter(r => !sameValue(r.object, object))
-      : [];
+    // the value is also held — kb_fact_add now shares this exact decision (see
+    // contradictedFacts / retireContradicted above), so both write paths still
+    // coexist rather than one silently under-retiring the other's rows.
+    const contradicted = contradictedFacts(subject, pred, object, held);
 
     // An assertion observed before a fact we already hold is older news, not a
     // contradiction: a caller passing observation_date is replaying text from

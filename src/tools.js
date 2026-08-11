@@ -12,7 +12,7 @@ import { metered } from './tool-meter.js';
 import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
-import { kbExtract, canonicalTriple } from './extract.js';
+import { kbExtract, canonicalTriple, retireContradicted } from './extract.js';
 import { inVocabulary, PredicateNotInVocabularyError } from './predicates.js';
 import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
 import { processNewClippings } from './classify/processor.js';
@@ -721,7 +721,7 @@ function defineTools() {
 
     {
       name: 'kb_fact_add',
-      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The predicate vocabulary is CLOSED: once folded, a predicate outside it is refused with an error naming the nearest listed predicates and the file the list lives in. Use one of those, or widen the list on purpose — do not reach for a different predicate just because it is accepted. The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
+      description: 'Add a temporal fact to the knowledge graph. Facts are subject-predicate-object triples with optional time validity. Use for decisions, relationships, and states that change over time. E.g. ("my-app", "uses", "postgres", valid_from="2026-03-12"). The triple is canonicalized before it is written, the same way kb_extract canonicalizes, so a synonym, an inflection or a mirrored direction lands on the edge the graph already uses — ("tkt-99", "fixed_in", "pr #48") is stored as ("pr #48", "fixes", "tkt-99"). The predicate vocabulary is CLOSED: once folded, a predicate outside it is refused with an error naming the nearest listed predicates and the file the list lives in. Use one of those, or widen the list on purpose — do not reach for a different predicate just because it is accepted. A contradicting value for a single-valued predicate on a state-bearing subject (a ticket or issue id — a repo, project or person accumulates instead) retires the prior current row the same way kb_extract consolidation does; the response carries a "retired" list and a one-line note when that happens. The response reports the triple as stored; pass that spelling to kb_fact_invalidate, which canonicalizes the same way.',
       schema: {
         subject: z.string().describe('The entity doing/being something'),
         predicate: z.string().describe('The relationship (e.g. "uses", "depends_on", "decided", "owns")'),
@@ -742,7 +742,15 @@ function defineTools() {
         try {
           const t = canonicalTriple({ subject, predicate, object });
           if (!inVocabulary(t.predicate)) throw new PredicateNotInVocabularyError(t.predicate, predicate);
+          // Before the write, not after: retirement targets the row this fact
+          // is about to contradict, and that row is still current only up to
+          // this point.
+          const retired = retireContradicted(t.subject, t.predicate, t.object, { validFrom: valid_from });
           const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
+          if (retired.length) {
+            result.retired = retired;
+            result.note = `retired prior ${retired.map(r => `${r.predicate}=${r.object} (valid_to ${r.valid_to})`).join(', ')}`;
+          }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
