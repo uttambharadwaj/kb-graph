@@ -13,7 +13,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Every entry point a user or a hook can invoke. `--help` on any of them must
 // print usage and write nothing — the whole point of the command.
 const KB_COMMANDS = [
-  'start', 'stop', 'mcp', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
+  'start', 'stop', 'mcp', 'mcp-shim', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
   'retrieval-report', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
   'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
