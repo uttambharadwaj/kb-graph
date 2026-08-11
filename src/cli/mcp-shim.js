@@ -72,8 +72,7 @@ function pipeThroughDaemon(socket) {
     socket.destroy();
     exitOnce(0);
   };
-  process.on('SIGTERM', onSignal);
-  process.on('SIGINT', onSignal);
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, onSignal);
 }
 
 export async function runMcpShimCli(args) {
