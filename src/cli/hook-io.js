@@ -47,6 +47,63 @@ export function deliver(line, out = process.stdout) {
   });
 }
 
+// A hook the harness kills at its deadline writes nothing anywhere: no output,
+// no meter row, no hook-errors line — which is why "hook timed out" reports
+// have never been attributable to a path or a duration. This file receives
+// only the abnormal tail: a line on SIGTERM (the kill itself, with how far in
+// it came) and a line on any completion slower than SLOW_HOOK_MS. Normal
+// sub-second runs stay unlogged — trigger-hook fires on every Bash call, and a
+// log that grows per call answers no question this one is asked.
+export const HOOK_TIMING_LOG = join(LOGS_DIR, 'hook-timings.log');
+
+const SLOW_HOOK_MS = (() => {
+  const override = Number(process.env.KB_SLOW_HOOK_MS);
+  return Number.isFinite(override) && override > 0 ? override : 2000;
+})();
+
+// process.uptime() counts from node boot, not from main-module load, so a
+// slow require graph or a cold disk cache shows up in the number — the exact
+// component a stopwatch started in application code would miss.
+const uptimeMs = () => Math.round(process.uptime() * 1000);
+
+let timingDetail = '';
+
+// Optional context for the timing line — e.g. 'daemon' vs 'fallback' once the
+// hook knows which path served it. Last caller wins; empty by default.
+export function noteHookTiming(detail) {
+  timingDetail = detail;
+}
+
+function recordTiming(op, stage, ms) {
+  try {
+    mkdirSync(LOGS_DIR, { recursive: true });
+    const detail = timingDetail ? ` ${timingDetail}` : '';
+    appendFileSync(HOOK_TIMING_LOG, `${new Date().toISOString()} ${op} ${stage} ${ms}ms${detail}\n`);
+  } catch {
+    // Same rule as recordHookFailure: the logger must not outshout the hook.
+  }
+}
+
+/**
+ * Install the abnormal-tail watchers for one hook invocation. Call once, at
+ * the top of the hook's entry function — not at module load, so importing a
+ * hook module (tests, the daemon's compute cores) installs nothing.
+ */
+export function watchHookTiming(op) {
+  let recorded = false;
+  process.on('SIGTERM', () => {
+    recorded = true;
+    recordTiming(op, 'sigterm', uptimeMs());
+    // exit() here re-enters the 'exit' handler below — `recorded` keeps the
+    // kill from also being logged as a slow completion.
+    process.exit(143);
+  });
+  process.on('exit', () => {
+    const ms = uptimeMs();
+    if (!recorded && ms >= SLOW_HOOK_MS) recordTiming(op, 'slow-exit', ms);
+  });
+}
+
 // Per-op default, overridable by ONE env var — the hooks differ enough in
 // call frequency and downstream cost (trigger-hook fires on every Bash call;
 // wakeup-hook does the most DB work) to want different budgets, but a single
