@@ -568,6 +568,16 @@ export const MIGRATIONS = [{
   applied: db => !hasTable(db, 'retrievals') || !hasColumn(db, 'retrievals', 'is_test') || testSessionBackfillCount(db) === 0,
   preview: db => `${testSessionBackfillCount(db)} rows flagged is_test`,
   up: db => db.exec(`UPDATE retrievals SET is_test = 1 WHERE ${TEST_SESSION_BACKFILL_WHERE}`),
+}, {
+  version: 19,
+  // from_preview was added to migration 7's CREATE TABLE after that migration
+  // had already run on live databases. Its `applied` checks hasTable, so those
+  // databases report up to date while every extraction-log INSERT fails on the
+  // missing column. Missing table = migration 7 hasn't run yet and will create
+  // the column itself.
+  name: 'from_preview on extractions',
+  applied: db => !hasTable(db, 'extractions') || hasColumn(db, 'extractions', 'from_preview'),
+  up: db => addColumn(db, 'extractions', 'from_preview', 'INTEGER NOT NULL DEFAULT 0'),
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
