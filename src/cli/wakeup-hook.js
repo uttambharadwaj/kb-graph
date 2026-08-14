@@ -10,7 +10,7 @@ import { isBatchCall } from '../claude-cli.js';
 import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
-import { callDaemonOp, hookDaemonTimeoutMs } from './hook-io.js';
+import { callDaemonOp, hookDaemonTimeoutMs, noteHookTiming, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
 import { unresolvableHookCommands } from './setup-hooks.js';
 
@@ -188,6 +188,7 @@ export function commitWakeupHookPlan(plan, { session, fastWrite }) {
 }
 
 export async function wakeupHook() {
+  watchHookTiming(HOOK_OP.WAKEUP_HOOK);
   // Our own model subprocesses are not sessions. Briefing one costs ~480 tokens
   // it cannot use, and logs it as a briefed session the meter then counts.
   if (isBatchCall()) process.exit(0);
@@ -215,7 +216,9 @@ export async function wakeupHook() {
       // sibling comment in prompt-hint.js for why only the delivering process may do this.
       commitWakeupHookPlan(daemon.plan, { session, fastWrite: true });
       output = daemon.output;
+      noteHookTiming('daemon');
     } else {
+      noteHookTiming('fallback');
       ({ output } = computeWakeupHook({ hookInput, session, fastWrite: true }));
     }
     if (output != null) console.log(output);

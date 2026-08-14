@@ -9,7 +9,7 @@ import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
-import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, recordHookFailure, deliver } from './hook-io.js';
+import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, noteHookTiming, recordHookFailure, deliver, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
 
 const MAX_HINTS = 3;
@@ -98,6 +98,7 @@ export function commitPromptHintPlan(plan, { session, fastWrite }) {
 }
 
 export async function promptHint() {
+  watchHookTiming(HOOK_OP.PROMPT_HINT);
   // Our own model subprocesses are not user prompts. They cannot act on a hint
   // (no MCP tools) and logging them makes the read-path meter measure ourselves.
   if (isBatchCall()) process.exit(0);
@@ -136,7 +137,9 @@ export async function promptHint() {
       // it would have written, evaporate with it.
       commitPromptHintPlan(daemon.plan, { session, fastWrite: true });
       output = daemon.output;
+      noteHookTiming('daemon');
     } else {
+      noteHookTiming('fallback');
       ({ output } = computePromptHint({ prompt, session, fastWrite: true }));
     }
     if (output) await deliver(output);

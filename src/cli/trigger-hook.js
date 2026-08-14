@@ -16,7 +16,7 @@ import {
 import { basename, join } from 'path';
 import { KB_DIR, LOGS_DIR } from '../paths.js';
 import { loadTriggerIndex, matchCommand } from '../trigger-match.js';
-import { callDaemonOp, hookDaemonTimeoutMs, recordHookFailure, deliver } from './hook-io.js';
+import { callDaemonOp, hookDaemonTimeoutMs, noteHookTiming, recordHookFailure, deliver, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
 
 export const MAX_SESSION_WARNINGS = 2;
@@ -272,6 +272,7 @@ export function commitTriggerHookPlan(plan) {
 }
 
 export async function triggerHook() {
+  watchHookTiming(HOOK_OP.TRIGGER_HOOK);
   try {
     const raw = await readStdin();
     const hookInput = JSON.parse(raw);
@@ -290,7 +291,9 @@ export async function triggerHook() {
       // delivery even though the daemon already answered with a message.
       const persisted = commitTriggerHookPlan(daemon.plan);
       output = persisted ? daemon.output : null;
+      noteHookTiming('daemon');
     } else {
+      noteHookTiming('fallback');
       ({ output } = computeTriggerHook(hookInput));
     }
     if (output) await deliver(output);
