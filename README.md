@@ -110,9 +110,20 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
                     |  Gemini      | any MCP/HTTP|
                     +-------------+--------------+
         hooks: briefing + hints   |   MCP (stdio/HTTP) · REST /api/v1/
+                                  |
                     +-------------+--------------+
-                    |         KB Server          |
-                    |       Express :3838        |
+                    | kb mcp-shim (per session)  |
+                    | byte pipe to the daemon,   |
+                    | in-process server fallback |
+                    +-------------+--------------+
+                                  |  unix socket (hooks use a second
+                                  |  control socket, same fallback)
+                    +-------------+--------------+
+                    |  kb serve — one resident   |
+                    |  daemon for every session  |
+                    |  (optional; see            |
+                    |  docs/daemon-setup.md)     |
+                    |  Dashboard: Express :3838  |
                     +-------------+--------------+
                                   |
           +-----------------------+----------------------+
@@ -130,6 +141,13 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
 ```
 
 Data directory: `~/.knowledge-base/` (`kb.db`, ingested file copies, config).
+
+Without the daemon, every piece still works: `kb mcp-shim` probes the daemon
+socket for ~2s and runs a full server in-process when nothing answers, and the
+hooks do the same over the control socket. The daemon collapses N per-session
+server processes into one and puts hook latency on a warm path — worth setting
+up once you run more than a couple of concurrent agent sessions
+([docs/daemon-setup.md](docs/daemon-setup.md)).
 
 ---
 
@@ -235,7 +253,14 @@ See [docs/message-bus.md](docs/message-bus.md) for wiring.
 ```
 kb setup               Setup wizard (--auto for agent mode)
 kb start / stop        Dashboard + REST API server (default :3838)
-kb mcp                 MCP stdio server (what your agents connect to)
+kb serve               Resident MCP daemon on a unix socket, shared by every
+                       session (--status probes a running one). Optional —
+                       see docs/daemon-setup.md
+kb mcp-shim            What `kb register` points agents at: pipes the session
+                       to the daemon, or runs a full server in-process when
+                       no daemon answers
+kb mcp                 Plain per-session MCP stdio server (the shim's fallback,
+                       still available as a direct registration)
 kb migrate             Apply pending schema migrations (--dry-run to preview,
                        --check to exit 3 when a database is behind)
 kb register            Register MCP with Claude Code / Codex / Gemini
@@ -406,11 +431,16 @@ Any other MCP client — point it at the stdio transport:
   "mcpServers": {
     "knowledge-base": {
       "command": "node",
-      "args": ["/path/to/kb-graph/bin/kb.js", "mcp"]
+      "args": ["/path/to/kb-graph/bin/kb.js", "mcp-shim"]
     }
   }
 }
 ```
+
+`mcp-shim` uses the resident daemon when one is running and falls back to a
+full in-process server when none is, so the same registration is correct on
+both kinds of machine. (`"mcp"` still works as a daemon-free direct
+registration.)
 
 ### ChatGPT and remote agents (REST)
 
