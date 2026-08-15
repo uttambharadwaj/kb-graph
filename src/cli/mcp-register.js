@@ -9,7 +9,10 @@ export const KB_MCP_SERVER_NAME = 'knowledge-base';
 export const KB_ENTRYPOINT_PATH = fileURLToPath(new URL('../../bin/kb.js', import.meta.url));
 export const KB_MCP_SERVER_CONFIG = {
   command: stableNodePath(),
-  args: [KB_ENTRYPOINT_PATH, 'mcp'],
+  // mcp-shim connects to the resident `kb serve` daemon when one is running
+  // and falls back to a full in-process server when none is — so this default
+  // is correct whether or not the machine has the daemon set up.
+  args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
 };
 
 // Absent and unreadable are different answers. Treating both as "empty config"

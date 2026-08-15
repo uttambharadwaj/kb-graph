@@ -11,7 +11,7 @@ The knowledge-base MCP server now includes a **local-only message bus** for agen
 - Typed envelope columns on `bus_messages`: `thread`, `reply_to`, `recipient`, `deadline`, `expects_reply` (all first-class `bus_send` params)
 - Presence folded into `bus_readers` (`last_hook_at`, `capabilities_json`) — refreshed on every hook fire
 
-Because this is an extension of `kb mcp`, you do **not** need a second MCP server if KB is already registered. Any client already pointed at `kb mcp` gets the bus tools automatically on next restart.
+Because this is an extension of the KB MCP server, you do **not** need a second MCP server if KB is already registered. Any client registered via `kb register` (`kb mcp-shim`, or a direct `kb mcp`) gets the bus tools automatically on next restart.
 
 Run `kb register` to update local Claude/Codex/Gemini MCP configs in one shot, then restart the sessions that should gain `bus_send`.
 

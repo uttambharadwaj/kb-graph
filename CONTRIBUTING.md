@@ -127,19 +127,24 @@ KB_PASSWORD=dev kb start
 ```
 
 The server runs on port 3838. Web dashboard at http://localhost:3838.
-MCP server runs via: `kb mcp`
+Agents connect via `kb mcp-shim` (what `kb register` writes): a byte pipe to
+the resident `kb serve` daemon when one is running, a full in-process server
+when none is. See [docs/daemon-setup.md](docs/daemon-setup.md).
 
-`kb mcp` is a supervisor: it holds the client's stdio connection and runs the
-real server (`src/mcp.js`) as a child, replacing that child whenever a `.js` or
-`.json` file under `src/` changes and no tool call is in flight. Edit, save, and
-the next call is served by the new code — no reconnect, because the connection
-the client holds was never the one that went away.
+While developing, mind which process serves your code:
 
-Three changes still need a reconnect: `src/mcp-supervisor.js` or
-`src/restart-on-change.js` themselves (only the child is replaced); the server's
-declared capabilities, which are pinned by the first child's `initialize`
-response; and `.env`, which `bin/kb.js` reads once at startup and children only
-inherit. Code reloads, configuration does not.
+- **Daemon running:** it deliberately does not watch `src/` — restart it after
+  edits (`launchctl kickstart -k gui/$(id -u)/com.kb.serve` /
+  `systemctl --user restart kb-serve`) or your changes are served by nothing.
+- **No daemon (in-process fallback / direct `kb mcp`):** `kb mcp` is a
+  supervisor — it holds the client's stdio connection and runs the real server
+  (`src/mcp.js`) as a child, replacing that child whenever a `.js` or `.json`
+  file under `src/` changes and no tool call is in flight. Edit, save, and the
+  next call is served by the new code. Three changes still need a real
+  reconnect: `src/mcp-supervisor.js` or `src/restart-on-change.js` themselves
+  (only the child is replaced); the server's declared capabilities, pinned by
+  the first child's `initialize` response; and `.env`, which `bin/kb.js` reads
+  once at startup. Code reloads, configuration does not.
 
 `kb stale-servers` lists running servers that predate their own checkout's last
 source change — the ones that will never notice on their own.

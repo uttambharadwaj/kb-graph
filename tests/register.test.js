@@ -50,11 +50,11 @@ describe('MCP registration', () => {
 
     assert.deepStrictEqual(claudeConfig.mcpServers['knowledge-base'], {
       command: stableNodePath(),
-      args: [KB_ENTRYPOINT_PATH, 'mcp'],
+      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
     });
     assert.deepStrictEqual(codexConfig.mcpServers['knowledge-base'], {
       command: stableNodePath(),
-      args: [KB_ENTRYPOINT_PATH, 'mcp'],
+      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
     });
   });
 });
