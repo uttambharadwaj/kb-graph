@@ -23,6 +23,7 @@
 // database onto that path. Re-exported here so every existing import of this
 // file keeps working.
 import { readFileSync, writeFileSync, renameSync, statSync } from 'fs';
+import matter from 'gray-matter';
 import { getDb } from './db.js';
 import {
   CORPUS_PATH, TRIGGER_INDEX_PATH, stripHeredocs, commandSegments,
@@ -224,6 +225,27 @@ export function filterTriggers(proposed, { title, content }, { corpus, pinned = 
   return JSON.stringify(kept);
 }
 
+// The hook used to point at the note ("kb_read(ID) before running it") and
+// measured follow-through sat around 10% — the pointer depended on the agent
+// making a second call it usually skipped. An inline excerpt puts the actual
+// warning content in front of the model at the moment it matters, no second
+// call required. 800 chars is enough for a gotcha's lead paragraph without
+// turning every matching Bash call into a wall of text.
+const EXCERPT_MAX_CHARS = 800;
+
+function buildExcerpt(content) {
+  const raw = String(content ?? '');
+  let body;
+  try {
+    body = matter(raw).content;
+  } catch {
+    body = raw;
+  }
+  const collapsed = body.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n').trim();
+  if (collapsed.length <= EXCERPT_MAX_CHARS) return collapsed;
+  return `${collapsed.slice(0, EXCERPT_MAX_CHARS)}…`;
+}
+
 // The hook's read path has no lock on this file, so a rebuild must never
 // leave it half-written — write to a temp file in the same directory and
 // rename, which POSIX guarantees is atomic.
@@ -231,7 +253,7 @@ export function rebuildTriggerIndex(path = TRIGGER_INDEX_PATH) {
   // tier rides along so the hook can carry the unconfirmed-conclusion caveat
   // (as prompt-hint does) without opening the database on the hot path.
   const rows = getDb().prepare(`
-    SELECT id, title, tier, triggers FROM documents
+    SELECT id, title, tier, triggers, content FROM documents
     WHERE triggers IS NOT NULL AND superseded_at IS NULL AND doc_type != 'archive'
     ORDER BY id
   `).all();
@@ -241,7 +263,7 @@ export function rebuildTriggerIndex(path = TRIGGER_INDEX_PATH) {
   const entries = [];
   for (const r of rows) {
     try {
-      entries.push({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers) });
+      entries.push({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers), excerpt: buildExcerpt(r.content) });
     } catch {
       // Skip. The column is wrong, not this rebuild's job to repair.
     }

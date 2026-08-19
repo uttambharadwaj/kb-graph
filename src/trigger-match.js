@@ -208,7 +208,11 @@ export function matchCommand(command, entries, { alreadyFired = new Set() } = {}
         if (rarest === null || hits < rarest) rarest = hits;
       }
     }
-    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, tier: entry.tier, hits: rarest });
+    // Spread rather than a bare key: an index entry with no excerpt (not yet
+    // rebuilt under this change) must produce a match object with no excerpt
+    // key at all, not one holding `undefined` — callers and tests alike
+    // distinguish "key absent" from "key present but empty".
+    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, tier: entry.tier, ...(entry.excerpt ? { excerpt: entry.excerpt } : {}), hits: rarest });
   }
   return fired.sort((a, b) => a.hits - b.hits);
 }

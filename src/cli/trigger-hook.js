@@ -145,8 +145,16 @@ function appendJsonlLog(line) {
 const tierCaveat = (tier) =>
   tier === 'verified' || tier === 'observed' ? '' : ' (⚠ unconfirmed model conclusion — treat as a lead)';
 
-export const buildTriggerMessage = (match) =>
-  `⚠ KB TRIGGER: note #${match.id} "${match.title}"${tierCaveat(match.tier)} may apply to this command — kb_read(${match.id}) before running it.`;
+// Inline (excerpt present) puts the note's own content in front of the model
+// at the moment it matters — measured follow-through on the old pointer form
+// was ~10%, since it depended on the agent making a second kb_read call. A
+// missing excerpt (an index built before this change, not yet rebuilt) falls
+// back to the pointer — that is the supported degraded mode, not an error.
+export const buildTriggerMessage = (match) => {
+  const head = `⚠ KB TRIGGER: note #${match.id} "${match.title}"${tierCaveat(match.tier)} may apply to this command`;
+  if (match.excerpt) return `${head}.\n${match.excerpt}\n(full note: kb_read(${match.id}))`;
+  return `${head} — kb_read(${match.id}) before running it.`;
+};
 
 // The whole decision, with no I/O: given the hook's parsed stdin, the loaded
 // index, the session's already-fired ids and whether emission is enabled,
@@ -176,6 +184,9 @@ export function decideAndRecord(input, { index = [], fired = [], enabled = false
     cwd: cwd ?? null,
     matched: matches.map(m => ({ id: m.id, hits: m.hits })),
     emitted: emit,
+    // Splits inline/pointer eras and paths for `kb follow-through` analysis —
+    // null (not omitted) when nothing was emitted, matching cwd's convention.
+    mode: emit ? (chosen.excerpt ? 'inline' : 'pointer') : null,
     command: command.length > COMMAND_LOG_MAX ? command.slice(0, COMMAND_LOG_MAX) : command,
   });
 
