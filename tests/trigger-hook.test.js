@@ -13,7 +13,6 @@ import {
   decideAndRecord, buildTriggerMessage, resolveSession, MAX_SESSION_WARNINGS, FALLBACK_SESSION,
   TRIGGERS_LOG_DIR, TRIGGER_HOOK_ENABLED_FLAG,
 } from '../src/cli/trigger-hook.js';
-import { KB_DIR } from '../src/paths.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
