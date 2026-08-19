@@ -81,6 +81,12 @@ const COMMANDS = {
     summary: 'Read-path coverage: how much of the KB has ever been retrieved',
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
+  rediscoveries: {
+    summary: 'List rediscoveries — duplicate-detection hits where an agent re-derived a note the KB already had (--days <N>, default 14; --json for machine-readable)',
+    value: ['--days'],
+    boolean: ['--json'],
+    run: a => import('../src/cli/rediscoveries.js').then(m => m.runRediscoveriesCli(a)),
+  },
   'follow-through': {
     summary: 'Event-unit follow-through per push surface (hint/briefing), kb_search pull-rate benchmark, trigger fires, cluster-bootstrap CI (--json for machine-readable, --exclude-session <id> repeatable)',
     value: ['--exclude-session'],

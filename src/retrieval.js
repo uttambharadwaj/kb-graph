@@ -34,6 +34,11 @@ export const SURFACE = {
   REST_SEARCH_SMART: 'rest_search_smart',
   REST_CONTEXT: 'rest_context',
   CLI_SEARCH: 'cli_search',
+  // Not a retrieval — a rediscovery is duplicate detection catching an agent
+  // re-deriving something the KB already had. Deliberately absent from
+  // PUSH_SURFACES/READ_SURFACES: it's neither a push nor a pull of a note,
+  // it's a signal that a write attempt collided with one.
+  REDISCOVERY: 'rediscovery',
 };
 
 export const SURFACES = Object.values(SURFACE);
