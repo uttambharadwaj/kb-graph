@@ -4,6 +4,10 @@
 // era per connection, and a transparent pipe is what lets server-initiated
 // notifications flow through unmodified.
 //
+// The one byte sequence this process originates on the real connection is the
+// hello line (src/shim-hello.js): which harness this session runs under, which
+// only a child of that harness can answer. Everything after it is a pipe.
+//
 // If the daemon is unreachable or unresponsive at startup, this falls back
 // to the existing in-process supervisor path (`kb mcp`) so a session never
 // loses its KB tools because the daemon happens to be down. Once connected
@@ -13,6 +17,8 @@
 import { connect } from 'net';
 import { readFlagValue } from './flags.js';
 import { DAEMON_SOCKET_PATH } from '../daemon.js';
+import { resolveHarnessAncestry } from '../process-ancestry.js';
+import { encodeHello } from '../shim-hello.js';
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2000;
 // Overridable so a test exercising a wedged daemon isn't stuck waiting out a
@@ -172,6 +178,21 @@ export async function runMcpShimCli(args) {
     socket.destroy();
     return serveInProcess('unreachable');
   }
+
+  // Identity, once, ahead of every JSON-RPC byte. This process is a child of
+  // the harness; the daemon is a child of launchd, so this line is the only
+  // way a retrieval logged on this connection can be attributed at all. One
+  // `ps` walk per session, not per call — the ancestry of a live process
+  // cannot change, and the shim is spawned once per session.
+  //
+  // Not gated on a daemon version. An older daemon feeds this line straight
+  // to the SDK's StdioServerTransport, whose ReadBuffer.readMessage rejects
+  // it at JSONRPCMessageSchema.parse; processReadBuffer catches that, reports
+  // it through onerror (a line in the daemon's own log) and keeps reading the
+  // next message. Nothing is written back to the client and the connection
+  // stays open — verified against @modelcontextprotocol/server 2.0.0 in
+  // node_modules, pinned by tests/shim-hello.test.js.
+  socket.write(encodeHello(resolveHarnessAncestry()));
 
   pipeThroughDaemon(socket);
 }

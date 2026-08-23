@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from '../src/db.js';
-import { PUSH_SURFACES, READ_SURFACES, SURFACE, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveAgent, resolveSessionId } from '../src/retrieval.js';
+import { PUSH_SURFACES, READ_SURFACES, SURFACE, SURFACES, callIdentity, isTestSession, logRetrieval, logRetrievalResults, resolveAgent, resolveSessionId } from '../src/retrieval.js';
 import { AGENT } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { DB_PATH } from '../src/paths.js';
@@ -305,6 +305,56 @@ describe('resolveAgent', () => {
 
   it('is null when the walk found no harness at all — never a default of claude', () => {
     assert.strictEqual(resolveAgent({ getAncestry: () => ({ harnessPid: null, pidStart: null, agent: null }) }), null);
+  });
+});
+
+// The resident daemon is a launchd child: its own ancestry walk names launchd
+// and nothing else, so every MCP-surface row it wrote came out session=NULL,
+// agent=NULL. The identity arrives per connection instead (the shim's hello
+// line) and is bound around each tool call through this store.
+describe('callIdentity', () => {
+  const identity = { harnessPid: 77001, pidStart: 'START-77001', agent: AGENT.CODEX };
+
+  it('overrides the process ancestry for both the session and the agent', () => {
+    seedMap(77001, { pid: 77001, pid_start: 'START-77001', session_id: 'sess-als-bound' });
+    callIdentity.run(identity, () => {
+      assert.strictEqual(resolveSessionId(), 'sess-als-bound');
+      assert.strictEqual(resolveAgent(), AGENT.CODEX);
+    });
+  });
+
+  it('still verifies pid_start against the map — a bound identity is not a bypass', () => {
+    seedMap(77002, { pid: 77002, pid_start: 'START-OLD', session_id: 'sess-als-stale' });
+    callIdentity.run({ harnessPid: 77002, pidStart: 'START-NEW', agent: AGENT.CLAUDE }, () => {
+      assert.strictEqual(resolveSessionId(), null);
+      assert.strictEqual(resolveAgent(), AGENT.CLAUDE);
+    });
+  });
+
+  it('survives awaits inside the call — a handler resolves the same identity after I/O', async () => {
+    seedMap(77003, { pid: 77003, pid_start: 'START-77003', session_id: 'sess-als-async' });
+    await callIdentity.run({ harnessPid: 77003, pidStart: 'START-77003', agent: AGENT.CLAUDE }, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.strictEqual(resolveSessionId(), 'sess-als-async');
+      assert.strictEqual(resolveAgent(), AGENT.CLAUDE);
+    });
+  });
+
+  it('does not leak outside the run — an unbound caller falls back to the process walk', () => {
+    seedMap(77004, { pid: 77004, pid_start: 'START-77004', session_id: 'sess-als-leak' });
+    callIdentity.run({ harnessPid: 77004, pidStart: 'START-77004', agent: AGENT.CODEX }, () => {
+      assert.strictEqual(resolveSessionId(), 'sess-als-leak');
+    });
+    assert.notStrictEqual(resolveSessionId(), 'sess-als-leak');
+  });
+
+  it('stamps the bound identity onto a row logged with no explicit session or agent', () => {
+    seedMap(77005, { pid: 77005, pid_start: 'START-77005', session_id: 'sess-als-logged' });
+    callIdentity.run({ harnessPid: 77005, pidStart: 'START-77005', agent: AGENT.CODEX }, () => {
+      logRetrievalResults({ results: [{ id: 1 }], surface: SURFACE.SEARCH, query: 'als-logged-query' });
+    });
+    const row = getDb().prepare('SELECT session, agent FROM retrievals WHERE query = ?').get('als-logged-query');
+    assert.deepStrictEqual(row, { session: 'sess-als-logged', agent: AGENT.CODEX });
   });
 });
 

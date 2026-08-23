@@ -20,6 +20,8 @@ import { CLAUDE_CALL_TIMEOUT_MS } from './claude-cli.js';
 import { CONTROL_SOCKET_PATH, DAEMON_SOCKET_PATH } from './daemon-paths.js';
 import { HOOK_OPS } from './daemon-hook-ops.js';
 import { createKbServer } from './mcp-factory.js';
+import { callIdentity } from './retrieval.js';
+import { MAX_HELLO_LINE_BYTES, parseHelloLine } from './shim-hello.js';
 
 // Re-exported for existing importers (serve.js, mcp-shim.js) — the constants
 // themselves live in daemon-paths.js so trigger-hook.js's cold path can
@@ -138,6 +140,55 @@ async function bindSocket(server, socketPath) {
 }
 
 /**
+ * Consumes the shim's identity line off a fresh connection before the MCP
+ * transport is ever attached, then hands the connection over with every
+ * remaining byte intact.
+ *
+ * Ordering is the whole problem: the hello and the client's first JSON-RPC
+ * message routinely arrive in ONE chunk, so the leftover cannot simply be
+ * dropped or re-emitted later. The socket is put back in paused mode, the
+ * leftover unshifted to the head of its read buffer, the transport attached,
+ * and only then resumed — the transport's own 'data' listener is installed
+ * synchronously inside serveStdio (StdioServerTransport.start() has no await
+ * before `_stdin.on('data', ...)`, verified in node_modules), so nothing is
+ * emitted into the gap.
+ *
+ * `onReady(null)` for anything that is not a hello: an older shim, an
+ * in-process client speaking straight JSON-RPC, `kb serve --status`, the
+ * shim's own liveness probe. Those get exactly today's behaviour — the walk
+ * from the daemon's own ancestry, which resolves to NULL.
+ */
+function readShimHello(socket, onReady) {
+  let buffer = Buffer.alloc(0);
+
+  const finish = (identity, rest) => {
+    socket.off('data', onData);
+    socket.pause();
+    if (rest.length > 0) socket.unshift(rest);
+    onReady(identity);
+    socket.resume();
+  };
+
+  const onData = (chunk) => {
+    buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
+    const newline = buffer.indexOf(0x0a);
+    if (newline === -1) {
+      // Past the bound with no line break: whatever this client is sending,
+      // it is not a hello. Hand back everything read so far — the transport
+      // reads the rest of the line off the socket itself.
+      if (buffer.length > MAX_HELLO_LINE_BYTES) finish(null, buffer);
+      return;
+    }
+    const identity = parseHelloLine(buffer.subarray(0, newline).toString('utf8'));
+    // Not a hello means the line belongs to the client: give the WHOLE
+    // buffer back, newline included, not just what followed it.
+    finish(identity, identity ? buffer.subarray(newline + 1) : buffer);
+  };
+
+  socket.on('data', onData);
+}
+
+/**
  * Binds the socket and serves MCP on it until close(). Foreground: whatever
  * supervises the process owns daemonization and restart.
  *
@@ -171,9 +222,18 @@ export async function startDaemon({
       inFlight--;
     }
   };
+  // Runs the handler under this connection's identity, so resolveSessionId /
+  // resolveAgent inside it answer for the harness that dialed rather than for
+  // the daemon's own launchd ancestry. Per connection, not per process: two
+  // sessions calling concurrently each see their own.
+  const bindIdentity = (identity, handler) =>
+    (identity ? (...args) => callIdentity.run(identity, () => handler(...args)) : handler);
   // The SDK calls the factory with { era }; the daemon adds the wrapper whose
   // counter the shutdown drain waits on, so a call in flight is never cut off.
-  const buildServer = (context) => (serverFactory ?? createKbServer)({ ...context, wrapHandler: track });
+  const buildServer = (identity) => (context) => (serverFactory ?? createKbServer)({
+    ...context,
+    wrapHandler: (handler) => track(bindIdentity(identity, handler)),
+  });
 
   const connections = new Set();
   const server = createServer((socket) => {
@@ -182,15 +242,21 @@ export async function startDaemon({
     // it through onerror.
     socket.on('error', () => {});
 
-    const handle = serveStdio(buildServer, {
-      transport: new StdioServerTransport(socket, socket),
-      onerror: onError,
-    });
-    const entry = { handle, socket };
+    // Registered before the hello is read, not after: a client that connects
+    // and then goes silent still has to be tracked, or close() leaves its
+    // socket open and the daemon never finishes shutting down.
+    const entry = { handle: null, socket };
     connections.add(entry);
     socket.once('close', () => {
       connections.delete(entry);
-      handle.close().catch(onError);
+      entry.handle?.close().catch(onError);
+    });
+
+    readShimHello(socket, (identity) => {
+      entry.handle = serveStdio(buildServer(identity), {
+        transport: new StdioServerTransport(socket, socket),
+        onerror: onError,
+      });
     });
   });
 
@@ -277,8 +343,9 @@ export async function startDaemon({
     }
     for (const entry of [...connections]) {
       // serveStdio's transport only detaches its stream listeners on close —
-      // the socket is ours to take down.
-      await entry.handle.close().catch(onError);
+      // the socket is ours to take down. handle is null for a connection that
+      // never got past the hello read; the socket still has to go.
+      await entry.handle?.close().catch(onError);
       entry.socket.destroy();
     }
     connections.clear();

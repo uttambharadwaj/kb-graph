@@ -2,12 +2,15 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/server';
+import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
+import { resolveHarnessAncestry } from '../src/process-ancestry.js';
+import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { startWedgedDaemon } from './helpers/wedged-daemon.js';
 
 // Drives `kb mcp-shim` as a real child process against a real in-process
@@ -262,6 +265,47 @@ describe('kb mcp-shim', () => {
     const { code } = await withDeadline(waitForExit(child), 5_000, 'the shim to exit after the daemon dies');
     assert.notStrictEqual(code, 0, 'a mid-session daemon death must not report success');
     assert.match(stderr(), /daemon connection closed unexpectedly/);
+  });
+
+  // The whole identity path in production shape: a real shim child resolving
+  // its OWN ancestry, writing its own hello, and a real daemon reading it —
+  // no hand-written line anywhere. The shim is a child of this test process,
+  // so both walk to the same harness; the map entry is seeded under that pid
+  // the way prompt-hint/wakeup-hook would have written it.
+  it('tags a retrieval with the session and agent its own hello named', { timeout: CASE_TIMEOUT_MS }, async (t) => {
+    const { harnessPid, pidStart, agent } = resolveHarnessAncestry();
+    // A visible skip, not a silent pass: with no harness above this process
+    // (CI, a bare shell) there is no identity for the shim to find, and a
+    // green tick would claim this was proven when it was not.
+    if (harnessPid == null) return t.skip('no harness process above the test runner');
+    mkdirSync(SESSION_MAP_DIR, { recursive: true });
+    writeFileSync(
+      join(SESSION_MAP_DIR, `${harnessPid}.json`),
+      JSON.stringify({ pid: harnessPid, pid_start: pidStart, session_id: 'sess-real-shim', agent, ts: new Date().toISOString() }),
+    );
+
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
+    const child = spawnShim([`--socket=${daemon.socketPath}`]);
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    const query = 'real-shim-identity-e2e';
+    try {
+      await initialize(driver);
+      const result = await driver.call('tools/call', { name: 'kb_search', arguments: { query } });
+      assert.ok(!result.result.isError, `kb_search failed: ${JSON.stringify(result.result.content)}`);
+      // Proves the row came through the daemon rather than the in-process
+      // fallback, which would tag it correctly for the wrong reason.
+      assert.ok(!stderr().includes('serving in-process'), `the shim fell back instead of using the daemon: ${stderr()}`);
+
+      const rows = getDb().prepare('SELECT session, agent FROM retrievals WHERE query = ?').all(query);
+      assert.ok(rows.length > 0, 'the search must have logged a retrieval row');
+      for (const row of rows) {
+        assert.strictEqual(row.session, 'sess-real-shim');
+        assert.strictEqual(row.agent, agent);
+      }
+    } finally {
+      child.kill();
+    }
   });
 
   it('exits 0 on stdin EOF', { timeout: CASE_TIMEOUT_MS }, async () => {
