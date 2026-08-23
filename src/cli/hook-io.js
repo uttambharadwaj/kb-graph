@@ -14,10 +14,11 @@ import { connect } from 'net';
 import { join } from 'path';
 import { CONTROL_SOCKET_PATH, HOOK_OP } from '../daemon-paths.js';
 import { LOGS_DIR } from '../paths.js';
-import { AGENT, AGENTS } from '../process-ancestry.js';
+import { AGENT, AGENT_FLAG, AGENTS } from '../process-ancestry.js';
 import { UsageError, readFlagValue } from './flags.js';
 
-export const AGENT_FLAG = '--agent';
+// Re-exported so hook modules keep one import for their flag plumbing.
+export { AGENT_FLAG };
 
 // Which client this hook was installed for. Claude Code takes a hook's plain
 // stdout as context; Codex takes the JSON envelope below. The flag is the

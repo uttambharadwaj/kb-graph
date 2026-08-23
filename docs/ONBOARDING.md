@@ -13,6 +13,7 @@ Prereqs: Node ≥18, Claude Code installed (`claude` on PATH), macOS or Linux.
 |-------|---------|--------|
 | MCP registered | `claude mcp list` | `knowledge-base` listed |
 | Hooks installed | `grep -c "wakeup-hook\|prompt-hint" ~/.claude/settings.json` | ≥2 |
+| Hooks installed (Codex) | `grep -c "wakeup-hook\|prompt-hint" ~/.codex/hooks.json` | ≥2, if you selected codex |
 | Jobs scheduled (macOS) | `launchctl list \| grep com.kb` | harvest, reindex, synthesis |
 | Jobs scheduled (Linux) | `systemctl --user list-timers \| grep kb-` | 3 timers |
 | First capture works | ask Claude: "save a note that onboarding worked" then `node bin/kb.js search onboarding` | your note |

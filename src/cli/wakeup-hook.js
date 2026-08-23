@@ -1,10 +1,7 @@
 // SessionStart hook: print a compact KB briefing to stdout so the harness
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
-import { readFileSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { homedir } from 'os';
-import { join } from 'path';
 import { getDb, getDocument, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
@@ -12,7 +9,7 @@ import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 import { callDaemonOp, hookDaemonTimeoutMs, hookOutput, noteHookTiming, readAgentFlag, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
-import { unresolvableHookCommands } from './setup-hooks.js';
+import { staleHookWarnings } from './setup-hooks.js';
 
 // Post-compact context loses everything not in the transcript summary,
 // including which workstream was active. Prefer the state note this session
@@ -48,21 +45,6 @@ const ACTIVE_NOTE_CAP = 6000;
 // (4.9% event follow-through) — printing 8 was mostly wasted tokens. Cut to
 // the 3 most-recent; the rest are one kb_search/kb_read away.
 const BRIEFING_STATE_LIMIT = 3;
-
-// A hook whose paths have gone stale fails exactly like one with nothing to
-// say, so the only place it can surface is a briefing that goes looking. This
-// runs inside the briefing and must never be the reason one fails to print.
-function staleHookWarnings(home = homedir()) {
-  try {
-    const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
-    return unresolvableHookCommands(settings).flatMap(h => [
-      ...(h.missing.length ? [`${h.event} hook cannot run: ${h.missing.join(', ')} missing — re-run 'kb setup' if this is a moved checkout`] : []),
-      ...(h.pinned.length ? [`${h.event} hook is pinned to one package version and dies on the next upgrade: ${h.pinned.join(', ')} — re-run 'kb setup'`] : []),
-    ]);
-  } catch {
-    return [];
-  }
-}
 
 const USAGE = 'Usage: kb wakeup-hook [--agent <claude|codex>]';
 

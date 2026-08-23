@@ -5,8 +5,8 @@ import { homedir, platform, release, type as osType } from 'os';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
-import { registerAgents } from './mcp-register.js';
-import { installClaudeHooks } from './setup-hooks.js';
+import { SUPPORTED_AGENTS, registerAgents } from './mcp-register.js';
+import { HOOK_FILES, installAgentHooks } from './setup-hooks.js';
 import { installJobs } from './setup-jobs.js';
 import { stableNodePath } from './runtime-node.js';
 
@@ -104,6 +104,13 @@ async function askMulti(rl, question, choices) {
 // Environment detection
 // ---------------------------------------------------------------------------
 
+const AGENT_LABELS = {
+  claude: 'Claude Code',
+  codex: 'OpenAI Codex CLI',
+  gemini: 'Google Gemini CLI',
+  ollama: 'Ollama',
+};
+
 function detectEnvironment() {
   const env = {
     os: `${osType()} ${platform()} ${release()}`,
@@ -111,14 +118,7 @@ function detectEnvironment() {
     tools: {},
   };
 
-  const toolMap = {
-    claude: 'Claude Code',
-    codex: 'OpenAI Codex CLI',
-    gemini: 'Google Gemini CLI',
-    ollama: 'Ollama',
-  };
-
-  for (const [cmd, label] of Object.entries(toolMap)) {
+  for (const [cmd, label] of Object.entries(AGENT_LABELS)) {
     env.tools[cmd] = { label, available: which(cmd) };
   }
 
@@ -265,12 +265,6 @@ volumes:
   writeFileSync(composePath, content);
   return composePath;
 }
-
-const MCP_REGISTRARS = {
-  claude: () => registerAgents(['claude'], HOME)[0].path,
-  codex: () => registerAgents(['codex'], HOME)[0].path,
-  gemini: () => registerAgents(['gemini'], HOME)[0].path,
-};
 
 // ---------------------------------------------------------------------------
 // Parse --auto CLI flags
@@ -434,15 +428,31 @@ function applyConfig(cfg) {
     path: envPath,
   });
 
-  // 2. Register MCP for each agent that has a registrar
+  // 2. Register MCP for each agent that has a config we can write
   for (const agent of (cfg.agents || [])) {
-    if (MCP_REGISTRARS[agent]) {
-      try {
-        const path = MCP_REGISTRARS[agent]();
-        results.steps.push({ action: `Registered MCP for ${agent}`, path });
-      } catch (err) {
-        results.steps.push({ action: `Failed to register MCP for ${agent}`, error: err.message });
+    if (!SUPPORTED_AGENTS.includes(agent)) continue;
+    try {
+      const r = registerAgents([agent], HOME)[0];
+      // A hand-managed config (Codex's config.toml) and a refused move are
+      // both "not registered" — reporting either as a write is how a setup
+      // run ends believing it wired something it did not.
+      if (r.manual) {
+        results.steps.push({
+          action: `MCP config for ${agent} is hand-managed — not written`,
+          path: r.path,
+          hint: `Run 'kb register --agents=${agent}' to print the block to paste`,
+        });
+      } else if (!r.written) {
+        results.steps.push({
+          action: `Refused to move the MCP registration for ${agent}`,
+          path: r.path,
+          error: `points at ${r.from} — re-register from that checkout, or 'kb register --force'`,
+        });
+      } else {
+        results.steps.push({ action: `Registered MCP for ${agent}`, path: r.path });
       }
+    } catch (err) {
+      results.steps.push({ action: `Failed to register MCP for ${agent}`, error: err.message });
     }
   }
 
@@ -475,14 +485,16 @@ function applyConfig(cfg) {
     });
   }
 
-  // 4. Claude Code hooks: session briefing + per-prompt KB hints
-  if ((cfg.agents || []).includes('claude')) {
+  // 4. Agent hooks: session briefing + per-prompt KB hints
+  for (const agent of (cfg.agents || [])) {
+    if (!HOOK_FILES[agent]) continue;
+    const label = AGENT_LABELS[agent] || agent;
     try {
-      const r = installClaudeHooks({ home: HOME, nodeBin: stableNodePath(), kbJsPath: join(PROJECT_ROOT, 'bin', 'kb.js') });
-      results.steps.push({ action: 'Installed Claude Code hooks (briefing + hints)', path: r.path });
-      if (r.backup) results.steps.push({ action: 'Backed up prior settings.json', path: r.backup });
+      const r = installAgentHooks({ home: HOME, agent, nodeBin: stableNodePath(), kbJsPath: join(PROJECT_ROOT, 'bin', 'kb.js') });
+      results.steps.push({ action: `Installed ${label} hooks (briefing + hints)`, path: r.path });
+      if (r.backup) results.steps.push({ action: `Backed up prior ${label} hook config`, path: r.backup });
     } catch (err) {
-      results.steps.push({ action: 'Failed to install Claude Code hooks', error: err.message });
+      results.steps.push({ action: `Failed to install ${label} hooks`, error: err.message });
     }
   }
 
@@ -575,7 +587,8 @@ function printSummary(results) {
   }
   outln(`    Dashboard: http://localhost:${cfg.port}`);
   outln();
-  outln('Open a new Claude Code session — your first KB BRIEFING should appear at startup.');
+  const hooked = (cfg.agents || []).filter(a => HOOK_FILES[a]).map(a => AGENT_LABELS[a] || a);
+  if (hooked.length) outln(`Open a new ${hooked.join(' or ')} session — your first KB BRIEFING should appear at startup.`);
 }
 
 // ---------------------------------------------------------------------------

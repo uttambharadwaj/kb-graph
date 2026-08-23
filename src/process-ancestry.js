@@ -19,6 +19,12 @@ export const AGENT = { CLAUDE: 'claude', CODEX: 'codex' };
 
 export const AGENTS = Object.values(AGENT);
 
+// The CLI spelling of the same tag — the flag hooks are installed with and
+// parse at runtime. It lives here, beside the values it carries, so
+// setup-hooks.js can write the flag without importing hook-io.js (which pulls
+// paths.js and the whole KB_DIR side-effect chain onto the installer path).
+export const AGENT_FLAG = '--agent';
+
 // Nearest-ancestor match, not an exact-name allowlist: the CLI binary as
 // installed varies (~/.local/bin/claude, a Homebrew shim, a versioned
 // .../versions/X.Y.Z copy invoked with argv0 rewritten by a daemon, etc) but
