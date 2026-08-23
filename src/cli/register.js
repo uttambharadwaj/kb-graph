@@ -4,11 +4,22 @@ export function register(args = []) {
   const agents = parseRegisterArgs(args);
   const results = registerAgents(agents, undefined, { force: args.includes('--force') });
   const written = results.filter(result => result.written);
-  const refused = results.filter(result => !result.written);
+  // Hand-managed configs are not failures: they need a paste, not a retry.
+  const manual = results.filter(result => result.manual);
+  const refused = results.filter(result => !result.written && !result.manual);
 
   if (written.length > 0) {
     console.log('MCP server registered for:');
     for (const result of written) console.log(`- ${result.agent}: ${result.path}`);
+    console.log('');
+  }
+
+  for (const result of manual) {
+    console.log(`${result.agent}: ${result.path} is hand-managed — add this block yourself:`);
+    console.log('');
+    console.log(result.snippet);
+    console.log('');
+    console.log('enabled_tools and any per-tool approval blocks stay hand-managed; this block does not touch them.');
     console.log('');
   }
 

@@ -8,7 +8,7 @@ This project ships two ways to use it. They solve different problems and work be
 
 **How it works:** Your agent decides when to call a tool. It sends a request ("search for X"), gets back results, and uses them. No tokens are spent until a tool is called.
 
-**Install:** `kb register` adds it to Claude Code, Codex, and Gemini. You can limit targets with `kb register --agents=claude,codex`.
+**Install:** `kb register` adds it to Claude Code and Gemini, and prints the `~/.codex/config.toml` block to paste for Codex (that file is hand-curated, so nothing writes it for you). You can limit targets with `kb register --agents=claude,codex`.
 
 **Token cost:** ~3.5k tokens for tool definitions (always in context) + whatever results come back per call. Most of that is the descriptions, and it is spent deliberately: an agent picks a tool from its description and nothing else, so a description that names the triggering situation is what makes the tool reachable at all.
 
@@ -57,7 +57,7 @@ git clone https://github.com/uttambharadwaj/kb-graph.git
 cd kb-graph
 npm install && npm link
 kb setup
-kb register   # Registers MCP tools with Claude Code, Codex, and Gemini
+kb register   # Registers MCP tools with Claude Code and Gemini; prints the Codex block
 ```
 
 Your agent now has all 35 KB tools.
@@ -86,10 +86,10 @@ The skill is just a markdown file. Include its content in your agent's system pr
 
 | Platform | MCP Server | Skill |
 |----------|-----------|-------|
-| Claude Code / Codex / Gemini | `kb register` | Copy to skills dir |
+| Claude Code / Gemini | `kb register` | Copy to skills dir |
 | Claude Web | Connect via remote MCP | Not applicable (use custom instructions) |
 | ChatGPT | Import OpenAPI spec | Add to Custom GPT instructions |
-| Codex CLI | MCP config in `.codex/mcp.json` | Add to `instructions.md` |
+| Codex CLI | `[mcp_servers.knowledge-base]` in `~/.codex/config.toml` (`kb register` prints it) | Add to `instructions.md` |
 | Gemini CLI | MCP config in `settings.json` | Add to `GEMINI.md` |
 | Cursor/Windsurf | MCP config | Include in rules |
 | Custom agents | REST API or MCP | Include in system prompt |
