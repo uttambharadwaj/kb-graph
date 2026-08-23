@@ -10,7 +10,8 @@ import { getToolDefinitions } from '../src/tools.js';
 import { insertDocument, getDb } from '../src/db.js';
 import { generateEmbedding, embeddingToBuffer } from '../src/embeddings/embed.js';
 import { similarDocs } from '../src/embeddings/search.js';
-import { SURFACE } from '../src/retrieval.js';
+import { SURFACE, callIdentity, resolveSessionId } from '../src/retrieval.js';
+import { AGENT } from '../src/process-ancestry.js';
 import { countByAgent, rediscoveries, runRediscoveriesCli } from '../src/cli/rediscoveries.js';
 
 const call = async (name, args) => {
@@ -51,7 +52,7 @@ const rediscoveryRows = () => getDb().prepare(
 describe('kb_check_duplicate logs a rediscovery', () => {
   beforeEach(() => getDb().exec('DELETE FROM embeddings'));
 
-  it('one row per match, sharing an event id, query truncated to 300 chars and session null', async () => {
+  it('one row per match, sharing an event id, query truncated to 300 chars and the ambient session', async () => {
     const content = `Retries are capped at three attempts, with jitter between them. ${'x'.repeat(400)}`;
     const held = await plantNeighborAt(0.9, { title: 'Retry policy', content });
 
@@ -62,7 +63,7 @@ describe('kb_check_duplicate logs a rediscovery', () => {
     const rows = rediscoveryRows().slice(before);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].doc_id, held.id);
-    assert.strictEqual(rows[0].session, null);
+    assert.strictEqual(rows[0].session, resolveSessionId());
     assert.strictEqual(rows[0].query, content.slice(0, 300));
     assert.strictEqual(rows[0].query.length, 300);
     assert.ok(rows[0].event_id);
@@ -108,7 +109,7 @@ describe('kb_write dedupe refusal logs a rediscovery', () => {
     const rows = rediscoveryRows().slice(before);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].doc_id, held.id);
-    assert.strictEqual(rows[0].session, null);
+    assert.strictEqual(rows[0].session, resolveSessionId());
   });
 
   it('logs nothing when the write is accepted', async () => {
@@ -119,6 +120,32 @@ describe('kb_write dedupe refusal logs a rediscovery', () => {
     const res = await call('kb_write', { title: 'Gnomon angles at noon', content, type: 'lesson' });
     assert.strictEqual(res.isError, false, res.text);
     assert.strictEqual(rediscoveryRows().length, before);
+  });
+
+  // One rediscovery event reached by two paths (check-then-write) must be
+  // stamped the same way by both, or the same event lands in the table twice
+  // under two different sessions. write-note.js used to hardcode null here
+  // while kb_check_duplicate resolved it, which only looked consistent
+  // because the resolution was null in every context that had been measured.
+  it('stamps the same session as kb_check_duplicate for the same content', async () => {
+    const identity = { harnessPid: 91001, pidStart: 'START-91001', agent: AGENT.CODEX };
+    const content = 'Credentials are resolved at tool-call time, never at session start.';
+    await plantNeighborAt(0.9, { title: 'Stateless credential resolution', content });
+
+    const before = rediscoveryRows().length;
+    await callIdentity.run(identity, async () => {
+      await call('kb_check_duplicate', { content });
+      await call('kb_write', { title: 'Credentials resolved late', content, type: 'lesson' });
+    });
+
+    const rows = rediscoveryRows().slice(before);
+    assert.strictEqual(rows.length, 2, 'both call sites must log the refusal');
+    // No session map exists for this pid, so the verified answer is null at
+    // both sites — the assertion that matters is that they AGREE, whatever
+    // the ambient resolution says.
+    assert.strictEqual(rows[0].session, rows[1].session);
+    assert.strictEqual(rows[0].agent, AGENT.CODEX);
+    assert.strictEqual(rows[1].agent, AGENT.CODEX);
   });
 });
 

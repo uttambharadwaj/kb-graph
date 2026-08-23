@@ -116,12 +116,19 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
     // that ran kb_check_duplicate first and then hit this refusal logs the
     // same rediscovery twice; acceptable for now, analysis dedupes by note
     // id + time window.
+    //
+    // Session deliberately left to logRetrievalResults' own default. This used
+    // to pass an explicit null, on the reasoning that a dedupe check has no
+    // session threaded through it — but the sibling call site
+    // (kb_check_duplicate, tools.js) never did, so ONE rediscovery event could
+    // be written twice with two different session values. The ambient
+    // resolution is the same answer at both sites, and under the daemon it is
+    // now the connection's own (retrieval.js's callIdentity).
     const matches = dups.slice(0, 5);
     logRetrievalResults({
       results: matches.map(m => ({ id: m.document_id })),
       surface: SURFACE.REDISCOVERY,
       query: content.slice(0, 300),
-      session: null,
       eventId: randomUUID(),
     });
     return { skipped: true, reason: 'duplicate_detected', matches };
