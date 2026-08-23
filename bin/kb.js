@@ -134,12 +134,14 @@ const COMMANDS = {
     run: a => import('../src/cli/triggers-backfill.js').then(m => m.runTriggersBackfillCli(a)),
   },
   'wakeup-hook': {
-    summary: 'Print compact KB briefing (for SessionStart hooks)',
-    run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
+    summary: 'Print compact KB briefing (for SessionStart hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
+    value: ['--agent'],
+    run: a => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook(a)),
   },
   'prompt-hint': {
-    summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)',
-    run: () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
+    summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
+    value: ['--agent'],
+    run: a => import('../src/cli/prompt-hint.js').then(m => m.promptHint(a)),
   },
   'trigger-hook': {
     summary: 'Read hook JSON on stdin, warn on a vetted command trigger (for PreToolUse/Bash hooks); '

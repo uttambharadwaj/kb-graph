@@ -1,6 +1,6 @@
 // Exercises wakeup-hook.js and prompt-hint.js as real subprocesses (they
 // process.exit() themselves — see tests/helpers/run-hook.mjs) fed the same
-// stdin JSON shape Claude Code pipes into a hook.
+// stdin JSON shape a client pipes into a hook, under both --agent shapes.
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -13,8 +13,8 @@ import { getDb } from '../src/db.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 
-function runHook(name, hookInput, extraEnv = {}) {
-  return execFileSync(process.execPath, [HELPER, name], {
+function runHook(name, hookInput, extraEnv = {}, args = []) {
+  return execFileSync(process.execPath, [HELPER, name, ...args], {
     input: JSON.stringify(hookInput),
     env: { ...process.env, ...extraEnv },
     encoding: 'utf8',
@@ -23,7 +23,7 @@ function runHook(name, hookInput, extraEnv = {}) {
 
 // tests/helpers/fake-ps-claude/ps reports the hook subprocess's own $PPID as
 // a child of this fixed synthetic pid whose comm is "claude" — see that
-// file's header. Prepending its directory to PATH makes resolveClaudeAncestry
+// file's header. Prepending its directory to PATH makes resolveHarnessAncestry
 // (src/process-ancestry.js) succeed deterministically for these tests, with
 // no real Claude Code CLI process required (CI has none).
 const FAKE_PS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'fake-ps-claude');
@@ -456,4 +456,143 @@ describe('the shared hook error log is named for what it is, not for the first h
     const fromPromptHint = (await import('../src/cli/prompt-hint.js')).HOOK_ERROR_LOG;
     assert.strictEqual(fromPromptHint, fromHookIo);
   });
+});
+
+// Codex reads a hook's stdout as a JSON envelope, Claude Code reads it as
+// plain text. One hook codebase, the shape picked by --agent: two hook files
+// would drift, and the drift is invisible (a client handed the wrong shape
+// injects nothing and says nothing).
+describe('--agent codex emits the JSON envelope', () => {
+  const db = () => getDb();
+
+  it('wakeup-hook wraps the briefing in hookSpecificOutput and tags the row codex', () => {
+    insertStateNote(db(), { title: 'State: codex-envelope', content: 'body', updatedAt: '2042-01-01T00:00:00Z' });
+
+    const stdout = runHook(
+      'wakeup-hook',
+      { session_id: 'sess-codex-briefing', hook_event_name: 'SessionStart' },
+      {},
+      ['--agent', 'codex'],
+    );
+
+    const parsed = JSON.parse(stdout);
+    assert.strictEqual(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
+    assert.match(parsed.hookSpecificOutput.additionalContext, /^KB BRIEFING/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /State: codex-envelope/);
+
+    const row = db().prepare("SELECT agent FROM retrievals WHERE surface = 'briefing' AND session = 'sess-codex-briefing'").get();
+    assert.ok(row, 'expected a briefing row for the codex session');
+    assert.strictEqual(row.agent, 'codex');
+  });
+
+  it('wakeup-hook stamps the event name off the hook input when the client names its own', () => {
+    const stdout = runHook(
+      'wakeup-hook',
+      { session_id: 'sess-codex-event-name', hook_event_name: 'session.start' },
+      {},
+      ['--agent=codex'],
+    );
+    assert.strictEqual(JSON.parse(stdout).hookSpecificOutput.hookEventName, 'session.start');
+  });
+
+  it('prompt-hint wraps the hint in the envelope and tags its rows codex', () => {
+    db().prepare(
+      `INSERT INTO documents (title, content, doc_type, tags) VALUES ('Sprocket calibration codex guide', 'sprocket calibration codex guide for operators', 'note', '')`
+    ).run();
+
+    const prompt = 'sprocket calibration codex guide walkthrough';
+    const stdout = runHook('prompt-hint', { session_id: 'sess-codex-hint', prompt }, {}, ['--agent', 'codex']);
+
+    const parsed = JSON.parse(stdout);
+    assert.strictEqual(parsed.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+    assert.match(parsed.hookSpecificOutput.additionalContext, /^KB HINT/);
+
+    const rows = db().prepare("SELECT agent FROM retrievals WHERE surface = 'hint' AND session = 'sess-codex-hint'").all();
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every(r => r.agent === 'codex'), 'every row from a codex prompt carries the codex tag');
+  });
+
+  it('prompt-hint declining under --agent codex prints nothing at all — never an envelope around an empty string', () => {
+    const prompt = 'zqxjkv codex phrasing that matches no stored entry whatsoever';
+    const stdout = runHook('prompt-hint', { session_id: 'sess-codex-decline', prompt }, {}, ['--agent', 'codex']);
+
+    assert.strictEqual(stdout, '');
+    const row = db().prepare("SELECT doc_id, agent FROM retrievals WHERE surface = 'hint' AND session = 'sess-codex-decline'").get();
+    assert.ok(row, 'a decline is still metered');
+    assert.strictEqual(row.doc_id, null);
+    assert.strictEqual(row.agent, 'codex', 'a declined prompt is still attributable to the client that sent it');
+  });
+
+  it('the session map records the pid under the agent the hook was told, not the one ps found', () => {
+    runHook(
+      'prompt-hint',
+      { session_id: 'sess-codex-map', prompt: 'a prompt long enough to clear the hint length gate' },
+      FAKE_PS_ENV,
+      ['--agent', 'codex'],
+    );
+    const entry = JSON.parse(readFileSync(sessionMapFile(), 'utf8'));
+    assert.strictEqual(entry.session_id, 'sess-codex-map');
+    assert.strictEqual(entry.agent, 'codex');
+  });
+});
+
+describe('the default agent is claude, unchanged', () => {
+  it('wakeup-hook prints plain text (no JSON envelope) and tags the row claude', () => {
+    const db = getDb();
+    insertStateNote(db, { title: 'State: claude-plain', content: 'body', updatedAt: '2043-01-01T00:00:00Z' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-claude-plain' });
+
+    assert.match(stdout, /^KB BRIEFING/);
+    assert.doesNotMatch(stdout, /hookSpecificOutput/);
+
+    const row = db.prepare("SELECT agent FROM retrievals WHERE surface = 'briefing' AND session = 'sess-claude-plain'").get();
+    assert.strictEqual(row.agent, 'claude');
+  });
+
+  it('prompt-hint prints the bare hint line and tags its rows claude', () => {
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO documents (title, content, doc_type, tags) VALUES ('Flywheel bearing claude guide', 'flywheel bearing claude guide for operators', 'note', '')`
+    ).run();
+
+    const stdout = runHook('prompt-hint', { session_id: 'sess-claude-hint', prompt: 'flywheel bearing claude guide walkthrough' });
+
+    assert.match(stdout, /^KB HINT/);
+    assert.doesNotMatch(stdout, /hookSpecificOutput/);
+    const rows = db.prepare("SELECT agent FROM retrievals WHERE surface = 'hint' AND session = 'sess-claude-hint'").all();
+    assert.ok(rows.length > 0);
+    assert.ok(rows.every(r => r.agent === 'claude'));
+  });
+});
+
+describe('the --agent flag is registered on both hook commands', () => {
+  const KB_BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'kb.js');
+
+  function runCli(command, args) {
+    try {
+      execFileSync(process.execPath, [KB_BIN, command, ...args], {
+        input: '{}',
+        env: { ...process.env },
+        encoding: 'utf8',
+      });
+      return { status: 0, stderr: '' };
+    } catch (err) {
+      return { status: err.status, stderr: err.stderr };
+    }
+  }
+
+  for (const command of ['wakeup-hook', 'prompt-hint']) {
+    it(`${command} rejects an unknown agent as a usage error instead of running with a default`, () => {
+      const { status, stderr } = runCli(command, ['--agent', 'gemini']);
+      assert.strictEqual(status, 2, 'a typo in an installed hook command must be loud, not silently claude');
+      assert.match(stderr, /--agent must be one of: claude, codex/);
+    });
+
+    it(`${command} rejects a bare --agent rather than falling back to claude`, () => {
+      const { status, stderr } = runCli(command, ['--agent']);
+      assert.strictEqual(status, 2);
+      assert.match(stderr, /--agent needs a value/);
+    });
+  }
 });

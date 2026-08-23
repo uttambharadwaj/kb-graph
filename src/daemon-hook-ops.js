@@ -20,8 +20,13 @@ import { HOOK_OP } from './daemon-paths.js';
 // plan, exactly once, right before it delivers. See each compute core's own
 // header comment (prompt-hint.js, trigger-hook.js, wakeup-hook.js) for the
 // full reasoning.
+//
+// `agent` rides along unused by the commit: false path (which writes
+// nothing) — it is forwarded so the payload carries the client's own answer
+// rather than leaving the daemon to guess it from an ancestry walk that
+// would resolve to the daemon's own launchd parent.
 export const HOOK_OPS = {
-  [HOOK_OP.PROMPT_HINT]: ({ prompt, session }) => computePromptHint({ prompt, session, commit: false }),
+  [HOOK_OP.PROMPT_HINT]: ({ prompt, session, agent = null }) => computePromptHint({ prompt, session, agent, commit: false }),
   [HOOK_OP.TRIGGER_HOOK]: ({ hookInput }) => computeTriggerHook(hookInput, { commit: false }),
-  [HOOK_OP.WAKEUP_HOOK]: ({ hookInput, session }) => computeWakeupHook({ hookInput, session, commit: false }),
+  [HOOK_OP.WAKEUP_HOOK]: ({ hookInput, session, agent = null }) => computeWakeupHook({ hookInput, session, agent, commit: false }),
 };
