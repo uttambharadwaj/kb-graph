@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 // through kb.js, and the Stop hook reaches bus-hook-current through the shim — one site covers all.
 import { isBatchCall } from '../claude-cli.js';
 import { acceptFlags, assertKnownFlags, showHelp, UsageError } from '../cli/flags.js';
+import { hookJsonEnvelope } from '../cli/hook-io.js';
 import { getBusNotifierIdleMs, getBusNotifierIntervalMs } from './config.js';
 import { clearBusBinding, normalizeCwd, readBusBinding, writeBusBinding } from './context.js';
 import {
@@ -211,12 +212,7 @@ function printJson(value) {
 
 function printHookJson(hookEventName, additionalContext = '') {
   if (!additionalContext) return;
-  printJson({
-    hookSpecificOutput: {
-      hookEventName,
-      additionalContext,
-    },
-  });
+  console.log(hookJsonEnvelope(hookEventName, additionalContext));
 }
 
 function isPidAlive(pid) {

@@ -9,10 +9,16 @@ import { isBatchCall } from '../claude-cli.js';
 import { SURFACE, logRetrievalResults, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
-import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, noteHookTiming, recordHookFailure, deliver, watchHookTiming } from './hook-io.js';
+import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, hookOutput, noteHookTiming, readAgentFlag, recordHookFailure, deliver, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
 
 const MAX_HINTS = 3;
+
+const USAGE = 'Usage: kb prompt-hint [--agent <claude|codex>]';
+
+// The event name Codex's envelope is stamped with when its own stdin does
+// not name one — see wakeup-hook.js's sibling constant.
+const DEFAULT_HOOK_EVENT = 'UserPromptSubmit';
 
 // Re-exported rather than duplicated — trigger-hook.js (PreToolUse, runs on
 // every Bash call) imports these from hook-io.js directly instead of from
@@ -51,7 +57,7 @@ async function readStdin() {
 // processes for one decision. Only the process that ends up delivering
 // `output` may ever commit `plan` (see commitPromptHintPlan) — exactly once,
 // which is the whole point of the split.
-export function computePromptHint({ prompt, session, fastWrite = false, commit = true }) {
+export function computePromptHint({ prompt, session, agent = null, fastWrite = false, commit = true }) {
   try {
     const results = relevantNotes(prompt, { limit: MAX_HINTS });
     // One event id for every doc row (or the single miss row) this prompt
@@ -63,7 +69,7 @@ export function computePromptHint({ prompt, session, fastWrite = false, commit =
       // of one: logging only the times we fired leaves a hit rate with no
       // denominator, and declining is now the common case rather than one
       // that never happened.
-      logRetrievalResults({ results, surface: SURFACE.HINT, query: prompt, session, eventId, fastWrite });
+      logRetrievalResults({ results, surface: SURFACE.HINT, query: prompt, session, eventId, agent, fastWrite });
     }
     const plan = commit ? null : { docIds: results.map(r => r.id), query: prompt, eventId };
 
@@ -91,13 +97,14 @@ export function computePromptHint({ prompt, session, fastWrite = false, commit =
 // Commits a plan computePromptHint returned with commit: false. Caller's
 // job to call this at most once, and only for the plan it is actually about
 // to deliver — see the header comment on computePromptHint.
-export function commitPromptHintPlan(plan, { session, fastWrite }) {
+export function commitPromptHintPlan(plan, { session, agent = null, fastWrite }) {
   if (!plan) return;
   const results = plan.docIds.map(id => ({ id }));
-  logRetrievalResults({ results, surface: SURFACE.HINT, query: plan.query, session, eventId: plan.eventId, fastWrite });
+  logRetrievalResults({ results, surface: SURFACE.HINT, query: plan.query, session, eventId: plan.eventId, agent, fastWrite });
 }
 
-export async function promptHint() {
+export async function promptHint(args = []) {
+  const agent = readAgentFlag(args, USAGE);
   watchHookTiming(HOOK_OP.PROMPT_HINT);
   // Our own model subprocesses are not user prompts. They cannot act on a hint
   // (no MCP tools) and logging them makes the read-path meter measure ourselves.
@@ -117,17 +124,17 @@ export async function promptHint() {
     if (trimmed.length < 20 || trimmed.startsWith('/') || HARNESS_ENVELOPE.test(trimmed)) process.exit(0);
 
     // Every prompt that reaches here carries the true session id — refresh
-    // the claude_pid -> session_id map so MCP-surface calls landing before
+    // the harness_pid -> session_id map so MCP-surface calls landing before
     // the next prompt stay resolvable. Ancestry-dependent (walks THIS
     // process's own parent chain) — must run here, never daemon-side.
-    recordSessionMap(hookInput?.session_id);
+    recordSessionMap(hookInput?.session_id, { agent });
     // Same reason: resolveSessionId falls back to ancestry when hookInput
     // carries no session_id. Resolved once, here, and handed to compute as a
     // plain value so neither the daemon nor the fallback branch below ever
     // has to touch ancestry again.
     const session = resolveSessionId(hookInput);
 
-    const daemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.PROMPT_HINT) });
+    const daemon = await callDaemonOp(HOOK_OP.PROMPT_HINT, { prompt, session, agent }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.PROMPT_HINT) });
     let output;
     if (daemon.ok) {
       // This is the one commit for this prompt: the daemon computed with
@@ -135,14 +142,15 @@ export async function promptHint() {
       // for it yet. A daemon response that arrives after this deadline
       // already fired is simply never reached here — its plan, and the row
       // it would have written, evaporate with it.
-      commitPromptHintPlan(daemon.plan, { session, fastWrite: true });
+      commitPromptHintPlan(daemon.plan, { session, agent, fastWrite: true });
       output = daemon.output;
       noteHookTiming('daemon');
     } else {
       noteHookTiming('fallback');
-      ({ output } = computePromptHint({ prompt, session, fastWrite: true }));
+      ({ output } = computePromptHint({ prompt, session, agent, fastWrite: true }));
     }
-    if (output) await deliver(output);
+    const line = hookOutput(output, { agent, hookEventName: hookInput?.hook_event_name || DEFAULT_HOOK_EVENT });
+    if (line) await deliver(line);
   } catch (err) {
     // Never block a prompt on KB problems — but leave a marker, or a hint that
     // crashed before it could be metered reads as a prompt the store had

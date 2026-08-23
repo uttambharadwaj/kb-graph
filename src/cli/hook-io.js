@@ -1,8 +1,8 @@
-// Shared plumbing for Claude Code hooks: never let a hook problem block the
-// tool call or prompt it's attached to, but leave a marker — a hook that
-// failed and a hook that had nothing to say are identical from outside
-// otherwise, which is why intermittent hook errors have never been
-// attributable to a particular hook.
+// Shared plumbing for agent hooks (Claude Code and Codex): never let a hook
+// problem block the tool call or prompt it's attached to, but leave a
+// marker — a hook that failed and a hook that had nothing to say are
+// identical from outside otherwise, which is why intermittent hook errors
+// have never been attributable to a particular hook.
 //
 // Split out of prompt-hint.js (which re-exports both, so nothing importing
 // them from there breaks) because prompt-hint.js itself imports db.js at
@@ -14,6 +14,48 @@ import { connect } from 'net';
 import { join } from 'path';
 import { CONTROL_SOCKET_PATH, HOOK_OP } from '../daemon-paths.js';
 import { LOGS_DIR } from '../paths.js';
+import { AGENT, AGENTS } from '../process-ancestry.js';
+import { UsageError, readFlagValue } from './flags.js';
+
+export const AGENT_FLAG = '--agent';
+
+// Which client this hook was installed for. Claude Code takes a hook's plain
+// stdout as context; Codex takes the JSON envelope below. The flag is the
+// source, not ancestry: an installed hook knows which config file it was
+// written into, while a `ps` walk is a guess that can only fail at exactly
+// the moment the answer matters (a wrapper, a detached spawn). Defaults to
+// claude — every hook installed before this flag existed passes nothing.
+export function readAgentFlag(args = [], usage = null) {
+  const value = readFlagValue(args, AGENT_FLAG);
+  // A bare trailing `--agent` reads as absent, which would silently install
+  // as claude — the one failure this flag exists to prevent. Present-but-
+  // empty is a usage error, not a default.
+  if (value === undefined) {
+    if (args.includes(AGENT_FLAG)) throw new UsageError(`${AGENT_FLAG} needs a value: ${AGENT_FLAG} <${AGENTS.join('|')}>`, usage);
+    return AGENT.CLAUDE;
+  }
+  if (!AGENTS.includes(value)) {
+    throw new UsageError(`${AGENT_FLAG} must be one of: ${AGENTS.join(', ')} (got ${JSON.stringify(value)})`, usage);
+  }
+  return value;
+}
+
+// The JSON shape a hook uses to hand text to Codex as session context. The
+// bus hooks (src/bus/cli.js) print the same envelope through this same
+// function — one spelling of the shape, since a client that gets the key
+// names wrong silently injects nothing.
+export function hookJsonEnvelope(hookEventName, additionalContext) {
+  return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }, null, 2);
+}
+
+// What a hook actually writes to stdout for `agent`: plain text for Claude
+// Code, the JSON envelope for Codex. Null in, null out — "nothing to say"
+// must stay nothing on both clients, never an envelope wrapping an empty
+// string.
+export function hookOutput(output, { agent, hookEventName }) {
+  if (output == null || output === '') return null;
+  return agent === AGENT.CODEX ? hookJsonEnvelope(hookEventName, output) : output;
+}
 
 // Shared across every hook that reuses this module (prompt-hint.js and
 // trigger-hook.js so far) — one name, not one per hook, so a failure here
