@@ -40,11 +40,12 @@ const ENVELOPE_RE = /^<(agent-message|task-notification)/;
 
 const pct = (n, of) => (of > 0 ? `${((n / of) * 100).toFixed(1)}%` : 'n/a');
 
-// Rows predating the agent column (and any read whose process had no harness
-// ancestor at all) carry NULL — reported as its own bucket rather than folded
-// into claude, since "we never looked" and "we looked and it was Claude" are
-// different readings. Every bucket is always present so the per-agent counts
-// visibly sum to the surface's own totals.
+// Rows predating the agent column carry NULL, as does any read whose process
+// had no harness ancestor — and, on a daemon connection, any client that sent
+// no shim hello (an older shim, `kb serve --status`). Reported as its own
+// bucket rather than folded into claude, since "we never looked" and "we
+// looked and it was Claude" are different readings. Every bucket is always
+// present so the per-agent counts visibly sum to the surface's own totals.
 const UNKNOWN_AGENT = 'unknown';
 const AGENT_BUCKETS = [...AGENTS, UNKNOWN_AGENT];
 

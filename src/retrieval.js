@@ -3,6 +3,7 @@
 // read back. This is the one shared chokepoint for that — every read
 // surface funnels through logRetrieval so `surface` values and `session`
 // derivation can't drift between call sites.
+import { AsyncLocalStorage } from 'async_hooks';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from './db.js';
 import { resolveHarnessAncestry } from './process-ancestry.js';
 import { resolveMapEntry } from './session-map.js';
@@ -93,8 +94,23 @@ export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
 // cannot change while this process is alive. The map FILE at that pid is
 // re-read on every call, since the session id behind one pid is exactly what
 // changes.
+//
+// The process-cached walk is only right when the process IS a descendant of
+// the harness. Under the resident daemon it is not: one launchd-parented
+// process serves every session, so its own walk names launchd and every
+// MCP-surface row it wrote came out session=NULL, agent=NULL. There the
+// identity arrives per connection (the shim's hello line, see
+// shim-hello.js) and the daemon binds it around each tool call through this
+// store — per connection, so two harnesses calling at once cannot
+// cross-stamp each other. Unset (in-process `kb mcp`, the REST/CLI surfaces,
+// a hook) means the process's own walk is the right answer, which is the
+// fallback below.
+export const callIdentity = new AsyncLocalStorage();
+
 let cachedAncestry = null;
 function defaultAncestry() {
+  const bound = callIdentity.getStore();
+  if (bound) return bound;
   if (!cachedAncestry) cachedAncestry = resolveHarnessAncestry();
   return cachedAncestry;
 }
