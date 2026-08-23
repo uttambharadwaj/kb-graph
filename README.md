@@ -18,8 +18,9 @@ npm install
 node bin/kb.js setup
 ```
 
-Setup registers the MCP server with your agents, installs Claude Code hooks
-(a KB briefing at session start, knowledge hints on every prompt), schedules
+Setup registers the MCP server with your agents, installs the agent hooks
+(a KB briefing at session start, knowledge hints on every prompt) for Claude
+Code and Codex, schedules
 the nightly harvest / reindex / weekly synthesis jobs, installs the bundled
 `/debrief` and `kb-workflow` skills, and creates a markdown vault at
 `~/kb-vault` if you don't have one. Obsidian is an optional viewer — the
@@ -41,7 +42,8 @@ Most memory systems fix this with discipline — *remember to save notes, rememb
 
 ### 1. Push, not pull
 
-Two Claude Code hooks (installed by `kb setup`) mean your agent never starts cold:
+Two hooks (installed by `kb setup` into Claude Code's `settings.json` and Codex's
+`hooks.json`) mean your agent never starts cold:
 
 - **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
 
@@ -263,7 +265,8 @@ kb mcp                 Plain per-session MCP stdio server (the shim's fallback,
                        still available as a direct registration)
 kb migrate             Apply pending schema migrations (--dry-run to preview,
                        --check to exit 3 when a database is behind)
-kb register            Register MCP with Claude Code / Codex / Gemini
+kb register            Register MCP with Claude Code / Gemini; prints the
+                       config.toml block to paste for Codex
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included)
@@ -421,8 +424,13 @@ alone still reaches the real message bus.
 ### Claude Code, Codex, Gemini (MCP)
 
 ```bash
-kb register    # writes to ~/.claude.json, ~/.codex/mcp.json, ~/.gemini/mcp.json
+kb register    # writes to ~/.claude.json and ~/.gemini/mcp.json
 ```
+
+Codex is the exception: it reads MCP servers from `[mcp_servers.*]` in
+`~/.codex/config.toml`, which is hand-curated (`enabled_tools`, per-tool
+approval blocks). `kb register` prints the block for that file instead of
+writing it — paste it in and restart Codex.
 
 Any other MCP client — point it at the stdio transport:
 
