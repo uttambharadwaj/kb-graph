@@ -48,7 +48,7 @@ const COMMANDS = {
     run: a => import('../src/cli/migrate.js').then(m => m.runMigrateCli(a)),
   },
   register: {
-    summary: 'Register MCP server with Claude/Codex/Gemini (--force to move an existing registration)',
+    summary: 'Register MCP server with Claude/Gemini, and print the block to paste for Codex (--force to move an existing registration)',
     valueEq: ['--agents'],
     boolean: ['--force'],
     run: a => import('../src/cli/register.js').then(m => m.register(a)),
@@ -134,12 +134,14 @@ const COMMANDS = {
     run: a => import('../src/cli/triggers-backfill.js').then(m => m.runTriggersBackfillCli(a)),
   },
   'wakeup-hook': {
-    summary: 'Print compact KB briefing (for SessionStart hooks)',
-    run: () => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook()),
+    summary: 'Print compact KB briefing (for SessionStart hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
+    value: ['--agent'],
+    run: a => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook(a)),
   },
   'prompt-hint': {
-    summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks)',
-    run: () => import('../src/cli/prompt-hint.js').then(m => m.promptHint()),
+    summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
+    value: ['--agent'],
+    run: a => import('../src/cli/prompt-hint.js').then(m => m.promptHint(a)),
   },
   'trigger-hook': {
     summary: 'Read hook JSON on stdin, warn on a vetted command trigger (for PreToolUse/Bash hooks); '

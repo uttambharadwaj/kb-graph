@@ -26,6 +26,7 @@ import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getDb } from '../db.js';
 import { isTestSession, READ_SURFACES, SURFACE } from '../retrieval.js';
+import { AGENTS } from '../process-ancestry.js';
 import { TRIGGERS_LOG_DIR } from './trigger-hook.js';
 import { acceptFlags } from './flags.js';
 
@@ -38,6 +39,14 @@ const WINDOW_MS = 30 * 60 * 1000;
 const ENVELOPE_RE = /^<(agent-message|task-notification)/;
 
 const pct = (n, of) => (of > 0 ? `${((n / of) * 100).toFixed(1)}%` : 'n/a');
+
+// Rows predating the agent column (and any read whose process had no harness
+// ancestor at all) carry NULL — reported as its own bucket rather than folded
+// into claude, since "we never looked" and "we looked and it was Claude" are
+// different readings. Every bucket is always present so the per-agent counts
+// visibly sum to the surface's own totals.
+const UNKNOWN_AGENT = 'unknown';
+const AGENT_BUCKETS = [...AGENTS, UNKNOWN_AGENT];
 
 // SQLite's CURRENT_TIMESTAMP writes "YYYY-MM-DD HH:MM:SS" with no timezone
 // marker, which is UTC. Fixture rows (and the trigger JSONL log) use
@@ -72,7 +81,9 @@ function groupEvents(rows) {
       // rides along on the event itself — `kb promotions` needs it to name
       // what a would-promote decision is about; nothing else reads it, so
       // adding it here doesn't touch any existing consumer's shape.
-      ev = { key, session: row.session, surface: row.surface, query: row.query, createdAt: row.created_at, docIds: new Set(), isTest: false };
+      // agent comes off the first row of the group: one event is one call in
+      // one process, so every row it wrote carries the same tag.
+      ev = { key, session: row.session, surface: row.surface, query: row.query, createdAt: row.created_at, agent: row.agent ?? null, docIds: new Set(), isTest: false };
       events.set(key, ev);
     }
     if (row.doc_id != null) ev.docIds.add(row.doc_id);
@@ -155,13 +166,33 @@ function followingRead(event, reads) {
 
 function readRows(db, surfaces, excludeSessions) {
   const placeholders = surfaces.map(() => '?').join(', ');
-  let sql = `SELECT doc_id, surface, query, session, event_id, is_test, created_at FROM retrievals WHERE surface IN (${placeholders})`;
+  let sql = `SELECT doc_id, surface, query, session, event_id, is_test, agent, created_at FROM retrievals WHERE surface IN (${placeholders})`;
   const params = [...surfaces];
   if (excludeSessions.length) {
     sql += ` AND (session IS NULL OR session NOT IN (${excludeSessions.map(() => '?').join(', ')}))`;
     params.push(...excludeSessions);
   }
   return db.prepare(sql).all(...params);
+}
+
+// The same fire/followed pair the surface reports overall, split by the
+// client that was handed the push. Kept beside the totals rather than
+// replacing them: the aggregate numbers are what every earlier reading of
+// this report was quoted against, and a split that moved them would make the
+// two incomparable.
+function agentBreakdown(fireEvents) {
+  const byAgent = {};
+  for (const bucket of AGENT_BUCKETS) byAgent[bucket] = { fires: 0, followed30: 0, followedUnbounded: 0, rate30: pct(0, 0) };
+  for (const ev of fireEvents) {
+    // Membership test, not a bare lookup: `agent` is a stored string, and an
+    // unrecognised one indexing a plain object can land on Object.prototype.
+    const bucket = byAgent[AGENTS.includes(ev.agent) ? ev.agent : UNKNOWN_AGENT];
+    bucket.fires += 1;
+    if (ev.followed30) bucket.followed30 += 1;
+    if (ev.followedUnbounded) bucket.followedUnbounded += 1;
+  }
+  for (const bucket of Object.values(byAgent)) bucket.rate30 = pct(bucket.followed30, bucket.fires);
+  return byAgent;
 }
 
 // Shared shape for every push/pull surface: total events, why some were
@@ -189,6 +220,7 @@ function surfaceStats(rows, reads, { declines = false } = {}) {
     rate30: pct(followed30, fireEvents.length),
     rateUnbounded: pct(followedUnbounded, fireEvents.length),
     declineRate: declines ? pct(declineEvents.length, fireEvents.length + declineEvents.length) : null,
+    byAgent: agentBreakdown(fireEvents),
     fireEvents,
   };
 }
@@ -378,6 +410,8 @@ function printSurface(label, s) {
   console.log(`\n${label}: ${s.events} events (excluded: ${s.excluded.test} test, ${s.excluded.envelope} envelope, ${s.excluded.unattributable} unattributable)`);
   if (s.declineRate != null) console.log(`  fires ${s.fires}, declines ${s.declines} (decline rate ${s.declineRate})`);
   console.log(`  followed (30min): ${s.followed30}/${s.fires} (${s.rate30}) — unbounded: ${s.followedUnbounded}/${s.fires} (${s.rateUnbounded})`);
+  const agents = AGENT_BUCKETS.map(a => `${a} ${s.byAgent[a].followed30}/${s.byAgent[a].fires} (${s.byAgent[a].rate30})`);
+  console.log(`  by agent: ${agents.join(', ')}`);
 }
 
 function printReport(report) {

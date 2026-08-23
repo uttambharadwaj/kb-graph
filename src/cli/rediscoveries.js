@@ -6,18 +6,30 @@
 import { getDb } from '../db.js';
 import { UsageError, acceptFlags, readFlagValue } from './flags.js';
 import { SURFACE } from '../retrieval.js';
+import { AGENTS } from '../process-ancestry.js';
 
 const DEFAULT_DAYS = 14;
 const USAGE = 'Usage: kb rediscoveries [--days <N>] [--json]';
 
 export function rediscoveries(db = getDb(), { days = DEFAULT_DAYS } = {}) {
   return db.prepare(`
-    SELECT r.created_at AS ts, r.doc_id, d.title, r.query
+    SELECT r.created_at AS ts, r.doc_id, d.title, r.query, r.agent
     FROM retrievals r
     LEFT JOIN documents d ON d.id = r.doc_id
     WHERE r.surface = ? AND r.created_at >= datetime('now', ?)
     ORDER BY r.created_at DESC
   `).all(SURFACE.REDISCOVERY, `-${days} days`);
+}
+
+// Rows written before the agent column existed carry NULL — counted apart
+// from the named agents rather than assumed to be Claude's.
+const UNKNOWN_AGENT = 'unknown';
+
+// Every bucket, always, so the parts visibly sum to the total on the line above.
+export function countByAgent(rows) {
+  const counts = Object.fromEntries([...AGENTS, UNKNOWN_AGENT].map(a => [a, 0]));
+  for (const row of rows) counts[AGENTS.includes(row.agent) ? row.agent : UNKNOWN_AGENT] += 1;
+  return counts;
 }
 
 const QUERY_SNIPPET_LEN = 60;
@@ -43,7 +55,9 @@ export function runRediscoveriesCli(args = []) {
   }
 
   console.log(`Rediscoveries in the last ${days} day(s): ${rows.length}`);
+  const byAgent = countByAgent(rows);
+  console.log(`  by agent: ${Object.entries(byAgent).map(([agent, count]) => `${agent} ${count}`).join(', ')}`);
   for (const r of rows) {
-    console.log(`  ${r.ts}  #${r.doc_id ?? '?'} ${r.title ?? '(unknown)'} — ${snippet(r.query)}`);
+    console.log(`  ${r.ts}  #${r.doc_id ?? '?'} ${r.title ?? '(unknown)'} [${r.agent ?? UNKNOWN_AGENT}] — ${snippet(r.query)}`);
   }
 }

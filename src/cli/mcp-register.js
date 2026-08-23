@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { stableNodePath } from './runtime-node.js';
+import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
 
 export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini'];
@@ -30,7 +31,9 @@ function readJson(path) {
 
 export function getAgentConfigPath(agent, homeDir = homedir()) {
   if (agent === 'claude') return join(homeDir, '.claude.json');
-  if (agent === 'codex') return join(homeDir, '.codex', 'mcp.json');
+  // Codex reads MCP servers from config.toml's [mcp_servers.*]; ~/.codex/mcp.json
+  // is dead config it never loads (verified against Codex CLI 0.148).
+  if (agent === AGENT.CODEX) return join(homeDir, '.codex', 'config.toml');
   if (agent === 'gemini') return join(homeDir, '.gemini', 'mcp.json');
   throw new Error(`Unsupported agent: ${agent}`);
 }
@@ -65,6 +68,22 @@ function registeredEntrypoint(config) {
   return Array.isArray(args) ? args[0] ?? null : null;
 }
 
+// The [mcp_servers.knowledge-base] block Codex needs, ready to paste. TOML
+// basic strings take the same escapes JSON does, so JSON.stringify is a
+// correct quoter for a path here.
+export function codexRegistrationSnippet() {
+  const q = JSON.stringify;
+  return [
+    `[mcp_servers.${KB_MCP_SERVER_NAME}]`,
+    `command = ${q(KB_MCP_SERVER_CONFIG.command)}`,
+    `args = [${KB_MCP_SERVER_CONFIG.args.map(q).join(', ')}]`,
+    `cwd = ${q(dirname(dirname(KB_ENTRYPOINT_PATH)))}`,
+    // Cold start pays for the daemon liveness probe plus a fallback in-process
+    // server; Codex's default is short enough to time out on that.
+    'startup_timeout_sec = 20.0',
+  ].join('\n');
+}
+
 /**
  * Registering is idempotent from the checkout that already owns the config, and
  * refuses from any other one.
@@ -81,6 +100,13 @@ function registeredEntrypoint(config) {
 export function registerAgents(agents, homeDir = homedir(), { force = false } = {}) {
   return agents.map(agent => {
     const path = getAgentConfigPath(agent, homeDir);
+    // Codex's config.toml is hand-curated (enabled_tools, per-tool
+    // approval_mode blocks) and there is no TOML parser in this tree, so the
+    // registration it needs is printed for a human to paste rather than
+    // written — `--force` has nothing to force here.
+    if (agent === AGENT.CODEX) {
+      return { agent, path, written: false, manual: true, snippet: codexRegistrationSnippet(), from: null, to: KB_ENTRYPOINT_PATH };
+    }
     const config = readJson(path);
     const from = registeredEntrypoint(config);
     if (from !== null && from !== KB_ENTRYPOINT_PATH && !force) {

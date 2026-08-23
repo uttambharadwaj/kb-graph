@@ -4,12 +4,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mergeClaudeHooks, installClaudeHooks , unresolvableHookCommands } from '../src/cli/setup-hooks.js';
+import { mergeAgentHooks, installAgentHooks, readAgentHookFiles, staleHookWarnings, unresolvableHookCommands } from '../src/cli/setup-hooks.js';
+import { AGENT } from '../src/process-ancestry.js';
 
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
+const CODEX_OPTS = { ...OPTS, agent: AGENT.CODEX };
 
-test('mergeClaudeHooks adds SessionStart, UserPromptSubmit and PreToolUse entries', () => {
-  const merged = mergeClaudeHooks({}, OPTS);
+test('mergeAgentHooks adds SessionStart, UserPromptSubmit and PreToolUse entries', () => {
+  const merged = mergeAgentHooks({}, OPTS);
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
   const ptu = merged.hooks.PreToolUse;
@@ -27,15 +29,15 @@ test('mergeClaudeHooks adds SessionStart, UserPromptSubmit and PreToolUse entrie
   assert.equal(ptu[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
 });
 
-test('mergeClaudeHooks is idempotent', () => {
-  const once = mergeClaudeHooks({}, OPTS);
-  const twice = mergeClaudeHooks(once, OPTS);
+test('mergeAgentHooks is idempotent', () => {
+  const once = mergeAgentHooks({}, OPTS);
+  const twice = mergeAgentHooks(once, OPTS);
   assert.deepEqual(twice, once);
 });
 
-test('mergeClaudeHooks detects existing hooks with different node paths', () => {
+test('mergeAgentHooks detects existing hooks with different node paths', () => {
   const existing = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: '/opt/homebrew/bin/node /somewhere/else/kb.js wakeup-hook' }] }] } };
-  const merged = mergeClaudeHooks(existing, OPTS);
+  const merged = mergeAgentHooks(existing, OPTS);
   assert.equal(merged.hooks.SessionStart.length, 1); // not duplicated
   assert.equal(merged.hooks.UserPromptSubmit.length, 1); // still added
   assert.equal(merged.hooks.PreToolUse.length, 1); // still added
@@ -46,9 +48,9 @@ test('mergeClaudeHooks detects existing hooks with different node paths', () => 
 // is the spec's own identity (script filename here, subcommand elsewhere),
 // not the event, so trigger-hook must land beside them rather than
 // displacing or merging into them.
-test('mergeClaudeHooks adds trigger-hook alongside an unrelated PreToolUse entry', () => {
+test('mergeAgentHooks adds trigger-hook alongside an unrelated PreToolUse entry', () => {
   const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: "echo 'style reminder'" }] }] } };
-  const merged = mergeClaudeHooks(existing, OPTS);
+  const merged = mergeAgentHooks(existing, OPTS);
   assert.equal(merged.hooks.PreToolUse.length, 2);
   assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, "echo 'style reminder'");
   assert.equal(merged.hooks.PreToolUse[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
@@ -62,9 +64,9 @@ test('mergeClaudeHooks adds trigger-hook alongside an unrelated PreToolUse entry
 // prior install from a dev checkout, now re-run from the deploy checkout),
 // which the plain kbJsPath-equality the idempotency test above already
 // covers would not catch.
-test('mergeClaudeHooks recognizes an already-installed script hook even from a different checkout directory', () => {
+test('mergeAgentHooks recognizes an already-installed script hook even from a different checkout directory', () => {
   const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/node /Users/dev/kb-checkout/bin/kb-trigger-hook.js' }] }] } };
-  const merged = mergeClaudeHooks(existing, { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' });
+  const merged = mergeAgentHooks(existing, { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' });
   assert.equal(merged.hooks.PreToolUse.length, 1, 'not duplicated even though the directory prefix differs');
 });
 
@@ -74,50 +76,50 @@ test('mergeClaudeHooks recognizes an already-installed script hook even from a d
 // holding that install is recognized too — without this, re-running setup
 // on a machine that installed before the thin entry landed would install a
 // SECOND PreToolUse hook rather than replacing or recognizing the first.
-test('mergeClaudeHooks recognizes a legacy subcommand-form trigger-hook install and does not duplicate it', () => {
+test('mergeAgentHooks recognizes a legacy subcommand-form trigger-hook install and does not duplicate it', () => {
   const existing = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook' }] }] } };
-  const merged = mergeClaudeHooks(existing, OPTS);
+  const merged = mergeAgentHooks(existing, OPTS);
   assert.equal(merged.hooks.PreToolUse.length, 1, 'the legacy install must be recognized, not duplicated');
   assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js trigger-hook', 'the legacy command is left as-is — only a fresh install writes the script form');
 });
 
-test('mergeClaudeHooks preserves unrelated settings and hooks', () => {
+test('mergeAgentHooks preserves unrelated settings and hooks', () => {
   const existing = {
     model: 'opus',
     hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo bye' }] }] },
   };
-  const merged = mergeClaudeHooks(existing, OPTS);
+  const merged = mergeAgentHooks(existing, OPTS);
   assert.equal(merged.model, 'opus');
   assert.equal(merged.hooks.Stop[0].hooks[0].command, 'echo bye');
   assert.notEqual(merged, existing); // did not mutate input
   assert.equal(existing.hooks.SessionStart, undefined);
 });
 
-test('installClaudeHooks throws a named error on malformed settings.json and leaves it untouched', () => {
+test('installAgentHooks throws a named error on malformed settings.json and leaves it untouched', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
   const dir = join(home, '.claude');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'settings.json');
   writeFileSync(path, '{ not json');
-  assert.throws(() => installClaudeHooks({ home, ...OPTS }), err => err.message.includes(path));
+  assert.throws(() => installAgentHooks({ home, ...OPTS }), err => err.message.includes(path));
   assert.equal(readFileSync(path, 'utf8'), '{ not json'); // no write, no backup mangling
   assert.equal(existsSync(`${path}.kb-backup`), false);
 });
 
-test('installClaudeHooks leaves no temp file behind', () => {
+test('installAgentHooks leaves no temp file behind', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
-  const { path } = installClaudeHooks({ home, ...OPTS });
+  const { path } = installAgentHooks({ home, ...OPTS });
   assert.equal(existsSync(`${path}.kb-tmp`), false);
 });
 
-test('installClaudeHooks creates settings.json when absent, backs up when present', () => {
+test('installAgentHooks creates settings.json when absent, backs up when present', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
-  const first = installClaudeHooks({ home, ...OPTS });
+  const first = installAgentHooks({ home, ...OPTS });
   assert.equal(first.backup, null);
   const settings = JSON.parse(readFileSync(first.path, 'utf8'));
   assert.equal(settings.hooks.SessionStart.length, 1);
 
-  const second = installClaudeHooks({ home, ...OPTS });
+  const second = installAgentHooks({ home, ...OPTS });
   assert.ok(existsSync(second.backup));
   const after = JSON.parse(readFileSync(second.path, 'utf8'));
   assert.equal(after.hooks.SessionStart.length, 1); // idempotent on disk too
@@ -184,4 +186,182 @@ test('a version-stable symlink is not reported as pinned', () => {
   assert.deepEqual(
     unresolvableHookCommands(hookSettings('/opt/homebrew/opt/node@22/bin/node /opt/kb/bin/kb.js wakeup-hook'), { exists: () => true }),
     []);
+});
+
+// --- Codex ---------------------------------------------------------------
+
+// The commands are Claude's plus `--agent codex`, which is what makes each
+// hook print the JSON envelope Codex reads as context instead of plain text.
+test('mergeAgentHooks installs the codex hooks with the agent flag, and not the trigger hook', () => {
+  const merged = mergeAgentHooks({}, CODEX_OPTS);
+  assert.equal(merged.hooks.SessionStart.length, 1);
+  // Codex has no `compact` SessionStart source — PreCompact/PostCompact are
+  // their own events there.
+  assert.equal(merged.hooks.SessionStart[0].matcher, 'startup|resume|clear');
+  assert.equal(merged.hooks.SessionStart[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent codex');
+  assert.equal(merged.hooks.UserPromptSubmit.length, 1);
+  assert.equal(merged.hooks.UserPromptSubmit[0].matcher, undefined);
+  assert.equal(merged.hooks.UserPromptSubmit[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js prompt-hint --agent codex');
+  // PostToolUse excerpts are deliberately deferred for Codex (brief §4 Q2).
+  assert.equal(merged.hooks.PreToolUse, undefined);
+});
+
+test('mergeAgentHooks is idempotent for codex', () => {
+  const once = mergeAgentHooks({}, CODEX_OPTS);
+  assert.deepEqual(mergeAgentHooks(once, CODEX_OPTS), once);
+});
+
+// The two commands differ only by the trailing flag. Dedup that ignored the
+// flag would see the Claude install and skip Codex's — a hook that never
+// fires, in a file that looks wired.
+test('mergeAgentHooks does not treat the claude command as the codex one', () => {
+  const withClaude = mergeAgentHooks({}, OPTS);
+  const merged = mergeAgentHooks(withClaude, CODEX_OPTS);
+  const commands = merged.hooks.SessionStart.map(e => e.hooks[0].command);
+  assert.deepEqual(commands, [
+    '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook',
+    '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent codex',
+  ]);
+  // ...and neither install re-adds the other's.
+  assert.deepEqual(mergeAgentHooks(merged, OPTS), merged);
+  assert.deepEqual(mergeAgentHooks(merged, CODEX_OPTS), merged);
+});
+
+// A real ~/.codex/hooks.json already carries bus hooks (which pass their own
+// `--agent codex`) and oh-my-codex's native hook. None of them is ours, and
+// all of them must come back unchanged.
+const CODEX_HOOKS_FIXTURE = {
+  hooks: {
+    SessionStart: [
+      {
+        matcher: 'startup|resume',
+        hooks: [
+          { type: 'command', command: '/Users/u/.codex/caffeinate-hook.sh ensure' },
+          { type: 'command', command: '/bin/node /repo/bin/bus-autobind.js --agent codex --hook-event SessionStart' },
+          { type: 'command', command: '/bin/node /repo/bin/kb.js bus-hook-current --agent codex --hook-event SessionStart --pending-only' },
+        ],
+      },
+      { matcher: 'startup|resume|clear', hooks: [{ type: 'command', command: '"/bin/node" "/omx/codex-native-hook.js"' }] },
+    ],
+    UserPromptSubmit: [
+      { hooks: [{ type: 'command', command: '/Users/u/.codex/bus-reset-stop-count.sh codex', statusMessage: 'Resetting bus continuation cap' }] },
+    ],
+    Stop: [{ hooks: [{ type: 'command', command: '/Users/u/.codex/bus-stop-hook.sh codex', timeout: 30 }] }],
+  },
+};
+
+test('mergeAgentHooks leaves unrelated codex hook entries exactly as they were', () => {
+  const merged = mergeAgentHooks(CODEX_HOOKS_FIXTURE, CODEX_OPTS);
+  assert.deepEqual(merged.hooks.SessionStart.slice(0, 2), CODEX_HOOKS_FIXTURE.hooks.SessionStart);
+  assert.deepEqual(merged.hooks.UserPromptSubmit.slice(0, 1), CODEX_HOOKS_FIXTURE.hooks.UserPromptSubmit);
+  assert.deepEqual(merged.hooks.Stop, CODEX_HOOKS_FIXTURE.hooks.Stop);
+  assert.equal(merged.hooks.SessionStart.length, 3);
+  assert.equal(merged.hooks.UserPromptSubmit.length, 2);
+  // A bus hook carrying `--agent codex` is not a KB briefing hook: dedup keys
+  // on the spec's own subcommand, not on the flag.
+  assert.equal(merged.hooks.SessionStart[2].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent codex');
+});
+
+test('installAgentHooks writes ~/.codex/hooks.json, and re-running changes nothing', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  const first = installAgentHooks({ home, ...CODEX_OPTS });
+  assert.equal(first.path, join(home, '.codex', 'hooks.json'));
+  assert.equal(first.backup, null);
+  const written = readFileSync(first.path, 'utf8');
+  const hooks = JSON.parse(written).hooks;
+  assert.equal(hooks.SessionStart[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent codex');
+  assert.equal(hooks.UserPromptSubmit[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js prompt-hint --agent codex');
+
+  const second = installAgentHooks({ home, ...CODEX_OPTS });
+  assert.ok(existsSync(second.backup));
+  assert.equal(readFileSync(second.path, 'utf8'), written, 'a re-run must not change the file');
+});
+
+test('installAgentHooks preserves pre-existing codex hooks it does not own', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const path = join(home, '.codex', 'hooks.json');
+  writeFileSync(path, JSON.stringify(CODEX_HOOKS_FIXTURE, null, 2));
+  installAgentHooks({ home, ...CODEX_OPTS });
+  const after = JSON.parse(readFileSync(path, 'utf8'));
+  assert.deepEqual(after.hooks.SessionStart.slice(0, 2), CODEX_HOOKS_FIXTURE.hooks.SessionStart);
+  assert.deepEqual(after.hooks.Stop, CODEX_HOOKS_FIXTURE.hooks.Stop);
+  // The backup is the file as it was, byte for byte.
+  assert.equal(readFileSync(`${path}.kb-backup`, 'utf8'), JSON.stringify(CODEX_HOOKS_FIXTURE, null, 2));
+});
+
+test('installAgentHooks aborts on a malformed hooks.json with zero writes', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const path = join(home, '.codex', 'hooks.json');
+  writeFileSync(path, '{ "hooks": ');
+  assert.throws(() => installAgentHooks({ home, ...CODEX_OPTS }), err => err.message.includes(path));
+  assert.equal(readFileSync(path, 'utf8'), '{ "hooks": ');
+  assert.equal(existsSync(`${path}.kb-backup`), false);
+  assert.equal(existsSync(`${path}.kb-tmp`), false);
+});
+
+// The briefing's stale-hook check reads these. A file that is absent, or that
+// someone is mid-edit on, must not be the reason a briefing fails to print.
+test('readAgentHookFiles returns both agents and skips what it cannot parse', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  installAgentHooks({ home, ...OPTS });
+  assert.deepEqual(readAgentHookFiles(home).map(f => f.agent), ['claude'], 'an absent codex file is not an entry');
+
+  installAgentHooks({ home, ...CODEX_OPTS });
+  const both = readAgentHookFiles(home);
+  assert.deepEqual(both.map(f => f.agent), ['claude', 'codex']);
+  assert.equal(both[1].settings.hooks.SessionStart[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent codex');
+
+  writeFileSync(join(home, '.codex', 'hooks.json'), 'not json');
+  assert.deepEqual(readAgentHookFiles(home).map(f => f.agent), ['claude']);
+});
+
+// --- the briefing's stale-hook line --------------------------------------
+
+// A single dead interpreter appears in every entry of a file — 14 of them in a
+// real ~/.codex/hooks.json. One clause per hook would put fourteen
+// near-identical sentences on the health line.
+test('staleHookWarnings collapses one dead path across many hooks into one line per file', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  const dead = '/opt/homebrew/Cellar/node@22/22.21.1_4/bin/node';
+  writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify({
+    hooks: {
+      SessionStart: [{ hooks: [{ type: 'command', command: `${dead} /repo/bin/a.js` }] }],
+      UserPromptSubmit: [{ hooks: [
+        { type: 'command', command: `${dead} /repo/bin/b.js` },
+        { type: 'command', command: `${dead} /repo/bin/c.js` },
+      ] }],
+    },
+  }));
+  const warnings = staleHookWarnings(home, { exists: (p) => !p.startsWith('/opt/homebrew/Cellar') });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0], `3 hooks in ~/.codex/hooks.json cannot run: ${dead} missing — re-run 'kb setup' if this is a moved checkout`);
+});
+
+// Same event name lives in both files; a warning that doesn't say which one
+// sends the reader to the wrong config.
+test('staleHookWarnings names the file each warning came from', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  installAgentHooks({ home, ...OPTS });
+  installAgentHooks({ home, ...CODEX_OPTS });
+  const warnings = staleHookWarnings(home, { exists: nothingExists });
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /^3 hooks in ~\/\.claude\/settings\.json cannot run: /);
+  assert.match(warnings[1], /^2 hooks in ~\/\.codex\/hooks\.json cannot run: /);
+});
+
+test('staleHookWarnings caps how many paths one line names', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kbhooks-'));
+  mkdirSync(join(home, '.codex'), { recursive: true });
+  writeFileSync(join(home, '.codex', 'hooks.json'), JSON.stringify({
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: '/a/one /b/two /c/three /d/four /e/five' }] }] },
+  }));
+  const [warning] = staleHookWarnings(home, { exists: nothingExists });
+  assert.match(warning, /\/a\/one, \/b\/two, \/c\/three and 2 more missing/);
+});
+
+test('staleHookWarnings says nothing when there are no hook files at all', () => {
+  assert.deepEqual(staleHookWarnings(mkdtempSync(join(tmpdir(), 'kbhooks-'))), []);
 });

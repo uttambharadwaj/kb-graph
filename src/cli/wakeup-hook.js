@@ -1,18 +1,15 @@
 // SessionStart hook: print a compact KB briefing to stdout so the harness
 // injects it as session context. Mechanical replacement for asking agents
 // to "run kb_wakeup at session start" — instructions decay, hooks don't.
-import { readFileSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { homedir } from 'os';
-import { join } from 'path';
 import { getDb, getDocument, getHealth, liveTierCounts } from '../db.js';
 import { isBatchCall } from '../claude-cli.js';
 import { READ_SURFACES, SURFACE, logRetrieval, resolveSessionId } from '../retrieval.js';
 import { recordSessionMap } from '../session-map.js';
 import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
-import { callDaemonOp, hookDaemonTimeoutMs, noteHookTiming, watchHookTiming } from './hook-io.js';
+import { callDaemonOp, hookDaemonTimeoutMs, hookOutput, noteHookTiming, readAgentFlag, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
-import { unresolvableHookCommands } from './setup-hooks.js';
+import { staleHookWarnings } from './setup-hooks.js';
 
 // Post-compact context loses everything not in the transcript summary,
 // including which workstream was active. Prefer the state note this session
@@ -49,20 +46,7 @@ const ACTIVE_NOTE_CAP = 6000;
 // the 3 most-recent; the rest are one kb_search/kb_read away.
 const BRIEFING_STATE_LIMIT = 3;
 
-// A hook whose paths have gone stale fails exactly like one with nothing to
-// say, so the only place it can surface is a briefing that goes looking. This
-// runs inside the briefing and must never be the reason one fails to print.
-function staleHookWarnings(home = homedir()) {
-  try {
-    const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
-    return unresolvableHookCommands(settings).flatMap(h => [
-      ...(h.missing.length ? [`${h.event} hook cannot run: ${h.missing.join(', ')} missing — re-run 'kb setup' if this is a moved checkout`] : []),
-      ...(h.pinned.length ? [`${h.event} hook is pinned to one package version and dies on the next upgrade: ${h.pinned.join(', ')} — re-run 'kb setup'`] : []),
-    ]);
-  } catch {
-    return [];
-  }
-}
+const USAGE = 'Usage: kb wakeup-hook [--agent <claude|codex>]';
 
 async function readStdin() {
   let data = '';
@@ -86,7 +70,7 @@ async function readStdin() {
 // must not be logged by two processes for one SessionStart. Only the
 // process that ends up printing `output` may commit `plan`, and only once
 // (see commitWakeupHookPlan).
-export function computeWakeupHook({ hookInput, session, fastWrite = false, commit = true }) {
+export function computeWakeupHook({ hookInput, session, agent = null, fastWrite = false, commit = true }) {
   try {
     const db = getDb();
     const total = db.prepare('SELECT COUNT(*) as c FROM documents').get().c;
@@ -126,7 +110,7 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false, commi
     const eventId = randomUUID();
     const plannedDocIds = [];
     for (const s of states) {
-      if (commit) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+      if (commit) logRetrieval({ docId: s.document_id, surface: SURFACE.BRIEFING, session, eventId, agent, fastWrite });
       else plannedDocIds.push(s.document_id);
     }
 
@@ -155,7 +139,7 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false, commi
           // add it here only when it isn't, so the session-scoped pick
           // doesn't double-count.
           if (!states.some(s => s.document_id === active.document_id)) {
-            if (commit) logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, fastWrite });
+            if (commit) logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, agent, fastWrite });
             else plannedDocIds.push(active.document_id);
           }
           lines.push(
@@ -180,14 +164,20 @@ export function computeWakeupHook({ hookInput, session, fastWrite = false, commi
 // Commits a plan computeWakeupHook returned with commit: false. Caller's job
 // to call this at most once, and only for the plan it is actually about to
 // print — see the header comment on computeWakeupHook.
-export function commitWakeupHookPlan(plan, { session, fastWrite }) {
+export function commitWakeupHookPlan(plan, { session, agent = null, fastWrite }) {
   if (!plan) return;
   for (const docId of plan.docIds) {
-    logRetrieval({ docId, surface: SURFACE.BRIEFING, session, eventId: plan.eventId, fastWrite });
+    logRetrieval({ docId, surface: SURFACE.BRIEFING, session, eventId: plan.eventId, agent, fastWrite });
   }
 }
 
-export async function wakeupHook() {
+// The event name Codex's envelope is stamped with. Taken off the hook's own
+// stdin when it says (the client naming its event is more authoritative than
+// anything hard-coded here), with the Claude Code spelling as the fallback.
+const DEFAULT_HOOK_EVENT = 'SessionStart';
+
+export async function wakeupHook(args = []) {
+  const agent = readAgentFlag(args, USAGE);
   watchHookTiming(HOOK_OP.WAKEUP_HOOK);
   // Our own model subprocesses are not sessions. Briefing one costs ~480 tokens
   // it cannot use, and logs it as a briefed session the meter then counts.
@@ -200,28 +190,29 @@ export async function wakeupHook() {
   } catch {
     // fall through with hookInput = {}
   }
-  // Refresh the claude_pid -> session_id map on every SessionStart (startup,
+  // Refresh the harness_pid -> session_id map on every SessionStart (startup,
   // resume, clear, compact) — each of those can mint a fresh id without a
   // fresh process, and this is one of the two places that ever sees it.
   // Ancestry-dependent — must run here, never daemon-side.
-  recordSessionMap(hookInput?.session_id);
+  recordSessionMap(hookInput?.session_id, { agent });
   try {
     // Same reason as prompt-hint.js: resolved once, hook-side, and handed
     // down as a plain value so compute() never has to touch ancestry itself.
     const session = resolveSessionId(hookInput);
-    const daemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.WAKEUP_HOOK) });
+    const daemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session, agent }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.WAKEUP_HOOK) });
     let output;
     if (daemon.ok) {
       // This is the one commit for this SessionStart — see commitPromptHintPlan's
       // sibling comment in prompt-hint.js for why only the delivering process may do this.
-      commitWakeupHookPlan(daemon.plan, { session, fastWrite: true });
+      commitWakeupHookPlan(daemon.plan, { session, agent, fastWrite: true });
       output = daemon.output;
       noteHookTiming('daemon');
     } else {
       noteHookTiming('fallback');
-      ({ output } = computeWakeupHook({ hookInput, session, fastWrite: true }));
+      ({ output } = computeWakeupHook({ hookInput, session, agent, fastWrite: true }));
     }
-    if (output != null) console.log(output);
+    const line = hookOutput(output, { agent, hookEventName: hookInput?.hook_event_name || DEFAULT_HOOK_EVENT });
+    if (line != null) console.log(line);
   } catch {
     // Never block session start on KB problems.
   }

@@ -5,7 +5,8 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from '../src/db.js';
-import { PUSH_SURFACES, READ_SURFACES, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
+import { PUSH_SURFACES, READ_SURFACES, SURFACE, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveAgent, resolveSessionId } from '../src/retrieval.js';
+import { AGENT } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { DB_PATH } from '../src/paths.js';
 
@@ -33,37 +34,37 @@ describe('resolveSessionId', () => {
   });
 
   it('is null when ancestry resolution finds no claude ancestor', () => {
-    const getAncestry = () => ({ claudePid: null, pidStart: null });
+    const getAncestry = () => ({ harnessPid: null, pidStart: null });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
     assert.strictEqual(resolveSessionId({}, { getAncestry }), null);
   });
 
   it('uses the map entry when the resolved pid_start matches (the expected case)', () => {
     seedMap(5101, { pid: 5101, pid_start: 'START-A', session_id: 'mapped-session' });
-    const getAncestry = () => ({ claudePid: 5101, pidStart: 'START-A' });
+    const getAncestry = () => ({ harnessPid: 5101, pidStart: 'START-A' });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), 'mapped-session');
   });
 
   it('ignores env entirely when the map already hit', () => {
     process.env.CLAUDE_CODE_SESSION_ID = 'env-session';
     seedMap(5102, { pid: 5102, pid_start: 'START-B', session_id: 'mapped-session' });
-    const getAncestry = () => ({ claudePid: 5102, pidStart: 'START-B' });
+    const getAncestry = () => ({ harnessPid: 5102, pidStart: 'START-B' });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), 'mapped-session');
   });
 
   it('treats a pid_start mismatch (pid reuse) as a miss, never falling back to env', () => {
     seedMap(5103, { pid: 5103, pid_start: 'OLD-START', session_id: 'stale-session' });
     process.env.CLAUDE_CODE_SESSION_ID = 'stale-session'; // even if env agrees with the dead entry
-    const getAncestry = () => ({ claudePid: 5103, pidStart: 'NEW-START' });
+    const getAncestry = () => ({ harnessPid: 5103, pidStart: 'NEW-START' });
     assert.strictEqual(resolveSessionId(null, { getAncestry }), null);
   });
 
   it('never emits the env id on its own, with or without a map entry present', () => {
     process.env.CLAUDE_CODE_SESSION_ID = 'lonely-env-value';
-    assert.strictEqual(resolveSessionId(null, { getAncestry: () => ({ claudePid: null, pidStart: null }) }), null);
+    assert.strictEqual(resolveSessionId(null, { getAncestry: () => ({ harnessPid: null, pidStart: null }) }), null);
     seedMap(5106, { pid: 5106, pid_start: 'START', session_id: 'lonely-env-value' });
     assert.strictEqual(
-      resolveSessionId(null, { getAncestry: () => ({ claudePid: 5106, pidStart: 'DIFFERENT' }) }),
+      resolveSessionId(null, { getAncestry: () => ({ harnessPid: 5106, pidStart: 'DIFFERENT' }) }),
       null,
     );
   });
@@ -290,5 +291,41 @@ describe('fastWrite: busy-tolerance for the CLI hook fallback path', () => {
       logRetrieval({ surface: 'hint', query: 'fastwrite-restore-after-busy-probe', fastWrite: true });
     });
     assert.strictEqual(getDb().pragma('busy_timeout', { simple: true }), DEFAULT_BUSY_TIMEOUT_MS);
+  });
+});
+
+// Which client a read came from. The session id has a map file behind it and
+// can go stale; the agent cannot — it is read straight off the same ancestry
+// walk, or handed in by a hook that already knows.
+describe('resolveAgent', () => {
+  it('names the agent the ancestry walk found', () => {
+    assert.strictEqual(resolveAgent({ getAncestry: () => ({ harnessPid: 10, pidStart: 'S', agent: AGENT.CODEX }) }), AGENT.CODEX);
+    assert.strictEqual(resolveAgent({ getAncestry: () => ({ harnessPid: 10, pidStart: 'S', agent: AGENT.CLAUDE }) }), AGENT.CLAUDE);
+  });
+
+  it('is null when the walk found no harness at all — never a default of claude', () => {
+    assert.strictEqual(resolveAgent({ getAncestry: () => ({ harnessPid: null, pidStart: null, agent: null }) }), null);
+  });
+});
+
+describe('logRetrieval agent stamping', () => {
+  const rowFor = (session) => getDb().prepare('SELECT agent FROM retrievals WHERE session = ?').get(session);
+
+  it('stamps the agent the caller passed', () => {
+    logRetrieval({ surface: SURFACE.BRIEFING, session: 'sess-agent-explicit-codex', agent: AGENT.CODEX });
+    assert.strictEqual(rowFor('sess-agent-explicit-codex').agent, AGENT.CODEX);
+
+    logRetrieval({ surface: SURFACE.BRIEFING, session: 'sess-agent-explicit-claude', agent: AGENT.CLAUDE });
+    assert.strictEqual(rowFor('sess-agent-explicit-claude').agent, AGENT.CLAUDE);
+  });
+
+  it('carries the caller\'s agent through logRetrievalResults, on both the hit and the miss row', () => {
+    logRetrievalResults({ results: [{ id: 1 }, { id: 2 }], surface: SURFACE.HINT, session: 'sess-agent-results', agent: AGENT.CODEX });
+    const hits = getDb().prepare('SELECT agent FROM retrievals WHERE session = ?').all('sess-agent-results');
+    assert.strictEqual(hits.length, 2);
+    assert.ok(hits.every(r => r.agent === AGENT.CODEX));
+
+    logRetrievalResults({ results: [], surface: SURFACE.HINT, session: 'sess-agent-results-miss', agent: AGENT.CODEX });
+    assert.strictEqual(rowFor('sess-agent-results-miss').agent, AGENT.CODEX);
   });
 });

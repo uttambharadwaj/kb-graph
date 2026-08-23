@@ -11,20 +11,25 @@ import { join } from 'path';
 // The watchers write on process death, so they are exercised in a real child
 // process, not in-process — SIGTERM and 'exit' cannot be simulated on the test
 // runner's own process without killing it.
+// The "ready" byte is the signal-safety interlock: a killer racing module
+// load would kill a child whose SIGTERM handler is not installed yet, and
+// node's default disposition ends it with no exit code and no log line. The
+// test kills on this byte instead of on a wall-clock guess, so a loaded
+// machine cannot turn that race into an intermittent failure.
 const CHILD = `
   import { noteHookTiming, watchHookTiming } from '${join(process.cwd(), 'src/cli/hook-io.js').replace(/\\/g, '/')}';
   watchHookTiming('prompt-hint');
   noteHookTiming(process.argv[1] || '');
-  if (process.env.CHILD_HANG) setInterval(() => {}, 1000);
+  if (process.env.CHILD_HANG) { process.stdout.write('ready\\n'); setInterval(() => {}, 1000); }
 `;
 
-function runChild({ env = {}, detail = '', hang = false, signalAfterMs = 0 } = {}) {
+function runChild({ env = {}, detail = '', hang = false, signalWhenReady = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kb-hook-timing-'));
   return new Promise(resolve => {
     const proc = spawn(process.execPath, ['--input-type=module', '-e', CHILD, detail], {
       env: { ...process.env, KB_DIR: dir, ...(hang ? { CHILD_HANG: '1' } : {}), ...env },
     });
-    if (signalAfterMs) setTimeout(() => proc.kill('SIGTERM'), signalAfterMs);
+    if (signalWhenReady) proc.stdout.once('data', () => proc.kill('SIGTERM'));
     proc.on('close', code => {
       const log = join(dir, 'logs', 'hook-timings.log');
       resolve({ code, lines: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [] });
@@ -48,7 +53,7 @@ describe('hook timing log', () => {
     const { code, lines } = await runChild({
       env: { KB_SLOW_HOOK_MS: '1' },
       hang: true,
-      signalAfterMs: 300,
+      signalWhenReady: true,
     });
     assert.strictEqual(code, 143);
     assert.strictEqual(lines.length, 1);

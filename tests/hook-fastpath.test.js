@@ -11,7 +11,7 @@
 import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -31,8 +31,8 @@ import { startSlowDaemon } from './helpers/slow-daemon.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 
-function runHook(name, hookInput, extraEnv = {}) {
-  return execFileSync(process.execPath, [HELPER, name], {
+function runHook(name, hookInput, extraEnv = {}, args = []) {
+  return execFileSync(process.execPath, [HELPER, name, ...args], {
     input: JSON.stringify(hookInput),
     env: { ...process.env, ...extraEnv },
     encoding: 'utf8',
@@ -388,5 +388,76 @@ describe('exactly one process ever commits the outcome of one hook decision', ()
     } finally {
       await slow.close();
     }
+  });
+});
+
+// Hooks run daemon-side with a CLI fallback, so an agent tag that only
+// travels on one of those paths is a tag that disappears the moment the
+// daemon is up — the common case, not the edge one.
+describe('the agent travels the daemon path, not just the fallback', () => {
+  // execFileSync blocks THIS process's event loop, so an in-process stand-in
+  // daemon could never accept the child's connection — every such run would
+  // silently prove the fallback path instead. Spawned async, the stand-in can
+  // actually answer, which is the only way to see what the client sent.
+  function runHookAsync(name, hookInput, extraEnv, args) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [HELPER, name, ...args], { env: { ...process.env, ...extraEnv } });
+      let stdout = '';
+      child.stdout.on('data', (chunk) => { stdout += chunk; });
+      child.once('error', reject);
+      child.once('close', () => resolve(stdout));
+      child.stdin.end(JSON.stringify(hookInput));
+    });
+  }
+
+  it('prompt-hint: the client sends its agent in the payload and tags the committed row with it', async () => {
+    insertHintableDoc('Manifold purge sequence guide', 'manifold purge sequence guide for the bay crew');
+    const prompt = 'manifold purge sequence guide for the bay crew';
+    const { controlSocketPath } = freshSocketPaths();
+    const session = 'sess-daemon-agent-codex';
+    const seen = [];
+    const daemon = await startSlowDaemon(controlSocketPath, {
+      delayMs: 0,
+      buildResponse: (op, payload) => {
+        seen.push(payload);
+        const result = computePromptHint({ ...payload, commit: false });
+        return { ok: true, output: result.output, plan: result.plan };
+      },
+    });
+    try {
+      const stdout = await runHookAsync(
+        'prompt-hint',
+        { session_id: session, prompt },
+        { KB_CONTROL_SOCKET_PATH: controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '2000' },
+        ['--agent', 'codex'],
+      );
+
+      assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^KB HINT:/);
+      assert.deepStrictEqual(seen.map(p => p.agent), ['codex'], 'the daemon must be told which client is asking');
+
+      const rows = getDb().prepare('SELECT agent FROM retrievals WHERE session = ?').all(session);
+      assert.ok(rows.length > 0, 'the delivering client commits the daemon-computed plan');
+      assert.ok(rows.every(r => r.agent === 'codex'), 'a daemon-served hint is still attributed to the client that asked');
+    } finally {
+      await daemon.close();
+    }
+  });
+
+  it('wakeup-hook: same, through the real daemon rather than a stand-in', async () => {
+    insertStateNote('State: daemon-agent-briefing', 'body');
+    const daemon = await startTestDaemon();
+    const session = 'sess-daemon-agent-briefing';
+
+    const stdout = runHook(
+      'wakeup-hook',
+      { session_id: session, hook_event_name: 'SessionStart' },
+      { KB_CONTROL_SOCKET_PATH: daemon.controlSocketPath, KB_HOOK_DAEMON_TIMEOUT_MS: '3000' },
+      ['--agent', 'codex'],
+    );
+
+    assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^KB BRIEFING/);
+    const rows = getDb().prepare("SELECT agent FROM retrievals WHERE surface = 'briefing' AND session = ?").all(session);
+    assert.ok(rows.length > 0, 'the briefing rows are committed by the client that printed them');
+    assert.ok(rows.every(r => r.agent === 'codex'));
   });
 });

@@ -1,7 +1,29 @@
-// src/cli/setup-hooks.js — install KB briefing/hint hooks into Claude Code settings
+// src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook config
 import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, renameSync } from 'fs';
 import { isVersionPinned } from './runtime-node.js';
+import { homedir } from 'os';
 import { dirname, join } from 'path';
+import { AGENT, AGENT_FLAG, AGENTS } from '../process-ancestry.js';
+
+// Where each agent keeps its hook config, relative to home. Claude Code's
+// settings.json holds its whole configuration and Codex's hooks.json holds
+// only hooks, but both carry the same `hooks` block shape, which is the only
+// part anything here touches.
+export const HOOK_FILES = {
+  [AGENT.CLAUDE]: ['.claude', 'settings.json'],
+  [AGENT.CODEX]: ['.codex', 'hooks.json'],
+};
+
+function hookFilePath(agent, home = homedir()) {
+  const parts = HOOK_FILES[agent];
+  if (!parts) throw new Error(`No hook config file known for agent: ${agent}`);
+  return join(home, ...parts);
+}
+
+// Every agent hook file, whether or not it exists — callers that read decide
+// what an absent file means.
+const agentHookFiles = (home = homedir()) =>
+  AGENTS.filter(agent => HOOK_FILES[agent]).map(agent => ({ agent, path: hookFilePath(agent, home) }));
 
 // `script`, when present, is preferred over `subcommand`: it installs
 // `${nodeBin} <dir-of-kbJsPath>/<script>` instead of
@@ -17,48 +39,81 @@ import { dirname, join } from 'path';
 // prior commit of this stack installed `kb.js trigger-hook`) and doesn't
 // double-install over it — only `commandFor`'s preference for `script` over
 // `subcommand` decides what a NEW install writes.
+//
+// `agents` is the allowlist for the spec: the PreToolUse trigger hook is
+// Claude-only until slice-1 telemetry shows Codex acts on what it is already
+// handed (brief §4 Q2). `matcher` is one string when every agent shares it,
+// or a per-agent map: Codex's SessionStart sources are startup|resume|clear —
+// it has no `compact` source, since PreCompact/PostCompact are their own
+// events there.
 const HOOK_SPECS = [
-  { event: 'SessionStart', matcher: 'startup|resume|clear|compact', subcommand: 'wakeup-hook' },
-  { event: 'UserPromptSubmit', matcher: null, subcommand: 'prompt-hint' },
-  { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook' },
+  {
+    event: 'SessionStart',
+    matcher: { [AGENT.CLAUDE]: 'startup|resume|clear|compact', [AGENT.CODEX]: 'startup|resume|clear' },
+    subcommand: 'wakeup-hook',
+    agents: AGENTS,
+  },
+  { event: 'UserPromptSubmit', matcher: null, subcommand: 'prompt-hint', agents: AGENTS },
+  { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook', agents: [AGENT.CLAUDE] },
 ];
 
-const commandFor = (spec, { nodeBin, kbJsPath }) => spec.script
+const matcherFor = (spec, agent) =>
+  (spec.matcher && typeof spec.matcher === 'object') ? (spec.matcher[agent] ?? null) : (spec.matcher ?? null);
+
+// Claude is the flag's default (every hook installed before the flag existed
+// passes nothing — see readAgentFlag), so its command carries no `--agent`.
+const agentSuffix = (agent) => agent === AGENT.CLAUDE ? '' : ` ${AGENT_FLAG} ${agent}`;
+
+const commandFor = (spec, { nodeBin, kbJsPath, agent }) => (spec.script
   ? `${nodeBin} ${join(dirname(kbJsPath), spec.script)}`
-  : `${nodeBin} ${kbJsPath} ${spec.subcommand}`;
+  : `${nodeBin} ${kbJsPath} ${spec.subcommand}`) + agentSuffix(agent);
+
+// The agent a command was installed for, read the same way readAgentFlag
+// reads it at runtime: the flag when present, claude otherwise.
+const AGENT_IN_COMMAND = new RegExp(`\\s${AGENT_FLAG}[\\s=]+(\\S+)`);
+
+const agentOf = (command) => command.match(AGENT_IN_COMMAND)?.[1] ?? AGENT.CLAUDE;
 
 // The identity a command must end with to count as "this spec already
-// installed". Checks the script form first (the script's own filename —
-// the full path always ends with it, so this works whether kbJsPath is the
-// dev checkout or a deployed one), then the subcommand form (the trailing
-// token), so either a current or a legacy install is recognized and neither
-// gets duplicated.
-const identifies = (spec, command) => {
+// installed", once its `--agent` flag is set aside. Checks the script form
+// first (the script's own filename — the full path always ends with it, so
+// this works whether kbJsPath is the dev checkout or a deployed one), then
+// the subcommand form (the trailing token), so either a current or a legacy
+// install is recognized and neither gets duplicated.
+//
+// The agent is part of the identity, not noise to strip: the Claude command
+// and the Codex command differ only by the flag, and treating them as one
+// hook would silently skip installing the second if both ever landed in one
+// file.
+const identifies = (spec, command, agent) => {
   const cmd = command ?? '';
-  if (spec.script && cmd.endsWith(spec.script)) return true;
-  if (spec.subcommand && cmd.endsWith(` ${spec.subcommand}`)) return true;
+  if (agentOf(cmd) !== agent) return false;
+  const base = cmd.replace(AGENT_IN_COMMAND, '').trimEnd();
+  if (spec.script && base.endsWith(spec.script)) return true;
+  if (spec.subcommand && base.endsWith(` ${spec.subcommand}`)) return true;
   return false;
 };
 
 // Pure merge: dedup by the spec's own identity so re-runs and prior manual installs never duplicate.
-export function mergeClaudeHooks(settings, { nodeBin, kbJsPath }) {
+export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLAUDE }) {
   const next = structuredClone(settings ?? {});
   next.hooks = next.hooks ?? {};
   for (const spec of HOOK_SPECS) {
+    if (!spec.agents.includes(agent)) continue;
     const entries = (next.hooks[spec.event] = next.hooks[spec.event] ?? []);
-    const already = entries.some(e => (e.hooks ?? []).some(h => identifies(spec, h.command)));
+    const already = entries.some(e => (e.hooks ?? []).some(h => identifies(spec, h.command, agent)));
     if (already) continue;
-    const entry = { hooks: [{ type: 'command', command: commandFor(spec, { nodeBin, kbJsPath }) }] };
-    if (spec.matcher) entry.matcher = spec.matcher;
+    const entry = { hooks: [{ type: 'command', command: commandFor(spec, { nodeBin, kbJsPath, agent }) }] };
+    const matcher = matcherFor(spec, agent);
+    if (matcher) entry.matcher = matcher;
     entries.push(entry);
   }
   return next;
 }
 
-export function installClaudeHooks({ home, nodeBin, kbJsPath }) {
-  const dir = join(home, '.claude');
-  const path = join(dir, 'settings.json');
-  mkdirSync(dir, { recursive: true });
+export function installAgentHooks({ home, nodeBin, kbJsPath, agent = AGENT.CLAUDE }) {
+  const path = hookFilePath(agent, home);
+  mkdirSync(dirname(path), { recursive: true });
   let settings = {};
   let backup = null;
   if (existsSync(path)) {
@@ -71,8 +126,8 @@ export function installClaudeHooks({ home, nodeBin, kbJsPath }) {
     backup = `${path}.kb-backup`;
     copyFileSync(path, backup);
   }
-  const json = JSON.stringify(mergeClaudeHooks(settings, { nodeBin, kbJsPath }), null, 2) + '\n';
-  // Write-to-temp-then-rename so a crash can't half-write settings.json.
+  const json = JSON.stringify(mergeAgentHooks(settings, { nodeBin, kbJsPath, agent }), null, 2) + '\n';
+  // Write-to-temp-then-rename so a crash can't half-write the config.
   writeFileSync(`${path}.kb-tmp`, json);
   renameSync(`${path}.kb-tmp`, path);
   return { path, backup };
@@ -125,4 +180,56 @@ export function unresolvableHookCommands(settings, { exists = existsSync, read =
     }
   }
   return out;
+}
+
+// Every agent hook file that exists and parses, as { agent, path, settings }.
+// Unreadable and malformed are both skipped: the only caller is the session
+// briefing, and a hook config someone is mid-edit on must not be the reason a
+// briefing fails to print.
+export function readAgentHookFiles(home = homedir()) {
+  return agentHookFiles(home).flatMap(({ agent, path }) => {
+    if (!existsSync(path)) return [];
+    try {
+      return [{ agent, path, settings: JSON.parse(readFileSync(path, 'utf8')) }];
+    } catch { return []; }
+  });
+}
+
+// The briefing's stale-hook line. One line per file per failure kind, not one
+// per hook: a single dead interpreter shows up in every entry of a file (14 of
+// them in a real ~/.codex/hooks.json), and fourteen near-identical clauses
+// joined into the health line is a briefing nobody reads.
+//
+// This runs inside the briefing and must never be the reason one fails to
+// print — every read is already best-effort, and the whole thing is wrapped.
+const PATHS_SHOWN = 3;
+
+const summarize = (paths) => {
+  const shown = paths.slice(0, PATHS_SHOWN).join(', ');
+  return paths.length > PATHS_SHOWN ? `${shown} and ${paths.length - PATHS_SHOWN} more` : shown;
+};
+
+// `io` reaches unresolvableHookCommands only: the hook files themselves are
+// read from the real filesystem (a caller injecting `exists` is faking the
+// paths INSIDE the commands, not the config file that holds them).
+export function staleHookWarnings(home = homedir(), io = {}) {
+  try {
+    return readAgentHookFiles(home).flatMap(({ path, settings }) => {
+      const where = path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+      const found = unresolvableHookCommands(settings, io);
+      const hooks = (n) => `${n} hook${n === 1 ? '' : 's'}`;
+      const collect = (kind) => {
+        const hits = found.filter(h => h[kind].length);
+        return { count: hits.length, paths: [...new Set(hits.flatMap(h => h[kind]))] };
+      };
+      const missing = collect('missing');
+      const pinned = collect('pinned');
+      return [
+        ...(missing.count ? [`${hooks(missing.count)} in ${where} cannot run: ${summarize(missing.paths)} missing — re-run 'kb setup' if this is a moved checkout`] : []),
+        ...(pinned.count ? [`${hooks(pinned.count)} in ${where} pinned to one package version, dying on the next upgrade: ${summarize(pinned.paths)} — re-run 'kb setup'`] : []),
+      ];
+    });
+  } catch {
+    return [];
+  }
 }
