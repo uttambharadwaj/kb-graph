@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
+  codexRegistrationSnippet,
   getAgentConfigPath,
   KB_ENTRYPOINT_PATH,
   parseRegisterArgs,
@@ -36,26 +37,69 @@ describe('MCP registration', () => {
     assert.throws(() => parseRegisterArgs(['--agents=claude,foo']), /Unsupported agent/);
   });
 
-  it('writes config files for selected agents', () => {
+  it('writes config files for the agents whose configs it owns', () => {
     const homeDir = makeHome();
-    const results = registerAgents(['claude', 'codex'], homeDir);
+    const results = registerAgents(['claude', 'gemini'], homeDir);
 
     assert.strictEqual(results.length, 2);
     assert.ok(existsSync(getAgentConfigPath('claude', homeDir)));
-    assert.ok(existsSync(getAgentConfigPath('codex', homeDir)));
-    assert.ok(!existsSync(getAgentConfigPath('gemini', homeDir)));
+    assert.ok(existsSync(getAgentConfigPath('gemini', homeDir)));
 
-    const claudeConfig = JSON.parse(readFileSync(getAgentConfigPath('claude', homeDir), 'utf-8'));
-    const codexConfig = JSON.parse(readFileSync(getAgentConfigPath('codex', homeDir), 'utf-8'));
+    for (const agent of ['claude', 'gemini']) {
+      const config = JSON.parse(readFileSync(getAgentConfigPath(agent, homeDir), 'utf-8'));
+      assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
+        command: stableNodePath(),
+        args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
+      });
+    }
+  });
+});
 
-    assert.deepStrictEqual(claudeConfig.mcpServers['knowledge-base'], {
-      command: stableNodePath(),
-      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
-    });
-    assert.deepStrictEqual(codexConfig.mcpServers['knowledge-base'], {
-      command: stableNodePath(),
-      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
-    });
+// Codex CLI (0.148) reads [mcp_servers.*] from config.toml and never loads
+// ~/.codex/mcp.json — which is what `kb register` used to write, so every
+// codex registration since has been a file nothing reads. config.toml is
+// hand-curated (enabled_tools, per-tool approval blocks) and there is no TOML
+// parser here, so the block is printed rather than written.
+describe('codex registration', () => {
+  it('targets config.toml, writes nothing, and hands back the block to paste', () => {
+    const homeDir = makeHome();
+    const [result] = registerAgents(['codex'], homeDir);
+
+    assert.strictEqual(result.path, join(homeDir, '.codex', 'config.toml'));
+    assert.strictEqual(result.written, false);
+    assert.strictEqual(result.manual, true);
+    assert.strictEqual(result.snippet, codexRegistrationSnippet());
+    assert.ok(!existsSync(join(homeDir, '.codex')), 'not even the directory');
+    assert.ok(!existsSync(join(homeDir, '.codex', 'mcp.json')), 'the dead file must not come back');
+  });
+
+  it('leaves a hand-curated config.toml byte-for-byte alone, with or without --force', () => {
+    const homeDir = makeHome();
+    const path = join(homeDir, '.codex', 'config.toml');
+    const curated = [
+      '[mcp_servers.knowledge-base]',
+      'command = "/old/node"',
+      'enabled_tools = ["kb_search", "kb_read"]',
+      '',
+      '[mcp_servers.knowledge-base.tools.kb_write]',
+      'approval_mode = "never"',
+      '',
+    ].join('\n');
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, curated);
+
+    registerAgents(['codex'], homeDir);
+    registerAgents(['codex'], homeDir, { force: true });
+    assert.strictEqual(readFileSync(path, 'utf8'), curated);
+  });
+
+  it('prints a block naming the shim, the checkout and a startup timeout', () => {
+    const snippet = codexRegistrationSnippet();
+    assert.match(snippet, /^\[mcp_servers\.knowledge-base\]$/m);
+    assert.ok(snippet.includes(`command = ${JSON.stringify(stableNodePath())}`));
+    assert.ok(snippet.includes(`args = [${JSON.stringify(KB_ENTRYPOINT_PATH)}, "mcp-shim"]`));
+    assert.ok(snippet.includes(`cwd = ${JSON.stringify(join(KB_ENTRYPOINT_PATH, '..', '..'))}`));
+    assert.match(snippet, /^startup_timeout_sec = 20\.0$/m);
   });
 });
 
@@ -121,8 +165,12 @@ describe('registering from a second checkout', () => {
     const homeDir = makeHome();
     alreadyRegisteredElsewhere(homeDir);
 
-    const results = registerAgents(['claude', 'codex'], homeDir);
-    assert.deepStrictEqual(results.map(r => [r.agent, r.written]), [['claude', false], ['codex', true]]);
+    const results = registerAgents(['claude', 'gemini', 'codex'], homeDir);
+    assert.deepStrictEqual(results.map(r => [r.agent, r.written, r.manual ?? false]), [
+      ['claude', false, false],
+      ['gemini', true, false],
+      ['codex', false, true],
+    ]);
   });
 
   // Both were "empty config" before, so one bad parse rewrote ~/.claude.json as
