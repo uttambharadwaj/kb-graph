@@ -464,7 +464,34 @@ describe('rebuildTriggerIndex / loadTriggerIndex', () => {
       title: 'Force-push warning',
       tier: 'inferred',
       patterns: [{ parts: ['git push', '--force'], hits: 2, sessions: 1 }],
+      excerpt: 'git push --force rewrites history',
     }]);
+  });
+
+  it('excerpt strips frontmatter, collapses blank-line runs, and hard-caps at 800 chars', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, triggers) VALUES (?, ?, ?, ?, ?)'
+    );
+    const withFrontmatter = insert.run(
+      'Frontmatter note',
+      '---\ntitle: x\ntags: [a]\n---\nfirst line\n\n\n\nsecond line after a blank-line run',
+      'lesson', '', JSON.stringify([{ parts: ['fm-cmd'], hits: 1, sessions: 1 }]),
+    );
+    const long = insert.run(
+      'Long note', 'x'.repeat(900), 'lesson', '', JSON.stringify([{ parts: ['long-cmd'], hits: 1, sessions: 1 }]),
+    );
+
+    const idxPath = join(KB_DIR, 'trigger-index-excerpt-test.json');
+    rebuildTriggerIndex(idxPath);
+    const loaded = loadTriggerIndex(idxPath);
+
+    const fmEntry = loaded.find(e => e.id === withFrontmatter.lastInsertRowid);
+    assert.strictEqual(fmEntry.excerpt, 'first line\n\nsecond line after a blank-line run');
+
+    const longEntry = loaded.find(e => e.id === long.lastInsertRowid);
+    assert.strictEqual(longEntry.excerpt.length, 801);
+    assert.strictEqual(longEntry.excerpt, `${'x'.repeat(800)}…`);
   });
 
   it('a missing path loads as no entries', () => {

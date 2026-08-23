@@ -3,6 +3,7 @@
 // human-triggered or automatic — enters the KB the same way, connected.
 import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
+import { randomUUID } from 'crypto';
 import matter from 'gray-matter';
 import { similarDocs, duplicatesIn, nearNeighborSignal, DUP_THRESHOLD } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
@@ -10,6 +11,7 @@ import { getVaultFile, getDb } from './db.js';
 import { splitTags } from './tags.js';
 import { assertTier } from './tiers.js';
 import { logWriteDecision } from './write-meter.js';
+import { SURFACE, logRetrievalResults } from './retrieval.js';
 
 // Re-exported, not redeclared: kb_check_duplicate answers with this same value,
 // and a second copy is the drift that made the pre-check disagree with the write.
@@ -108,7 +110,21 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   const dups = duplicatesIn(similar);
   if (dups.length) {
     logWriteDecision({ nearest, threshold: DUP_THRESHOLD, refused: true });
-    return { skipped: true, reason: 'duplicate_detected', matches: dups.slice(0, 5) };
+    // write_decisions (above) already durably records this refusal, but only
+    // its single nearest match — retrievals is the analysis store `kb
+    // rediscoveries` reads, so it gets its own row per match here. A caller
+    // that ran kb_check_duplicate first and then hit this refusal logs the
+    // same rediscovery twice; acceptable for now, analysis dedupes by note
+    // id + time window.
+    const matches = dups.slice(0, 5);
+    logRetrievalResults({
+      results: matches.map(m => ({ id: m.document_id })),
+      surface: SURFACE.REDISCOVERY,
+      query: content.slice(0, 300),
+      session: null,
+      eventId: randomUUID(),
+    });
+    return { skipped: true, reason: 'duplicate_detected', matches };
   }
   const related = similar
     .filter(s => s.score >= RELATED_MIN && s.score < DUP_THRESHOLD)

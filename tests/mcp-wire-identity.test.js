@@ -40,6 +40,9 @@ const KB_READ_TOOLS_LIST_ENTRY = {
     },
     required: ['id'],
   },
+  // Read-only annotation added 2026-08-22 so approval_policy=never clients
+  // (Codex) auto-approve reads; see tests/mcp-annotations.test.js.
+  annotations: { readOnlyHint: true, destructiveHint: false },
 };
 
 // v1 rendered a raw zod issue array plus a "-32602" JSON-RPC-code-shaped

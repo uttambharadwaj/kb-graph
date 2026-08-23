@@ -13,7 +13,6 @@ import {
   decideAndRecord, buildTriggerMessage, resolveSession, MAX_SESSION_WARNINGS, FALLBACK_SESSION,
   TRIGGERS_LOG_DIR, TRIGGER_HOOK_ENABLED_FLAG,
 } from '../src/cli/trigger-hook.js';
-import { KB_DIR } from '../src/paths.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -89,6 +88,58 @@ describe('decideAndRecord — building the warning', () => {
 
   it('buildTriggerMessage is the same function the decision uses', () => {
     assert.strictEqual(buildTriggerMessage(ENTRY), '⚠ KB TRIGGER: note #7 "Force-delete branch" may apply to this command — kb_read(7) before running it.');
+  });
+
+  it('uses the inline form with a body excerpt when the matched entry carries one', () => {
+    const withExcerpt = [{ ...ENTRY, excerpt: 'Deleting the base branch of a stack orphans every PR built on it.' }];
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: withExcerpt, enabled: true });
+    assert.strictEqual(
+      decision.message,
+      '⚠ KB TRIGGER: note #7 "Force-delete branch" may apply to this command.\n'
+      + 'Deleting the base branch of a stack orphans every PR built on it.\n'
+      + '(full note: kb_read(7))',
+    );
+  });
+
+  it('falls back to the pointer form when excerpt is an empty string', () => {
+    const emptyExcerpt = [{ ...ENTRY, excerpt: '' }];
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: emptyExcerpt, enabled: true });
+    assert.strictEqual(
+      decision.message,
+      '⚠ KB TRIGGER: note #7 "Force-delete branch" may apply to this command — kb_read(7) before running it.',
+    );
+  });
+
+  it('carries the tier caveat in the inline form too', () => {
+    const inferredWithExcerpt = [{ ...ENTRY, tier: 'inferred', excerpt: 'body text' }];
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: inferredWithExcerpt, enabled: true });
+    assert.match(decision.message, /unconfirmed model conclusion — treat as a lead\) may apply to this command\.\n/);
+  });
+});
+
+describe('decideAndRecord — mode field on the logged decision', () => {
+  it('is null when nothing is emitted', () => {
+    const decision = decideAndRecord(BASH('git status'), { index: [], enabled: true });
+    assert.strictEqual(JSON.parse(decision.logLine).mode, null);
+  });
+
+  it('is "pointer" for an emitted match with no excerpt', () => {
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: INDEX, enabled: true });
+    assert.strictEqual(decision.emit, true);
+    assert.strictEqual(JSON.parse(decision.logLine).mode, 'pointer');
+  });
+
+  it('is "inline" for an emitted match carrying an excerpt', () => {
+    const withExcerpt = [{ ...ENTRY, excerpt: 'body text' }];
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: withExcerpt, enabled: true });
+    assert.strictEqual(decision.emit, true);
+    assert.strictEqual(JSON.parse(decision.logLine).mode, 'inline');
+  });
+
+  it('is null for a match that is logged but not emitted (not enabled)', () => {
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: INDEX, enabled: false });
+    assert.strictEqual(decision.emit, false);
+    assert.strictEqual(JSON.parse(decision.logLine).mode, null);
   });
 });
 

@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from '../src/db.js';
-import { PUSH_SURFACES, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
+import { PUSH_SURFACES, READ_SURFACES, SURFACES, isTestSession, logRetrieval, logRetrievalResults, resolveSessionId } from '../src/retrieval.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { DB_PATH } from '../src/paths.js';
 
@@ -149,12 +149,18 @@ describe('logRetrieval', () => {
   it('SURFACES lists exactly the instrumented read-path chokepoints', () => {
     assert.deepStrictEqual(SURFACES, [
       'kb_read', 'kb_search', 'kb_search_smart', 'kb_context', 'kb_tunnels', 'briefing', 'hint',
-      'rest_read', 'rest_search', 'rest_search_smart', 'rest_context', 'cli_search',
+      'rest_read', 'rest_search', 'rest_search_smart', 'rest_context', 'cli_search', 'rediscovery',
     ]);
   });
 
   it('every push surface is a known surface', () => {
     for (const s of PUSH_SURFACES) assert.ok(SURFACES.includes(s), `${s} missing from SURFACES`);
+  });
+
+  it('rediscovery is a known surface but neither a push nor a read surface', () => {
+    assert.ok(SURFACES.includes('rediscovery'));
+    assert.ok(!PUSH_SURFACES.includes('rediscovery'));
+    assert.ok(!READ_SURFACES.includes('rediscovery'));
   });
 });
 

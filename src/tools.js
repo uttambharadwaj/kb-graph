@@ -668,6 +668,21 @@ function defineTools() {
             return { content: [{ type: 'text', text: "Error: cannot check duplicates — embeddings table is empty. Run 'kb vault reindex' to build it. Falling back is NOT safe: treat this as \"dedup unavailable\", not \"no duplicates\"." }], isError: true };
           }
           const result = await checkDuplicate(content, { threshold });
+          // A duplicate verdict here is an agent re-deriving something the KB
+          // already had — log it as a rediscovery so `kb rediscoveries` can
+          // count it. checkDuplicate already caps matches at 5. kb_write's own
+          // dedupe refusal (write-note.js) logs the same shape independently;
+          // a caller who checks then writes double-logs one rediscovery, which
+          // is acceptable for now — analysis dedupes by note id + time window.
+          if (result.is_duplicate) {
+            logRetrievalResults({
+              results: result.matches.map(m => ({ id: m.document_id })),
+              surface: SURFACE.REDISCOVERY,
+              query: content.slice(0, 300),
+              session: null,
+              eventId: randomUUID(),
+            });
+          }
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
