@@ -22,12 +22,12 @@ function insertDoc(db, { title = 't' } = {}) {
 }
 
 function insertRetrieval(db, {
-  docId = null, surface, query = null, session = null, created_at = null, eventId = null, isTest = 0,
+  docId = null, surface, query = null, session = null, created_at = null, eventId = null, isTest = 0, agent = null,
 } = {}) {
   db.prepare(`
-    INSERT INTO retrievals (doc_id, surface, query, session, created_at, event_id, is_test)
-    VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?)
-  `).run(docId, surface, query, session, created_at, eventId, isTest);
+    INSERT INTO retrievals (doc_id, surface, query, session, created_at, event_id, is_test, agent)
+    VALUES (?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?)
+  `).run(docId, surface, query, session, created_at, eventId, isTest, agent);
 }
 
 describe('event reconstruction', () => {
@@ -348,5 +348,62 @@ describe('--json output shape', () => {
     }
     assert.strictEqual(typeof roundTripped.windowNote, 'string');
     assert.ok('preCutoffCaveat' in roundTripped.trigger);
+  });
+});
+
+// Slice 1's whole point: the report can answer "does Codex act on what it is
+// handed" separately from Claude, without moving the aggregate numbers every
+// earlier reading was quoted against.
+describe('per-agent breakdown', () => {
+  function seedFire(db, { session, agent, followed }) {
+    const doc = insertDoc(db, { title: `note-${session}` });
+    insertRetrieval(db, { docId: doc, surface: SURFACE.HINT, query: `q-${session}`, session, eventId: `ev-${session}`, agent });
+    if (followed) insertRetrieval(db, { docId: doc, surface: SURFACE.READ, session, eventId: `read-${session}`, agent });
+    return doc;
+  }
+
+  it('splits fires and follows by agent, with NULL-agent rows under unknown', () => {
+    const db = freshDb();
+    seedFire(db, { session: 's-claude-1', agent: 'claude', followed: true });
+    seedFire(db, { session: 's-claude-2', agent: 'claude', followed: false });
+    seedFire(db, { session: 's-codex-1', agent: 'codex', followed: true });
+    seedFire(db, { session: 's-legacy-1', agent: null, followed: false });
+
+    const { hint } = followThroughReport(db);
+
+    assert.strictEqual(hint.byAgent.claude.fires, 2);
+    assert.strictEqual(hint.byAgent.claude.followed30, 1);
+    assert.strictEqual(hint.byAgent.claude.rate30, '50.0%');
+    assert.strictEqual(hint.byAgent.codex.fires, 1);
+    assert.strictEqual(hint.byAgent.codex.followed30, 1);
+    assert.strictEqual(hint.byAgent.codex.rate30, '100.0%');
+    assert.strictEqual(hint.byAgent.unknown.fires, 1);
+    assert.strictEqual(hint.byAgent.unknown.followed30, 0);
+  });
+
+  it('leaves the surface totals exactly what they were — the parts sum to the whole', () => {
+    const db = freshDb();
+    seedFire(db, { session: 's-sum-claude', agent: 'claude', followed: true });
+    seedFire(db, { session: 's-sum-codex', agent: 'codex', followed: false });
+    seedFire(db, { session: 's-sum-legacy', agent: null, followed: true });
+
+    const { hint } = followThroughReport(db);
+    const buckets = Object.values(hint.byAgent);
+
+    assert.strictEqual(buckets.reduce((n, b) => n + b.fires, 0), hint.fires);
+    assert.strictEqual(buckets.reduce((n, b) => n + b.followed30, 0), hint.followed30);
+    assert.strictEqual(hint.fires, 3);
+    assert.strictEqual(hint.followed30, 2);
+  });
+
+  it('reports every bucket even when an agent has no events, so a zero is legible as a zero', () => {
+    const db = freshDb();
+    seedFire(db, { session: 's-only-claude', agent: 'claude', followed: false });
+
+    const { hint, briefing } = followThroughReport(db);
+    assert.deepStrictEqual(Object.keys(hint.byAgent), ['claude', 'codex', 'unknown']);
+    assert.strictEqual(hint.byAgent.codex.fires, 0);
+    assert.strictEqual(hint.byAgent.codex.rate30, 'n/a');
+    assert.deepStrictEqual(Object.keys(briefing.byAgent), ['claude', 'codex', 'unknown']);
   });
 });

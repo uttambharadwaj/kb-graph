@@ -1,15 +1,23 @@
-// Identifies "the Claude Code harness process" by walking a process's ppid
-// chain, and reads that process's start time in the same pass — the piece
-// resolveSessionId needs to tell a live session-map entry from one left
-// behind by a different process that later got the same pid reused (see
-// session-map.js).
+// Identifies "the agent harness process" (Claude Code or Codex CLI) by
+// walking a process's ppid chain, and reads that process's start time in the
+// same pass — the piece resolveSessionId needs to tell a live session-map
+// entry from one left behind by a different process that later got the same
+// pid reused (see session-map.js). The same walk also names WHICH harness it
+// found, which is how a retrieval row gets its agent tag.
 //
 // Every piece that can be exercised without spawning a real `ps` is a pure
-// function (isClaudeHarness, findClaudeAncestor, parseProcessTable); the one
-// impure entry point (resolveClaudeAncestry) takes its process-table reader
+// function (harnessAgent, findHarnessAncestor, parseProcessTable); the one
+// impure entry point (resolveHarnessAncestry) takes its process-table reader
 // as an overridable param so callers can inject fixtures instead of mocking
 // child_process.
 import { execFileSync } from 'child_process';
+
+// The two harnesses that hold real sessions. One spelling, imported by
+// everything that stamps or parses an agent tag (retrieval.js, the hooks,
+// the reports) so a third agent is added here and nowhere else.
+export const AGENT = { CLAUDE: 'claude', CODEX: 'codex' };
+
+export const AGENTS = Object.values(AGENT);
 
 // Nearest-ancestor match, not an exact-name allowlist: the CLI binary as
 // installed varies (~/.local/bin/claude, a Homebrew shim, a versioned
@@ -28,25 +36,39 @@ import { execFileSync } from 'child_process';
 // stdio MCP server launched by the desktop app has no session_id in the
 // CLI's sense, and should fall through to NULL rather than borrow an
 // unrelated identity.
-export function isClaudeHarness(comm) {
-  if (!comm) return false;
-  const base = comm.split('/').pop();
-  return base === 'claude';
+//
+// Codex behaves the same way, verified live against a running Codex CLI:
+// comm is `.../@openai/codex-darwin-arm64/vendor/<triple>/bin/codex`, and the
+// exact-basename rule excludes its own helper (`codex-code-mode-host`) while
+// still matching a differently-installed binary. Unlike Claude, the ChatGPT
+// desktop app's bundled binary is also basename `codex`
+// (/Applications/ChatGPT.app/Contents/Resources/codex) and is therefore
+// matched — correctly: unlike the Claude desktop app, that process runs real
+// Codex sessions, so a descendant of it is a codex session.
+const HARNESS_BASENAMES = new Map([
+  ['claude', AGENT.CLAUDE],
+  ['codex', AGENT.CODEX],
+]);
+
+// The agent whose harness this comm names, or null for everything else.
+export function harnessAgent(comm) {
+  if (!comm) return null;
+  return HARNESS_BASENAMES.get(comm.split('/').pop()) ?? null;
 }
 
 // table: array of {pid, ppid, comm, lstart}. Walks from `pid` through ppid
-// links (starting with `pid` itself) and returns the first row matching
-// isClaudeHarness, or null if the chain runs out, loops, or `pid` isn't in
+// links (starting with `pid` itself) and returns the first row whose comm
+// names a harness, or null if the chain runs out, loops, or `pid` isn't in
 // the table at all. Returns the whole row (not just the pid) so the caller
 // gets pid_start from the same table lookup, with no second `ps` call.
-export function findClaudeAncestor(pid, table) {
+export function findHarnessAncestor(pid, table) {
   const byPid = new Map(table.map(p => [p.pid, p]));
   let current = pid;
   const seen = new Set();
   while (current != null && byPid.has(current) && !seen.has(current)) {
     seen.add(current);
     const proc = byPid.get(current);
-    if (isClaudeHarness(proc.comm)) return proc;
+    if (harnessAgent(proc.comm)) return proc;
     current = proc.ppid;
   }
   return null;
@@ -74,7 +96,7 @@ export function parseProcessTable(raw) {
 // This runs on a hook's critical path (every UserPromptSubmit) — a hook must
 // never hang indefinitely, so a stuck/wedged `ps` cannot be allowed to block
 // it forever. timeout+killSignal bound the wait; execFileSync throws on
-// timeout, which resolveClaudeAncestry's catch below turns into the same
+// timeout, which resolveHarnessAncestry's catch below turns into the same
 // "identity unverifiable" outcome as `ps` being missing entirely.
 // maxBuffer is sized generously (a dev box with thousands of processes is
 // still well under it) rather than tightly, since undershooting silently
@@ -100,16 +122,17 @@ function defaultListProcesses() {
   return parseProcessTable(execFileSync('ps', ['-eo', 'pid,ppid,lstart,comm'], psExecOptions()));
 }
 
-// The one impure entry point everything else calls: find the nearest
-// claude-harness ancestor of `pid` and that ancestor's start time, from one
-// `ps` snapshot. Failures anywhere (ps missing, pid already exited) collapse
-// to { claudePid: null, pidStart: null } — every caller treats that as
-// "identity unverifiable" and falls back accordingly; this never throws.
-export function resolveClaudeAncestry({ pid = process.pid, listProcesses = defaultListProcesses } = {}) {
+// The one impure entry point everything else calls: find the nearest harness
+// ancestor of `pid`, that ancestor's start time, and which agent it is, from
+// one `ps` snapshot. Failures anywhere (ps missing, pid already exited)
+// collapse to all-null — every caller treats that as "identity unverifiable"
+// and falls back accordingly; this never throws.
+export function resolveHarnessAncestry({ pid = process.pid, listProcesses = defaultListProcesses } = {}) {
+  const unknown = { harnessPid: null, pidStart: null, agent: null };
   try {
-    const match = findClaudeAncestor(pid, listProcesses());
-    return match ? { claudePid: match.pid, pidStart: match.lstart } : { claudePid: null, pidStart: null };
+    const match = findHarnessAncestor(pid, listProcesses());
+    return match ? { harnessPid: match.pid, pidStart: match.lstart, agent: harnessAgent(match.comm) } : unknown;
   } catch {
-    return { claudePid: null, pidStart: null };
+    return unknown;
   }
 }

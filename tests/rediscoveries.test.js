@@ -11,7 +11,7 @@ import { insertDocument, getDb } from '../src/db.js';
 import { generateEmbedding, embeddingToBuffer } from '../src/embeddings/embed.js';
 import { similarDocs } from '../src/embeddings/search.js';
 import { SURFACE } from '../src/retrieval.js';
-import { rediscoveries, runRediscoveriesCli } from '../src/cli/rediscoveries.js';
+import { countByAgent, rediscoveries, runRediscoveriesCli } from '../src/cli/rediscoveries.js';
 
 const call = async (name, args) => {
   const tool = getToolDefinitions().find(t => t.name === name);
@@ -162,5 +162,65 @@ describe('kb rediscoveries CLI', () => {
     }
     const printed = JSON.parse(logs.join('\n'));
     assert.ok(printed.some(r => r.doc_id === doc.id && r.query === 'json cli query'));
+  });
+});
+
+// A rediscovery is an agent re-deriving what the KB already had — which agent
+// is the actionable half of that (a client that keeps re-deriving is one the
+// push surfaces are failing).
+describe('rediscoveries per-agent breakdown', () => {
+  function insertRediscovery({ title, agent }) {
+    const doc = insertDocument({ title, content: 'x', doc_type: 'lesson', tags: '' });
+    getDb().prepare(
+      'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test, agent) VALUES (?, ?, ?, NULL, ?, 0, ?)'
+    ).run(doc.id, SURFACE.REDISCOVERY, 'a checked body', `evt-${title}`, agent);
+    return doc.id;
+  }
+
+  it('counts each agent and files NULL-agent rows under unknown', () => {
+    const rows = [
+      { agent: 'claude' }, { agent: 'claude' }, { agent: 'codex' }, { agent: null }, { agent: 'gemini' },
+    ];
+    assert.deepStrictEqual(countByAgent(rows), { claude: 2, codex: 1, unknown: 2 });
+  });
+
+  it('carries the agent through the listing query and onto the CLI\'s JSON rows', () => {
+    const codexDoc = insertRediscovery({ title: 'Codex rediscovery note', agent: 'codex' });
+
+    const row = rediscoveries(getDb(), { days: 14 }).find(r => r.doc_id === codexDoc);
+    assert.ok(row);
+    assert.strictEqual(row.agent, 'codex');
+
+    const logs = [];
+    const original = console.log;
+    console.log = (msg) => logs.push(msg);
+    try {
+      runRediscoveriesCli(['--json']);
+    } finally {
+      console.log = original;
+    }
+    const printed = JSON.parse(logs.join('\n'));
+    assert.ok(printed.some(r => r.doc_id === codexDoc && r.agent === 'codex'));
+  });
+
+  it('prints the breakdown line under the total in the text output', () => {
+    insertRediscovery({ title: 'Claude rediscovery note', agent: 'claude' });
+
+    const logs = [];
+    const original = console.log;
+    console.log = (msg) => logs.push(msg);
+    try {
+      runRediscoveriesCli([]);
+    } finally {
+      console.log = original;
+    }
+    const [totalLine, agentLine] = logs;
+    assert.match(totalLine, /^Rediscoveries in the last 14 day\(s\): \d+$/);
+    assert.match(agentLine, /^ {2}by agent: claude \d+, codex \d+, unknown \d+$/);
+
+    // The parts must sum to the total printed above them, or the line lies.
+    const total = Number(totalLine.match(/: (\d+)$/)[1]);
+    const parts = [...agentLine.matchAll(/(\d+)/g)].map(m => Number(m[1]));
+    assert.strictEqual(parts.reduce((a, b) => a + b, 0), total);
   });
 });

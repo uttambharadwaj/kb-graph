@@ -67,7 +67,7 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
@@ -158,9 +158,9 @@ describe('purging meter rows the system logged for itself', () => {
   it('does not trip over a database too old to have the meter table', () => {
     const db = current(KB_MIGRATIONS);
     db.exec('DROP TABLE retrievals');
-    // 17 adds columns to the same table 6 creates, so dropping it leaves both
-    // pending — 6 to rebuild the table, 17 to add its columns back on top.
-    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6, 17]);
+    // 17 and 20 add columns to the same table 6 creates, so dropping it
+    // leaves all three pending — 6 to rebuild the table, then the columns.
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6, 17, 20]);
   });
 });
 
@@ -180,7 +180,9 @@ describe('event identity and test-session flag on retrievals (migration 17)', ()
     `);
     db.prepare("INSERT INTO retrievals (surface, session) VALUES ('hint', 'sess-pre-migration')").run();
 
-    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [17]);
+    // 20 rides along for the same reason: the hand-built table above predates
+    // its column too.
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [17, 20]);
 
     assert.ok(hasColumn(db, 'retrievals', 'event_id'));
     assert.ok(hasColumn(db, 'retrievals', 'is_test'));
