@@ -4,7 +4,7 @@
 // surface funnels through logRetrieval so `surface` values and `session`
 // derivation can't drift between call sites.
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from './db.js';
-import { resolveClaudeAncestry } from './process-ancestry.js';
+import { resolveHarnessAncestry } from './process-ancestry.js';
 import { resolveMapEntry } from './session-map.js';
 
 // A cold-booted hook process's connection carries the same 5s busy_timeout as
@@ -83,18 +83,19 @@ export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
 // (/clear and compaction mint a new id without a new process) — an env var
 // captured at server-spawn time goes stale, and every call after the first
 // stamped a frozen, wrong id. Instead: the hook entrypoints
-// (prompt-hint.js, wakeup-hook.js) write claude_pid -> session_id into
-// session-map.js every time they run, keyed on the pid of the Claude Code
-// CLI process found by walking their own ancestry (process-ancestry.js);
-// this walks the SAME ancestry from the server side and reads it back.
+// (prompt-hint.js, wakeup-hook.js) write harness_pid -> session_id into
+// session-map.js every time they run, keyed on the pid of the harness
+// process found by walking their own ancestry (process-ancestry.js); this
+// walks the SAME ancestry from the server side and reads it back.
 //
-// Ancestry (which pid is our claude-harness ancestor, and its start time) is
-// resolved once and reused for the life of the process — it cannot change
-// while this process is alive. The map FILE at that pid is re-read on every
-// call, since the session id behind one pid is exactly what changes.
+// Ancestry (which pid is our harness ancestor, which agent it is, and its
+// start time) is resolved once and reused for the life of the process — it
+// cannot change while this process is alive. The map FILE at that pid is
+// re-read on every call, since the session id behind one pid is exactly what
+// changes.
 let cachedAncestry = null;
 function defaultAncestry() {
-  if (!cachedAncestry) cachedAncestry = resolveClaudeAncestry();
+  if (!cachedAncestry) cachedAncestry = resolveHarnessAncestry();
   return cachedAncestry;
 }
 
@@ -109,10 +110,19 @@ function defaultAncestry() {
 // Only a pid_start-verified map hit is trusted; anything else is NULL.
 export function resolveSessionId(hookInput = null, { getAncestry = defaultAncestry } = {}) {
   if (hookInput?.session_id) return hookInput.session_id;
-  const { claudePid, pidStart } = getAncestry();
-  if (claudePid == null) return null;
-  const { entry, pidStartOk } = resolveMapEntry(claudePid, pidStart);
+  const { harnessPid, pidStart } = getAncestry();
+  if (harnessPid == null) return null;
+  const { entry, pidStartOk } = resolveMapEntry(harnessPid, pidStart);
   return entry && pidStartOk ? entry.session_id : null;
+}
+
+// Which harness this process is running under, off the SAME cached ancestry
+// walk resolveSessionId uses — one `ps` for both answers. Unlike the session
+// id there is no map file to consult and nothing to go stale: the agent
+// behind a pid cannot change while that process is alive. NULL when the walk
+// found no harness at all (a cron job, the resident daemon, a bare shell).
+export function resolveAgent({ getAncestry = defaultAncestry } = {}) {
+  return getAncestry().agent ?? null;
 }
 
 // Exact ids already polluting the table from manual smoke/verification runs
@@ -143,7 +153,14 @@ export function isTestSession(session) {
 // timestamps — reconstruction can't tell two same-second calls apart.
 // Left NULL only for a call whose result is already exactly one row
 // (kb_read/getDocument).
-export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null, fastWrite = false }) {
+//
+// agent: the hook entrypoints know which client they were installed for and
+// pass it explicitly; everything else (MCP/REST/CLI surfaces) falls back to
+// the ancestry walk, which names the harness this process is a descendant of.
+// NULL when neither knows, and reports read that as "unknown" rather than
+// assuming Claude — the whole point of the column is that the answer used to
+// be assumed.
+export function logRetrieval({ docId = null, surface, query = null, session = null, eventId = null, agent = null, fastWrite = false }) {
   try {
     if (!SURFACES.includes(surface)) throw new Error(`unknown surface "${surface}"`);
     const database = getDb();
@@ -152,8 +169,8 @@ export function logRetrieval({ docId = null, surface, query = null, session = nu
     if (fastWrite) database.pragma(`busy_timeout = ${FAST_WRITE_BUSY_TIMEOUT_MS}`);
     try {
       database.prepare(
-        'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0);
+        'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test, agent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0, agent ?? resolveAgent());
     } finally {
       if (fastWrite) database.pragma(`busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
     }
@@ -178,12 +195,13 @@ export function logRetrievalResults({
   query = null,
   session = resolveSessionId(),
   eventId = null,
+  agent = null,
   fastWrite = false,
 }) {
   if (!surface) return;
   if (results.length === 0) {
-    logRetrieval({ surface, query, session, eventId, fastWrite });
+    logRetrieval({ surface, query, session, eventId, agent, fastWrite });
     return;
   }
-  for (const r of results) logRetrieval({ docId: r.id, surface, query, session, eventId, fastWrite });
+  for (const r of results) logRetrieval({ docId: r.id, surface, query, session, eventId, agent, fastWrite });
 }

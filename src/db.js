@@ -578,6 +578,16 @@ export const MIGRATIONS = [{
   name: 'from_preview on extractions',
   applied: db => !hasTable(db, 'extractions') || hasColumn(db, 'extractions', 'from_preview'),
   up: db => addColumn(db, 'extractions', 'from_preview', 'INTEGER NOT NULL DEFAULT 0'),
+}, {
+  version: 20,
+  // Which client the read came from (see AGENT in process-ancestry.js).
+  // Nullable and never backfilled: every row logged before this landed came
+  // from a process whose ancestry was only ever checked for Claude, so
+  // stamping them 'claude' now would assert something the walk never proved.
+  // Reports read NULL as "unknown" instead.
+  name: 'agent tag on retrievals',
+  applied: db => hasColumn(db, 'retrievals', 'agent'),
+  up: db => addColumn(db, 'retrievals', 'agent', 'TEXT'),
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
