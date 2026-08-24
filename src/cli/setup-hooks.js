@@ -54,7 +54,9 @@ const HOOK_SPECS = [
     agents: AGENTS,
   },
   { event: 'UserPromptSubmit', matcher: null, subcommand: 'prompt-hint', agents: AGENTS },
-  { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook', agents: [AGENT.CLAUDE] },
+  // Codex included since 2026-08-24 (full push parity): its PreToolUse payload is
+  // Claude-shaped (tool_name/tool_input) and the emission envelope is the same.
+  { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook', agents: AGENTS },
 ];
 
 const matcherFor = (spec, agent) =>
