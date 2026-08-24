@@ -192,7 +192,7 @@ test('a version-stable symlink is not reported as pinned', () => {
 
 // The commands are Claude's plus `--agent codex`, which is what makes each
 // hook print the JSON envelope Codex reads as context instead of plain text.
-test('mergeAgentHooks installs the codex hooks with the agent flag, and not the trigger hook', () => {
+test('mergeAgentHooks installs the codex hooks with the agent flag, trigger hook included', () => {
   const merged = mergeAgentHooks({}, CODEX_OPTS);
   assert.equal(merged.hooks.SessionStart.length, 1);
   // Codex has no `compact` SessionStart source — PreCompact/PostCompact are
@@ -202,8 +202,11 @@ test('mergeAgentHooks installs the codex hooks with the agent flag, and not the 
   assert.equal(merged.hooks.UserPromptSubmit.length, 1);
   assert.equal(merged.hooks.UserPromptSubmit[0].matcher, undefined);
   assert.equal(merged.hooks.UserPromptSubmit[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js prompt-hint --agent codex');
-  // PostToolUse excerpts are deliberately deferred for Codex (brief §4 Q2).
-  assert.equal(merged.hooks.PreToolUse, undefined);
+  // Trigger hook included since 2026-08-24: Codex PreToolUse payloads are
+  // Claude-shaped and the emission envelope is already the JSON both read.
+  assert.equal(merged.hooks.PreToolUse.length, 1);
+  assert.equal(merged.hooks.PreToolUse[0].matcher, 'Bash');
+  assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js --agent codex');
 });
 
 test('mergeAgentHooks is idempotent for codex', () => {
@@ -349,7 +352,7 @@ test('staleHookWarnings names the file each warning came from', () => {
   const warnings = staleHookWarnings(home, { exists: nothingExists });
   assert.equal(warnings.length, 2);
   assert.match(warnings[0], /^3 hooks in ~\/\.claude\/settings\.json cannot run: /);
-  assert.match(warnings[1], /^2 hooks in ~\/\.codex\/hooks\.json cannot run: /);
+  assert.match(warnings[1], /^3 hooks in ~\/\.codex\/hooks\.json cannot run: /);
 });
 
 test('staleHookWarnings caps how many paths one line names', () => {
