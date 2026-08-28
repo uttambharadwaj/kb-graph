@@ -5,6 +5,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # A fresh job-owned cache is warmed once before Node fans test files out
+      # to child processes. Transformers.js writes directly to final cache
+      # paths, so concurrent cold downloads can interleave or expose a partial
+      # ONNX file that every embedding suite then fails to parse.
+      KB_EMBEDDING_CACHE_DIR: ${{ runner.temp }}/kb-embedding-cache
     # The suite runs in well under a minute. Anything approaching this is a
     # hang, and the default six-hour ceiling burns a runner for all of it.
     timeout-minutes: 10
@@ -15,4 +21,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Validate native runtime and warm embedding model
+        run: npm run test:preflight
+      - name: Run test suite
+        run: npm run test:suite
