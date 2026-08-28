@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "provenance": "Real debrief shapes with people, work items, repositories, services, commits, and run ids replaced by structure-preserving stand-ins.",
+  "baseline": {
+    "model": "claude-haiku-4-5-20251001",
+    "prompt_sha256": "251523f6c0a1a78cfa8c3c04317f49dca1139fd92695728688dc403247f5be05",
+    "measured_on": "2026-08-28",
+    "matched": 23,
+    "expected": 29,
+    "recall": 0.7931034482758621
+  },
+  "cases": [
+    {
+      "id": "multi-stage-delivery",
+      "input": "PR #812 in beacon-api was squash-merged to main on 2026-08-12 as commit c0ffee1 after Rowan approved it. Workflow run 440012 deployed beacon-api to production. ReviewBot's regex finding was fixed by commit f00ba42 before the merge.",
+      "expected": [
+        { "subject": "pr #812", "predicate": "merged_via", "object": "commit c0ffee1" },
+        { "subject": "pr #812", "predicate": "approved_by", "object": "rowan" },
+        { "subject": "beacon-api", "predicate": "deployed_to", "object": "production" }
+      ]
+    },
+    {
+      "id": "open-migration-stack",
+      "input": "Casey owns the Account Identity PR Stack, which is moving account identity off the profiles table and onto the principals row. Every PR in the stack is still open. PR #104 is in review.",
+      "expected": [
+        { "subject": "casey", "predicate": "owns", "object": "account identity pr stack" },
+        { "subject": "account identity pr stack", "predicate": "proposes", "object": "account identity on principals row" },
+        { "subject": "pr #104", "predicate": "status", "object": "open" },
+        { "subject": "pr #104", "predicate": "review_state", "object": "in review" }
+      ]
+    },
+    {
+      "id": "ended-state-and-repair",
+      "input": "Session Harvester used to count its own model probes as work sessions. That caused the Follow-through Backlog. PR #93 merged to main as commit 91aa730 and Session Harvester now excludes model probes.",
+      "expected": [
+        { "subject": "session harvester", "predicate": "causes", "object": "follow-through backlog" },
+        { "subject": "pr #93", "predicate": "merged_via", "object": "commit 91aa730" },
+        { "subject": "session harvester", "predicate": "excludes", "object": "model probes" }
+      ]
+    },
+    {
+      "id": "deliberate-temporary-configuration",
+      "input": "Production Invoicing uses Sandbox Payments. This is temporary while the provider cutover is tested. TICKET-42 tracks the Production Invoicing Sandbox Revert.",
+      "expected": [
+        { "subject": "production invoicing", "predicate": "uses", "object": "sandbox payments" },
+        { "subject": "ticket-42", "predicate": "tracks", "object": "production invoicing sandbox revert" }
+      ]
+    },
+    {
+      "id": "shared-threshold-after-fix",
+      "input": "Before PR #22, DUP_THRESHOLD was declared in three modules. PR #22 merged to main as commit 2200abc, moved DUP_THRESHOLD into src/search.js, and made both Duplicate Pre-check and Note Write use DUP_THRESHOLD.",
+      "expected": [
+        { "subject": "pr #22", "predicate": "merged_via", "object": "commit 2200abc" },
+        { "subject": "dup_threshold", "predicate": "declared_in", "object": "src/search.js" },
+        { "subject": "duplicate pre-check", "predicate": "uses", "object": "dup_threshold" },
+        { "subject": "note write", "predicate": "uses", "object": "dup_threshold" }
+      ]
+    },
+    {
+      "id": "browser-template-incident",
+      "input": "Stealth Browser Sessions failed because Template Orion failed its cold-host prepare step. Gateway Resolver returned 400 for the missing template. PR #317 fixed Template Orion and deployed it to sandbox.",
+      "expected": [
+        { "subject": "template orion", "predicate": "causes", "object": "stealth browser sessions failures" },
+        { "subject": "gateway resolver", "predicate": "returns", "object": "400" },
+        { "subject": "pr #317", "predicate": "fixes", "object": "template orion" },
+        { "subject": "pr #317", "predicate": "deployed_to", "object": "sandbox" }
+      ]
+    },
+    {
+      "id": "resident-daemon-fallback",
+      "input": "The MCP Shim calls the Resident Memory Daemon over a Unix socket. When the socket is absent, MCP Shim bypasses Resident Memory Daemon and calls the In-process Server. Resident Memory Daemon runs on the Launch Agent.",
+      "expected": [
+        { "subject": "mcp shim", "predicate": "calls", "object": "resident memory daemon" },
+        { "subject": "mcp shim", "predicate": "bypasses", "object": "resident memory daemon" },
+        { "subject": "resident memory daemon", "predicate": "runs_on", "object": "launch agent" }
+      ]
+    },
+    {
+      "id": "credential-boundaries",
+      "input": "Credential Resolver provides credentials at tool-call time. Credential Store provides credential CRUD only and contains no account business logic. The provider defaults to Primary Password Manager.",
+      "expected": [
+        { "subject": "credential resolver", "predicate": "provides", "object": "credentials at tool-call time" },
+        { "subject": "credential store", "predicate": "provides", "object": "credential crud" },
+        { "subject": "provider", "predicate": "defaults_to", "object": "primary password manager" }
+      ]
+    },
+    {
+      "id": "identical-commit-ci-split",
+      "input": "Push run 314 failed on commit abc123 while Pull-request run 315 passed on the identical commit. Every failure in Push run 314 was in Embedding Neighborhood Tests.",
+      "expected": [
+        { "subject": "push run 314", "predicate": "ci_state", "object": "failed" },
+        { "subject": "pull-request run 315", "predicate": "ci_state", "object": "passed" }
+      ]
+    },
+    {
+      "id": "corrected-assignment",
+      "input": "TKT-77 was assigned to Morgan during triage. Correction: TKT-77 is assigned to Riley, not Morgan. The corrected assignment is current.",
+      "expected": [
+        { "subject": "tkt-77", "predicate": "assigned_to", "object": "riley" }
+      ]
+    }
+  ]
+}

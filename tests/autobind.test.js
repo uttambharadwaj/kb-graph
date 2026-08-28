@@ -34,17 +34,17 @@ afterEach(() => {
 describe('autobind', () => {
   it('extracts ticket from cwd path and binds at the matching ancestor', () => {
     makeBusHome();
-    const { full } = makeWorkspace('worktrees/pf-1999-auto-test/src/bus');
+    const { full } = makeWorkspace('worktrees/tkt-1999-auto-test/src/bus');
 
     const result = autobind({ agent: 'claude', cwd: full });
     assert.strictEqual(result.bound, true);
-    assert.strictEqual(result.channel, 'ws:pf-1999');
+    assert.strictEqual(result.channel, 'ws:tkt-1999');
     assert.strictEqual(result.reader, 'claude:operator');
     assert.strictEqual(result.source, 'path');
-    assert.match(result.cwd, /pf-1999-auto-test$/);
+    assert.match(result.cwd, /tkt-1999-auto-test$/);
 
     const resolved = readBusBinding({ agent: 'claude', cwd: full });
-    assert.strictEqual(resolved.subscriptions[0].channel, 'ws:pf-1999');
+    assert.strictEqual(resolved.subscriptions[0].channel, 'ws:tkt-1999');
   });
 
   // The shipped default takes any short alphabetic prefix, so a fresh clone
@@ -61,7 +61,7 @@ describe('autobind', () => {
   it('uses CLAUDE_BUS_ROLE env var for reader when set', () => {
     makeBusHome();
     process.env.CLAUDE_BUS_ROLE = 'architect';
-    const { full } = makeWorkspace('worktrees/pf-2000-env/src');
+    const { full } = makeWorkspace('worktrees/tkt-2000-env/src');
 
     const result = autobind({ agent: 'claude', cwd: full });
     assert.strictEqual(result.reader, 'claude:architect');
@@ -78,7 +78,7 @@ describe('autobind', () => {
 
   it('skips when an ancestor binding already resolves', () => {
     makeBusHome();
-    const { full } = makeWorkspace('worktrees/pf-3000-existing/src');
+    const { full } = makeWorkspace('worktrees/tkt-3000-existing/src');
     autobind({ agent: 'claude', cwd: full });
 
     const second = autobind({ agent: 'claude', cwd: full });
@@ -90,7 +90,7 @@ describe('autobind', () => {
     makeBusHome();
     const { full } = makeWorkspace('generic/repo');
     execFileSync('git', ['-C', full, 'init', '-q'], { stdio: 'ignore' });
-    execFileSync('git', ['-C', full, 'checkout', '-q', '-b', 'uttam/pf-4000-branch-ticket'], {
+    execFileSync('git', ['-C', full, 'checkout', '-q', '-b', 'devuser/tkt-4000-branch-ticket'], {
       stdio: 'ignore',
     });
     execFileSync('git', ['-C', full, 'commit', '-q', '--allow-empty', '-m', 'seed', '--no-gpg-sign'], {
@@ -104,20 +104,20 @@ describe('autobind', () => {
 
     const result = autobind({ agent: 'claude', cwd: full });
     assert.strictEqual(result.bound, true);
-    assert.strictEqual(result.channel, 'ws:pf-4000');
+    assert.strictEqual(result.channel, 'ws:tkt-4000');
     assert.strictEqual(result.source, 'git-branch');
   });
 
   it('findTicketInPath walks ancestors and returns first match', () => {
-    const { full } = makeWorkspace('worktrees/pf-5000-deep/nested/subdir');
+    const { full } = makeWorkspace('worktrees/tkt-5000-deep/nested/subdir');
     const match = findTicketInPath(full);
     assert.ok(match);
     assert.strictEqual(match.ticket, '5000');
-    assert.match(match.anchor, /pf-5000-deep$/);
+    assert.match(match.anchor, /tkt-5000-deep$/);
   });
 
   it('is case-insensitive on the ticket regex', () => {
-    const { full } = makeWorkspace('worktrees/PF-6000-UPPER');
+    const { full } = makeWorkspace('worktrees/TKT-6000-UPPER');
     const match = findTicketInPath(full);
     assert.ok(match);
     assert.strictEqual(match.ticket, '6000');
@@ -125,7 +125,7 @@ describe('autobind', () => {
 
   it('stays quiet when invoked from a hook', () => {
     makeBusHome();
-    const { full } = makeWorkspace('worktrees/pf-7000-hook-mode/src');
+    const { full } = makeWorkspace('worktrees/tkt-7000-hook-mode/src');
 
     const stdout = execFileSync('node', [
       'bin/bus-autobind.js',
@@ -181,16 +181,16 @@ describe('configurable ticket regex', () => {
 
   it('invalid regex falls back to default pf pattern', () => {
     process.env.KB_TICKET_REGEX = '(';
-    const hit = findTicketInPath('/tmp/work/pf-777');
+    const hit = findTicketInPath('/tmp/work/tkt-777');
     assert.strictEqual(hit.ticket, '777');
   });
 
   it('default channel derivation is unchanged', () => {
     makeBusHome();
-    const { full } = makeWorkspace('worktrees/pf-1234-default-channel/src');
+    const { full } = makeWorkspace('worktrees/tkt-1234-default-channel/src');
 
     const result = autobind({ agent: 'claude', cwd: full });
     assert.strictEqual(result.bound, true);
-    assert.strictEqual(result.channel, 'ws:pf-1234');
+    assert.strictEqual(result.channel, 'ws:tkt-1234');
   });
 });

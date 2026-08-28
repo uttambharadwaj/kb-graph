@@ -1,16 +1,25 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
 // Prompt regressions for kb_extract, replayed against the real model — slow,
 // non-deterministic, and needs the claude CLI, so it is opt-in:
 //   KB_EVAL=1 node --test tests/extract-eval.test.js
 const tmp = mkdtempSync(join(tmpdir(), 'kb-extract-eval-'));
 process.env.KB_DIR = tmp;
+const corpus = JSON.parse(readFileSync(
+  new URL('./fixtures/extract-debrief-corpus.json', import.meta.url),
+  'utf8',
+));
+// A prompt score is only comparable when the model is fixed too. Pin the
+// corpus run before claude-cli.js reads its module-load default.
+process.env.CLASSIFY_MODEL = corpus.baseline.model;
 
-const { extractFacts, chunkForExtract, canonicalTriple } = await import('../src/extract.js');
+const { extractFacts, chunkForExtract, canonicalTriple, EXTRACT_PROMPT } = await import('../src/extract.js');
+const { scoreExtractCorpus } = await import('./helpers/extract-corpus.js');
 
 const mentions = (facts, token) =>
   facts.some(f => `${f.subject} ${f.predicate} ${f.object}`.toLowerCase().includes(token));
@@ -25,7 +34,7 @@ describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 9
   // negative_decimals" — the problem, out of a sentence stating the fix.
   it('extracts the post-change state from a "was fixed" sentence', async () => {
     const { facts } = await extractFacts(
-      'decimalToScaledInteger in ux-labs was fixed for negative decimals, in PR #3798.',
+      'decimalToScaledInteger in sample-web was fixed for negative decimals, in PR #3798.',
     );
     const broken = facts.filter(f =>
       f.subject.toLowerCase().includes('decimal') &&
@@ -226,5 +235,28 @@ head-injection, which was fixed in commit b1d6832.`);
     const owners = new Set(ownership.map(f => ownerOf(f).toLowerCase().replace(/[\s_-]+/g, '_')));
     assert.strictEqual(owners.size, 1,
       `invented multiple spellings for one source entity: ${JSON.stringify(ownership)}`);
+  });
+
+  it('records one recall score for the held-out debrief corpus', async () => {
+    const promptSha256 = createHash('sha256').update(EXTRACT_PROMPT).digest('hex');
+    assert.strictEqual(
+      promptSha256,
+      corpus.baseline.prompt_sha256,
+      'extract prompt changed; record a fresh corpus baseline for this revision',
+    );
+
+    const predictions = [];
+    for (const fixture of corpus.cases) {
+      const { facts } = await extractFacts(fixture.input);
+      predictions.push({ id: fixture.id, facts });
+    }
+
+    const score = scoreExtractCorpus(corpus, predictions);
+    assert.strictEqual(score.expected, corpus.baseline.expected);
+    console.log(`KB_EXTRACT_CORPUS_SCORE ${JSON.stringify({
+      ...score,
+      baseline_matched: corpus.baseline.matched,
+      matched_delta: score.matched - corpus.baseline.matched,
+    })}`);
   });
 });

@@ -19,7 +19,7 @@ describe('kb_fact_invalidate fact-id addressing', () => {
   });
 
   it('invalidates the exact current row by the id returned from addFact', async () => {
-    const fact = addFact('pf-3375', 'status', 'in_progress', {
+    const fact = addFact('tkt-3375', 'status', 'in_progress', {
       validFrom: '2026-08-20', source: 'test',
     });
 
@@ -31,7 +31,7 @@ describe('kb_fact_invalidate fact-id addressing', () => {
   });
 
   it('refuses an id retirement whose end precedes its valid_from', async () => {
-    const fact = addFact('pf-3375-guard', 'status', 'in_progress', {
+    const fact = addFact('tkt-3375-guard', 'status', 'in_progress', {
       validFrom: '2026-08-26', source: 'test',
     });
 
@@ -56,12 +56,12 @@ describe('kb_fact_invalidate fact-id addressing', () => {
   });
 
   it('rejects incomplete or ambiguous addressing instead of guessing', async () => {
-    const incomplete = await tool.handler({ subject: 'pf-3375', predicate: 'status' });
+    const incomplete = await tool.handler({ subject: 'tkt-3375', predicate: 'status' });
     assert.strictEqual(incomplete.isError, true);
     assert.match(incomplete.content[0].text, /provide either id or the complete subject, predicate, object triple/);
 
     const both = await tool.handler({
-      id: 'f_any', subject: 'pf-3375', predicate: 'status', object: 'open',
+      id: 'f_any', subject: 'tkt-3375', predicate: 'status', object: 'open',
     });
     assert.strictEqual(both.isError, true);
     assert.match(both.content[0].text, /provide either id or the complete subject, predicate, object triple/);

@@ -19,16 +19,16 @@ function runTool(name, input, extraArgs = []) {
 describe('kb tool fallback', () => {
   it('invokes an allowlisted handler with MCP-equivalent validation', () => {
     const result = runTool('kb_fact_add', {
-      subject: 'pf-3296', predicate: 'status', object: 'in_progress', source: 'test',
+      subject: 'tkt-3296', predicate: 'status', object: 'in_progress', source: 'test',
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /pf-3296/);
+    assert.match(result.stdout, /tkt-3296/);
     assert.match(result.stdout, /in_progress/);
   });
 
   it('rejects missing required input before invoking a handler', () => {
-    const result = runTool('kb_fact_add', { subject: 'pf-3296' });
+    const result = runTool('kb_fact_add', { subject: 'tkt-3296' });
 
     assert.equal(result.status, 2);
     assert.match(result.stderr, /Invalid input for kb_fact_add/);
@@ -51,7 +51,7 @@ describe('kb tool fallback', () => {
   it('closes the capture loop without an MCP process', { timeout: 60000 }, () => {
     const content = 'A disconnected end-of-session capture still uses the canonical KB write and indexing path.';
     const first = runTool('kb_write', {
-      title: 'Disconnected capture path', content, type: 'lesson', tags: 'general,pf-3296',
+      title: 'Disconnected capture path', content, type: 'lesson', tags: 'general,tkt-3296',
     });
     assert.equal(first.status, 0, first.stderr);
     const firstId = Number(first.stdout.match(/Note #(\d+)/)?.[1]);
@@ -65,7 +65,7 @@ describe('kb tool fallback', () => {
       title: 'Disconnected capture path, corrected',
       content: 'The sanctioned direct CLI is the automatic fallback when an agent loses its MCP transport.',
       type: 'lesson',
-      tags: 'general,pf-3296',
+      tags: 'general,tkt-3296',
     });
     assert.equal(replacement.status, 0, replacement.stderr);
     const replacementId = Number(replacement.stdout.match(/Note #(\d+)/)?.[1]);
