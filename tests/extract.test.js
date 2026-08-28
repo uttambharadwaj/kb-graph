@@ -299,6 +299,49 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(res.skipped.filter(s => s.reason?.startsWith('input_truncated')), []);
   });
 
+  it('shares one call budget across attempts instead of retrying past the MCP deadline', async () => {
+    let clock = 0;
+    const timeouts = [];
+    const runModel = async (_prompt, { timeout }) => {
+      timeouts.push(timeout);
+      clock += timeout;
+      throw new Error(`model timed out after ${timeout}ms`);
+    };
+
+    const res = await extractFacts('budgeted-service depends_on target-service.', {
+      runModel,
+      now: () => clock,
+      callBudgetMs: 1000,
+    });
+
+    assert.deepStrictEqual(timeouts, [1000], 'a retry started after the shared budget was gone');
+    assert.strictEqual(res.attemptCount, 1);
+    assert.strictEqual(res.modelDurationMs, 1000);
+    assert.match(res.skipped[0].reason, /^chunk_failed: model timed out after 1000ms$/);
+  });
+
+  it('still retries a fast model failure while shared budget remains', async () => {
+    let clock = 0;
+    const timeouts = [];
+    const runModel = async (_prompt, { timeout }) => {
+      timeouts.push(timeout);
+      clock += 10;
+      if (timeouts.length === 1) throw new Error('transient failure');
+      return { facts: [], skipped: [] };
+    };
+
+    const res = await extractFacts('retry-service depends_on target-service.', {
+      runModel,
+      now: () => clock,
+      callBudgetMs: 100,
+    });
+
+    assert.deepStrictEqual(timeouts, [100, 90]);
+    assert.strictEqual(res.attemptCount, 2);
+    assert.strictEqual(res.modelDurationMs, 20);
+    assert.deepStrictEqual(res.skipped, []);
+  });
+
   it('rejects an observed_at that is not a date rather than mis-ordering it', () => {
     assert.throws(
       () => consolidate([{ subject: 'pf-9030', predicate: 'status', object: 'done' }], { observedAt: 'yesterday' }),

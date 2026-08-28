@@ -85,6 +85,9 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(row.date_overrides, 0);
     assert.strictEqual(row.duplicate_skips, 0);
     assert.strictEqual(row.accepted_skip_conflicts, 0);
+    assert.strictEqual(row.attempt_count, 1);
+    assert.ok(row.model_duration_ms >= 0);
+    assert.ok(row.consolidation_duration_ms >= 0);
     assert.strictEqual(row.source, 'meter-test');
     assert.ok(row.duration_ms >= 0);
     assert.ok(row.created_at);

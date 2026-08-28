@@ -315,6 +315,9 @@ export const MIGRATIONS = [{
       date_overrides INTEGER NOT NULL DEFAULT 0,
       duplicate_skips INTEGER NOT NULL DEFAULT 0,
       accepted_skip_conflicts INTEGER NOT NULL DEFAULT 0,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      model_duration_ms INTEGER NOT NULL DEFAULT 0,
+      consolidation_duration_ms INTEGER NOT NULL DEFAULT 0,
       dry_run INTEGER NOT NULL DEFAULT 0,
       failed INTEGER NOT NULL DEFAULT 0,
       from_preview INTEGER NOT NULL DEFAULT 0,
@@ -622,6 +625,20 @@ export const MIGRATIONS = [{
   up: db => {
     addColumn(db, 'extractions', 'duplicate_skips', 'INTEGER NOT NULL DEFAULT 0');
     addColumn(db, 'extractions', 'accepted_skip_conflicts', 'INTEGER NOT NULL DEFAULT 0');
+  },
+}, {
+  version: 23,
+  // One overall duration cannot distinguish a slow model from local write
+  // work, and chunk_count cannot reveal retries. These bounded counters keep
+  // the latency diagnosis privacy-safe: no prompts or model output are stored.
+  name: 'extraction phase timing and attempt counts',
+  applied: db => !hasTable(db, 'extractions') || [
+    'attempt_count', 'model_duration_ms', 'consolidation_duration_ms',
+  ].every(column => hasColumn(db, 'extractions', column)),
+  up: db => {
+    addColumn(db, 'extractions', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn(db, 'extractions', 'model_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn(db, 'extractions', 'consolidation_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
   },
 }];
 

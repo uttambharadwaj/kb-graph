@@ -23,6 +23,7 @@ export function logExtraction({
   inputHash, inputChars, chunkChars, emittedCount, skippedCount,
   chunkFailures, entityRejections, claimRejections, dateOverrides,
   duplicateSkips, acceptedSkipConflicts,
+  attemptCount, modelDurationMs, consolidationDurationMs,
   dryRun, failed, fromPreview, durationMs, source = null,
 }) {
   try {
@@ -31,13 +32,15 @@ export function logExtraction({
         (input_hash, input_chars, chunk_count, chunk_chars, emitted_count, skipped_count,
          chunk_failures, entity_rejections, claim_rejections, date_overrides,
          duplicate_skips, accepted_skip_conflicts,
+         attempt_count, model_duration_ms, consolidation_duration_ms,
          dry_run, failed, from_preview, duration_ms, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       inputHash, inputChars, chunkChars.length, JSON.stringify(chunkChars),
       emittedCount, skippedCount, chunkFailures,
       entityRejections, claimRejections, dateOverrides,
       duplicateSkips, acceptedSkipConflicts,
+      attemptCount, modelDurationMs, consolidationDurationMs,
       dryRun ? 1 : 0, failed ? 1 : 0,
       fromPreview ? 1 : 0, durationMs, source,
     );
@@ -63,6 +66,9 @@ export function summarizeExtractions({
            COALESCE(SUM(date_overrides), 0) AS date_overrides,
            COALESCE(SUM(duplicate_skips), 0) AS duplicate_skips,
            COALESCE(SUM(accepted_skip_conflicts), 0) AS accepted_skip_conflicts,
+           COALESCE(SUM(attempt_count), 0) AS attempts,
+           COALESCE(MAX(model_duration_ms), 0) AS slowest_model_ms,
+           COALESCE(MAX(consolidation_duration_ms), 0) AS slowest_consolidation_ms,
            COALESCE(SUM(chunk_failures), 0) AS chunk_failures,
            COALESCE(SUM(failed), 0) AS failed
     FROM extractions
@@ -81,5 +87,6 @@ export function formatExtractionSummary(summary) {
   return `extractions (last 24h): ${summary.calls} calls, ${summary.emitted} emitted, ${summary.skipped} skipped`
     + ` (entity ${summary.entity_rejections}, claim ${summary.claim_rejections}, date override ${summary.date_overrides}, other ${other})`
     + `, reconciled ${duplicateSkips} and ${dispositionConflicts}`
+    + `, ${summary.attempts} model attempts, slowest phases model ${summary.slowest_model_ms}ms / consolidation ${summary.slowest_consolidation_ms}ms`
     + `, ${chunkFailures}, ${failedCalls}`;
 }
