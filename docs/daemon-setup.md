@@ -4,8 +4,8 @@ Optional, and worth it once you run more than a couple of concurrent agent
 sessions. Without it, every session runs its own full KB server process
 (embedding model included) and every hook pays cold-start; with it, one
 resident daemon owns the database and the warm state, sessions attach through
-`kb mcp-shim` (a thin byte pipe), and hooks answer over a control socket in
-milliseconds.
+`kb mcp-shim` (a lightweight session relay), and hooks answer over a control
+socket in milliseconds.
 
 Nothing else changes: `kb register` already points agents at `mcp-shim`, which
 probes the daemon socket for ~2s and runs a full server in-process when
@@ -19,8 +19,15 @@ no re-registration.
 | `~/.knowledge-base/daemon.sock` | MCP sessions (via `kb mcp-shim`) |
 | `~/.knowledge-base/daemon-ctl.sock` | Hooks (prompt-hint / trigger-hook / wakeup-hook) |
 | `~/.knowledge-base/logs/hook-timings.log` | Abnormal hook tail: kills and ≥2s completions |
+| `~/.knowledge-base/logs/direct-tool-fallbacks.jsonl` | Privacy-safe `/debrief` and `/wrap` direct-CLI outcomes when MCP is unavailable |
 
-Probe a running daemon with `kb serve --status`.
+Probe a running daemon with `kb serve --status`. The status output also reports
+the last 24 hours of shim path decisions and daemon-restart recoveries, so a
+healthy fallback or silently disconnected session cannot hide a resident-daemon
+rollout regression. It also reports direct `kb tool` fallback calls and their
+success denominator; sustained use means the MCP surface still needs repair
+even when capture succeeds. Probe failures retain their local error code (for example
+`EPERM`) instead of being reported as an unexplained daemon failure.
 
 ## Environment: PATH and CLAUDE_PATH (read this even if nothing else)
 
@@ -122,9 +129,10 @@ systemctl --user restart kb-serve
 
 Cold start can take several seconds (embedding model load) — `kb serve
 --status` may briefly report down right after a restart. Sessions attached
-through the shim lose their pipe on restart; reconnect the MCP server in the
-session (or start a new one). Hooks need nothing: they fall back in-process
-until the daemon is back.
+through the shim keep their stdio transport and tool registry: interrupted
+requests receive an explicit retry error, the shim replays the initialization
+handshake when the daemon returns, and later calls use the new daemon. Hooks
+need nothing: they fall back in-process until the daemon is back.
 
 Pending migrations gate startup the same way they gate `kb mcp` — run
 `kb migrate` after updates that change schema (`kb migrate --check` tells you).

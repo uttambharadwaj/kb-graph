@@ -273,6 +273,7 @@ if (count > 0) {
     console.log(`  Indexed: ${result.indexed}`);
     console.log(`  Skipped: ${result.skipped}`);
     console.log(`  Deleted: ${result.deleted}`);
+    if (result.preserved) console.log(`  Concurrent writes preserved: ${result.preserved}`);
     console.log(`  Total:   ${result.total}`);
     if (result.errors.length > 0) {
       console.log(`  Errors:  ${result.errors.length}`);

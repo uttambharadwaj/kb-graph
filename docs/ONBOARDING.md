@@ -12,7 +12,7 @@ Prereqs: Node ≥18, Claude Code installed (`claude` on PATH), macOS or Linux.
 | Check | Command | Expect |
 |-------|---------|--------|
 | MCP registered | `claude mcp list` | `knowledge-base` listed |
-| Hooks installed | `grep -c "wakeup-hook\|prompt-hint" ~/.claude/settings.json` | ≥2 |
+| Hooks installed | `grep -c "wakeup-hook\|prompt-hint\|precompact-hook" ~/.claude/settings.json` | ≥3 |
 | Hooks installed (Codex) | `grep -c "wakeup-hook\|prompt-hint" ~/.codex/hooks.json` | ≥2, if you selected codex |
 | Jobs scheduled (macOS) | `launchctl list \| grep com.kb` | harvest, reindex, synthesis |
 | Jobs scheduled (Linux) | `systemctl --user list-timers \| grep kb-` | 3 timers |
@@ -30,6 +30,7 @@ One habit makes this system compound: **end substantial sessions with `/debrief`
 
 - **Session start:** briefing of active workstreams + KB health.
 - **Every prompt:** hint lines pointing at relevant KB entries.
+- **Before compaction:** bounded continuity snapshot, restored at compact session start.
 - **Nightly 03:30:** harvest — extracts lessons from your agent transcripts. Facts are left to `/debrief` and `kb_extract` unless you set `KB_HARVEST_FACTS=1`.
 - **Every 5 min:** vault reindex (embeddings + search index).
 - **Sunday 04:00:** weekly synthesis — themes, contradictions, merge candidates.

@@ -10,6 +10,9 @@ import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { getDb } from '../src/db.js';
+import {
+  buildContinuitySnapshot, snapshotPathFor, writeContinuitySnapshot,
+} from '../src/cli/precompact-hook.js';
 
 const HELPER = join(dirname(fileURLToPath(import.meta.url)), 'helpers', 'run-hook.mjs');
 
@@ -103,6 +106,26 @@ function insertStateNote(db, { title, content, updatedAt }) {
 }
 
 describe('wakeup-hook post-compact recovery', () => {
+  it('injects the pre-compact snapshot and consumes it after delivery', () => {
+    const input = {
+      session_id: 'sess-precompact-roundtrip',
+      transcript_path: '/tmp/sess-precompact-roundtrip.jsonl',
+      cwd: '/tmp/precompact-project',
+      trigger: 'auto',
+    };
+    writeContinuitySnapshot(buildContinuitySnapshot(input, {
+      transcriptText: 'USER: Keep DEMO-3760 intact.\n\nASSISTANT: Next edit src/cli/wakeup-hook.js.',
+      gitState: { branch: 'demo/precompact-continuity', status: [' M src/cli/wakeup-hook.js'] },
+    }));
+
+    const stdout = runHook('wakeup-hook', { ...input, source: 'compact' });
+
+    assert.match(stdout, /--- Pre-compact continuity snapshot/);
+    assert.match(stdout, /Keep DEMO-3760 intact/);
+    assert.match(stdout, /branch: demo\/precompact-continuity/);
+    assert.equal(existsSync(snapshotPathFor(input)), false, 'the delivered snapshot must not leak into a later compact');
+  });
+
   it('appends the active state note content when source is compact', () => {
     const db = getDb();
     // Fixed far-future date so this note unambiguously outranks whatever

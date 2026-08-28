@@ -10,11 +10,12 @@ import { AGENT } from '../src/process-ancestry.js';
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
 const CODEX_OPTS = { ...OPTS, agent: AGENT.CODEX };
 
-test('mergeAgentHooks adds SessionStart, UserPromptSubmit and PreToolUse entries', () => {
+test('mergeAgentHooks adds SessionStart, UserPromptSubmit, PreToolUse and PreCompact entries', () => {
   const merged = mergeAgentHooks({}, OPTS);
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
   const ptu = merged.hooks.PreToolUse;
+  const pc = merged.hooks.PreCompact;
   assert.equal(ss.length, 1);
   assert.equal(ss[0].matcher, 'startup|resume|clear|compact');
   assert.equal(ss[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook');
@@ -27,6 +28,20 @@ test('mergeAgentHooks adds SessionStart, UserPromptSubmit and PreToolUse entries
   // bin/kb.js, not `kb.js trigger-hook` — see setup-hooks.js's HOOK_SPECS
   // comment for why this one hook skips bin/kb.js's dispatch machinery.
   assert.equal(ptu[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
+  assert.equal(pc.length, 1);
+  assert.equal(pc[0].matcher, 'manual|auto');
+  assert.equal(pc[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js precompact-hook');
+});
+
+test('mergeAgentHooks replaces the legacy inline preservation command instead of leaving an invalid second hook', () => {
+  const legacy = "printf '%s\\n' 'CRITICAL PRESERVATION INSTRUCTIONS FOR THIS SUMMARY:'; echo 'Git state at compaction:'";
+  const existing = { hooks: { PreCompact: [{ hooks: [{ type: 'command', command: legacy }] }] } };
+
+  const merged = mergeAgentHooks(existing, OPTS);
+
+  assert.equal(merged.hooks.PreCompact.length, 1);
+  assert.equal(merged.hooks.PreCompact[0].hooks.length, 1);
+  assert.equal(merged.hooks.PreCompact[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js precompact-hook');
 });
 
 test('mergeAgentHooks is idempotent', () => {
@@ -351,7 +366,7 @@ test('staleHookWarnings names the file each warning came from', () => {
   installAgentHooks({ home, ...CODEX_OPTS });
   const warnings = staleHookWarnings(home, { exists: nothingExists });
   assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /^3 hooks in ~\/\.claude\/settings\.json cannot run: /);
+  assert.match(warnings[0], /^4 hooks in ~\/\.claude\/settings\.json cannot run: /);
   assert.match(warnings[1], /^3 hooks in ~\/\.codex\/hooks\.json cannot run: /);
 });
 

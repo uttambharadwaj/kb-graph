@@ -41,23 +41,23 @@ const PROBE_TIMEOUT_MS = 1_000;
 // process may SIGKILL sooner; that is its budget to set, not ours to pre-empt.
 const DEFAULT_DRAIN_TIMEOUT_MS = CLAUDE_CALL_TIMEOUT_MS + 10_000;
 
-function connectProbe(socketPath, timeoutMs) {
+function connectProbe(socketPath, timeoutMs, connectFn = connect) {
   return new Promise((resolve) => {
-    const socket = connect(socketPath);
+    const socket = connectFn(socketPath);
     let settled = false;
-    const finish = (state) => {
+    const finish = (state, reason, errorCode = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       socket.destroy();
-      resolve(state);
+      resolve({ state, reason, errorCode });
     };
-    const timer = setTimeout(() => finish('unknown'), timeoutMs);
-    socket.once('connect', () => finish('live'));
+    const timer = setTimeout(() => finish('unknown', 'timeout'), timeoutMs);
+    socket.once('connect', () => finish('live', 'connected'));
     socket.once('error', (err) => {
-      if (err.code === 'ENOENT') return finish('absent');
-      if (err.code === 'ECONNREFUSED') return finish('stale');
-      finish('unknown');
+      if (err.code === 'ENOENT') return finish('absent', 'error', err.code);
+      if (err.code === 'ECONNREFUSED') return finish('stale', 'error', err.code);
+      finish('unknown', 'error', err.code ?? null);
     });
   });
 }
@@ -78,10 +78,17 @@ function connectProbe(socketPath, timeoutMs) {
  *
  * @returns {Promise<'live'|'stale'|'absent'|'occupied'|'unknown'>}
  */
-export async function probeSocket(socketPath, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+export async function probeSocketDetailed(socketPath, {
+  timeoutMs = PROBE_TIMEOUT_MS,
+  connectFn = connect,
+} = {}) {
   const stats = lstatSync(socketPath, { throwIfNoEntry: false });
-  if (stats && !stats.isSocket()) return 'occupied';
-  return connectProbe(socketPath, timeoutMs);
+  if (stats && !stats.isSocket()) return { state: 'occupied', reason: 'not_socket', errorCode: null };
+  return connectProbe(socketPath, timeoutMs, connectFn);
+}
+
+export async function probeSocket(socketPath, options) {
+  return (await probeSocketDetailed(socketPath, options)).state;
 }
 
 function assertSocketPathFits(socketPath) {

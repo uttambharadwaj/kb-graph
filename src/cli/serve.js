@@ -1,9 +1,20 @@
 import { readFlagValue } from './flags.js';
 import { connectDaemonClient } from '../daemon-client.js';
-import { DAEMON_SOCKET_PATH, probeSocket, startDaemon } from '../daemon.js';
+import { DAEMON_SOCKET_PATH, probeSocketDetailed, startDaemon } from '../daemon.js';
+import { formatShimPathSummary, summarizeShimPaths } from '../shim-path-meter.js';
+import { formatFallbackToolSummary, summarizeFallbackTools } from '../fallback-tool-meter.js';
+import { formatExtractionSummary, summarizeExtractions } from '../extract-meter.js';
+import { formatResidentProcessSummary, inspectResidentProcesses } from '../resident-census.js';
 
 function socketPathFrom(args) {
   return readFlagValue(args, '--socket') || DAEMON_SOCKET_PATH;
+}
+
+function printDiagnostics() {
+  console.log(formatResidentProcessSummary(inspectResidentProcesses()));
+  console.log(formatShimPathSummary(summarizeShimPaths()));
+  console.log(formatFallbackToolSummary(summarizeFallbackTools()));
+  console.log(formatExtractionSummary(summarizeExtractions()));
 }
 
 /**
@@ -13,7 +24,8 @@ function socketPathFrom(args) {
  * socket but cannot serve as down.
  */
 async function printStatus(socketPath) {
-  const occupancy = await probeSocket(socketPath);
+  const probe = await probeSocketDetailed(socketPath);
+  const occupancy = probe.state;
   if (occupancy !== 'live') {
     // A refused connect cannot tell a dead daemon from one that has stopped
     // accepting while it drains, so the message must not claim either.
@@ -21,9 +33,12 @@ async function printStatus(socketPath) {
       absent: 'no socket',
       stale: 'not accepting connections — stopped, or draining a shutdown',
       occupied: 'something that is not a socket is in the way',
-      unknown: 'socket present but unreachable',
+      unknown: probe.reason === 'timeout'
+        ? 'socket present but probe timed out'
+        : `socket present but local probe failed${probe.errorCode ? ` (${probe.errorCode})` : ''}`,
     };
     console.log(`kb daemon: down (${detail[occupancy]}) — ${socketPath}`);
+    printDiagnostics();
     process.exit(1);
   }
 
@@ -33,10 +48,12 @@ async function printStatus(socketPath) {
     const info = client.getServerVersion();
     const { tools } = await client.listTools();
     console.log(`kb daemon: up — ${socketPath} (${info?.name} ${info?.version}, ${tools.length} tools)`);
+    printDiagnostics();
   } catch (err) {
     // Something holds the socket but does not speak MCP: neither up nor safe
     // to clear. Say so rather than reporting either.
     console.log(`kb daemon: listening but not answering MCP (${err.message}) — ${socketPath}`);
+    printDiagnostics();
     process.exit(1);
   } finally {
     await client?.close().catch(() => {});

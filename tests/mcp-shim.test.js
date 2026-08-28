@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,6 +11,7 @@ import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
 import { resolveHarnessAncestry } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
+import { SHIM_PATH_LOG } from '../src/shim-path-meter.js';
 import { startWedgedDaemon } from './helpers/wedged-daemon.js';
 
 // Drives `kb mcp-shim` as a real child process against a real in-process
@@ -79,6 +80,10 @@ function collectStderr(child) {
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk) => { text += chunk; });
   return () => text;
+}
+
+function lastShimPathEvent() {
+  return JSON.parse(readFileSync(SHIM_PATH_LOG, 'utf8').trim().split('\n').at(-1));
 }
 
 /**
@@ -163,6 +168,7 @@ describe('kb mcp-shim', () => {
       const result = await driver.call('tools/call', { name: 'kb_search', arguments: { query: 'mcp shim smoke test' } });
       assert.ok(!result.result.isError, `kb_search failed: ${JSON.stringify(result.result.content)}`);
       assert.strictEqual(result.result.content[0].type, 'text');
+      assert.strictEqual(lastShimPathEvent().path, 'daemon');
     } finally {
       child.kill();
     }
@@ -208,6 +214,10 @@ describe('kb mcp-shim', () => {
       const init = await withDeadline(initialize(driver), 15_000, 'the fallback in-process server to answer initialize');
       assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
       await until(() => stderr().includes('kb mcp-shim: daemon unreachable, serving in-process'), 'the fallback stderr line');
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'fallback', reason: 'unreachable' },
+      );
     } finally {
       child.kill();
     }
@@ -224,6 +234,10 @@ describe('kb mcp-shim', () => {
       const init = await withDeadline(initialize(driver), 15_000, 'the fallback in-process server to answer initialize despite the wedged daemon');
       assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
       await until(() => stderr().includes('kb mcp-shim: daemon unresponsive, serving in-process'), 'the unresponsive fallback stderr line');
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'fallback', reason: 'unresponsive' },
+      );
     } finally {
       child.kill();
       await wedged.close();
@@ -252,19 +266,48 @@ describe('kb mcp-shim', () => {
     assert.strictEqual(readTimeoutMs({ KB_SHIM_PROBE_TIMEOUT_MS: '150' }), 150);
   });
 
-  it('exits nonzero promptly when the daemon dies mid-session', { timeout: CASE_TIMEOUT_MS }, async () => {
-    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
+  it('keeps an initialized session usable when the daemon restarts', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    const daemon = await startTestDaemon({ socketPath });
     const child = spawnShim([`--socket=${daemon.socketPath}`]);
     const stderr = collectStderr(child);
     const driver = jsonRpcDriver(child);
-    await initialize(driver);
+    try {
+      await initialize(driver);
 
-    liveDaemons.delete(daemon);
-    await daemon.close();
+      liveDaemons.delete(daemon);
+      await daemon.close();
+      await until(() => stderr().includes('daemon connection closed unexpectedly; reconnecting'), 'the reconnect notice');
 
-    const { code } = await withDeadline(waitForExit(child), 5_000, 'the shim to exit after the daemon dies');
-    assert.notStrictEqual(code, 0, 'a mid-session daemon death must not report success');
-    assert.match(stderr(), /daemon connection closed unexpectedly/);
+      const unavailable = await driver.call('tools/list');
+      assert.match(unavailable.error.message, /daemon is reconnecting/);
+
+      await startTestDaemon({ socketPath });
+      await until(() => stderr().includes('daemon connection restored'), 'the restored notice');
+      const list = await Promise.race([
+        driver.call('tools/list'),
+        waitForExit(child).then(({ code, signal }) => assert.fail(`shim exited during recovery: code=${code} signal=${signal}`)),
+      ]);
+
+      assert.ok(list.result.tools.some((tool) => tool.name === 'kb_search'), 'kb_search must remain registered');
+      assert.ok(
+        driver.notifications.some((notification) => notification.method === 'notifications/tools/list_changed'),
+        'recovery must invalidate the client\'s cached tool list',
+      );
+      const recoveryRows = readFileSync(SHIM_PATH_LOG, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .filter((row) => row.event === 'shim_recovery');
+      const restored = recoveryRows.findLast((row) => row.outcome === 'restored');
+      assert.ok(restored, 'a successful recovery must be metered');
+      assert.ok(
+        recoveryRows.some((row) => row.recovery_id === restored.recovery_id && row.outcome === 'started'),
+        'the recovery denominator must include the matching start',
+      );
+    } finally {
+      child.kill();
+    }
   });
 
   // The whole identity path in production shape: a real shim child resolving

@@ -10,6 +10,7 @@ const HOOKS = {
   'wakeup-hook': async () => (await import('../../src/cli/wakeup-hook.js')).wakeupHook,
   'prompt-hint': async () => (await import('../../src/cli/prompt-hint.js')).promptHint,
   'trigger-hook': async () => (await import('../../src/cli/trigger-hook.js')).triggerHook,
+  'precompact-hook': async () => (await import('../../src/cli/precompact-hook.js')).precompactHook,
 };
 const fn = await HOOKS[name]();
 await fn(args);
