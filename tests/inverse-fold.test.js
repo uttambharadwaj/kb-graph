@@ -55,6 +55,8 @@ describe('inverse predicate folding', () => {
   // spellings have to land on one edge.
   for (const [emitted, canonical] of [
     [triple('tkt-99', 'fixed_in', 'pr #48'), triple('pr #48', 'fixes', 'tkt-99')],
+    [triple('tkt-99', 'fixed_via', 'pr #48'), triple('pr #48', 'fixes', 'tkt-99')],
+    [triple('tkt-99', 'fixed_with', 'pr #48'), triple('pr #48', 'fixes', 'tkt-99')],
     [triple('pr #48', 'written_by', 'robin'), triple('robin', 'authored', 'pr #48')],
     [triple('robin', 'approved', 'pr #48'), triple('pr #48', 'approved_by', 'robin')],
   ]) {

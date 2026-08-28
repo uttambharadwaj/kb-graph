@@ -92,6 +92,8 @@
     "implemented_by": "implements",
     "fixed_in": "fixes",
     "fixed_by": "fixes",
+    "fixed_via": "fixes",
+    "fixed_with": "fixes",
     "resolved_by": "resolves",
     "written_by": "authored",
     "approved": "approved_by",
@@ -108,9 +110,6 @@
     "implemented_in": "implements",
     "implemented_via": "implements",
     "implemented_as": "implements",
-    "fixed_via": "fixes",
-    "fixed_with": "fixes",
-
     "merged": "merged_to",
     "merged_into": "merged_to",
     "merged_at": "merged_to",

@@ -57,8 +57,6 @@ describe('the predicate fold', () => {
     ['implemented_in', 'implements'],
     ['implemented_via', 'implements'],
     ['implemented_as', 'implements'],
-    ['fixed_via', 'fixes'],
-    ['fixed_with', 'fixes'],
     ['requires', 'depends_on'],
     ['needs', 'depends_on'],
     ['handles', 'supports'],
@@ -174,6 +172,23 @@ describe('every write path stores the folded predicate', () => {
     }));
     assert.strictEqual(res.predicate, 'merged_to', 'the reply named a spelling it did not store');
     assert.deepStrictEqual(storedPredicates('pr #4001'), ['merged_to']);
+  });
+
+  it('kb_fact_add swaps passive fix predicates before storing them', async () => {
+    for (const [i, predicate] of ['fixed_via', 'fixed_with'].entries()) {
+      const ticket = `tkt-${5001 + i}`;
+      const pullRequest = `pr #${6001 + i}`;
+      const res = replied(await tool('kb_fact_add').handler({
+        subject: ticket, predicate, object: pullRequest,
+      }));
+
+      assert.deepStrictEqual(
+        { subject: res.subject, predicate: res.predicate, object: res.object },
+        { subject: pullRequest, predicate: 'fixes', object: ticket },
+      );
+      assert.deepStrictEqual(storedPredicates(pullRequest), ['fixes']);
+      assert.deepStrictEqual(storedPredicates(ticket), []);
+    }
   });
 
   it('kb_extract consolidation — through consolidate', () => {
