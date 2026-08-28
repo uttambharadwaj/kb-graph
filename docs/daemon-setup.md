@@ -66,7 +66,7 @@ The templates below include both. Fill in the placeholder paths (`which node`,
     <key>RunAtLoad</key>
     <true/>
     <key>ThrottleInterval</key>
-    <integer>10</integer>
+    <integer>5</integer>
     <key>StandardOutPath</key>
     <string>/Users/YOU/.knowledge-base/logs/kb-serve.log</string>
     <key>StandardErrorPath</key>
@@ -99,7 +99,7 @@ Description=kb-graph resident MCP daemon
 ExecStart=/path/to/node /path/to/kb-graph/bin/kb.js serve
 WorkingDirectory=/path/to/kb-graph
 Restart=always
-RestartSec=10
+RestartSec=5
 Environment=PATH=/path/to/node-bin-dir:/path/to/claude-bin-dir:/usr/bin:/bin
 Environment=CLAUDE_PATH=/path/to/claude
 StandardOutput=append:%h/.knowledge-base/logs/kb-serve.log
@@ -127,6 +127,8 @@ launchctl kickstart -k gui/$(id -u)/com.kb.serve
 systemctl --user restart kb-serve
 ```
 
+The templates retain a five-second restart throttle: short enough to bound the
+single-service outage, but still a backoff if the daemon enters a crash loop.
 Cold start can take several seconds (embedding model load) — `kb serve
 --status` may briefly report down right after a restart. Sessions attached
 through the shim keep their stdio transport and tool registry: interrupted
