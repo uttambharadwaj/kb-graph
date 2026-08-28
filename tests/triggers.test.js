@@ -131,6 +131,15 @@ describe('filterTriggers — pinned tier', () => {
     // NOTE's spans do contain `apply`, so grounding passes; shape is the blocker.
     assert.strictEqual(filterTriggers([['apply']], NOTE, { corpus: CORPUS, pinned: true }), '');
   });
+
+  it('a block policy is stored only when the trigger is also human-pinned', () => {
+    const proposed = [['sess1-marker-cmd']];
+    const unpinned = JSON.parse(filterTriggers(proposed, NOTE, { corpus: CORPUS, block: true }));
+    assert.strictEqual('block' in unpinned[0], false);
+
+    const pinned = JSON.parse(filterTriggers(proposed, NOTE, { corpus: CORPUS, pinned: true, block: true }));
+    assert.strictEqual(pinned[0].block, true);
+  });
 });
 
 describe('filterTriggers — coverage floor', () => {
@@ -415,6 +424,14 @@ describe('matchCommand — entry handling', () => {
     );
   });
 
+  it('never excludes a blocking entry just because its advisory already fired', () => {
+    const entry = { id: 'a', title: 'x', block: true, patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 5, sessions: 2 }] };
+    assert.deepStrictEqual(
+      matchCommand('gh pr merge 78 --delete-branch', [entry], { alreadyFired: new Set(['a']) }),
+      [{ id: 'a', title: 'x', tier: undefined, block: true, hits: 5 }],
+    );
+  });
+
   it('tolerates an entry whose patterns is empty', () => {
     const entry = { id: 'd', title: 'No patterns yet', patterns: [] };
     assert.deepStrictEqual(matchCommand('gh pr merge --delete-branch', [entry]), []);
@@ -492,6 +509,28 @@ describe('rebuildTriggerIndex / loadTriggerIndex', () => {
     const longEntry = loaded.find(e => e.id === long.lastInsertRowid);
     assert.strictEqual(longEntry.excerpt.length, 801);
     assert.strictEqual(longEntry.excerpt, `${'x'.repeat(800)}…`);
+  });
+
+  it('materializes an explicit block policy only for observed or verified notes', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, tier, triggers) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    const observed = insert.run(
+      'Observed fatal command', 'Never run `gh pr merge --delete-branch` on a stack base.', 'lesson', '', 'observed',
+      JSON.stringify([{ parts: ['gh pr merge', '--delete-branch'], hits: 2, sessions: 1, block: true }]),
+    );
+    const inferred = insert.run(
+      'Inferred fatal command', 'Maybe avoid `git push --force`.', 'lesson', '', 'inferred',
+      JSON.stringify([{ parts: ['git push', '--force'], hits: 1, sessions: 1, block: true }]),
+    );
+
+    const idxPath = join(KB_DIR, 'trigger-index-block-test.json');
+    rebuildTriggerIndex(idxPath);
+    const loaded = loadTriggerIndex(idxPath);
+    assert.strictEqual(loaded.find(e => e.id === observed.lastInsertRowid).block, true);
+    assert.strictEqual('block' in loaded.find(e => e.id === inferred.lastInsertRowid), false,
+      'an unconfirmed model conclusion must never acquire command-blocking authority');
   });
 
   it('a missing path loads as no entries', () => {

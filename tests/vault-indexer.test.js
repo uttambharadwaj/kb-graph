@@ -176,6 +176,37 @@ Never run \`git push --force\` here.`);
     }
   });
 
+  it('carries a human-pinned triggers_block policy into the resident hook index', async () => {
+    writeTestCorpus();
+    const relPath = '05_research/blocking-trigger-note.md';
+    writeFileSync(join(vaultDir, relPath), `---
+title: Never delete a stacked PR base
+type: lesson
+tags: [git]
+tier: observed
+triggers: ["gh pr merge && --delete-branch"]
+triggers_pinned: true
+triggers_block: true
+---
+
+Never run \`gh pr merge --delete-branch\` on the base of a stacked PR.`);
+
+    try {
+      const result = await indexVaultFile(vaultDir, relPath);
+      assert.deepStrictEqual(result.errors, []);
+      const row = getDb().prepare('SELECT id, triggers FROM documents WHERE source = ?').get(`vault:${relPath}`);
+      const kept = JSON.parse(row.triggers);
+      assert.strictEqual(kept[0].block, true);
+
+      const entry = loadTriggerIndex(TRIGGER_INDEX_PATH).find(e => e.id === row.id);
+      assert.strictEqual(entry.block, true);
+    } finally {
+      const row = getDb().prepare('SELECT document_id FROM vault_files WHERE vault_path = ?').get(relPath);
+      if (row?.document_id) getDb().prepare('DELETE FROM documents WHERE id = ?').run(row.document_id);
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+    }
+  });
+
   it('stores NULL, never an empty string, when nothing survives the vet', async () => {
     writeTestCorpus();
     const relPath = '05_research/no-trigger-note.md';

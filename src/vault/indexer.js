@@ -282,10 +282,14 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
   // not command text. NULL, never '', when nothing survives — rebuildTrigger
   // Index assumes every non-NULL triggers column is valid JSON.
   const priorTriggers = getDb().prepare('SELECT triggers FROM documents WHERE id = ?').get(docId)?.triggers ?? null;
+  const pinnedTriggers = !!parsed.frontmatter.triggers_pinned;
   const vettedTriggers = filterTriggers(parsed.frontmatter.triggers, {
     title: parsed.title,
     content: parsed.body,
-  }, { pinned: !!parsed.frontmatter.triggers_pinned }) || null;
+  }, {
+    pinned: pinnedTriggers,
+    block: pinnedTriggers && parsed.frontmatter.triggers_block === true,
+  }) || null;
   getDb().prepare('UPDATE documents SET triggers = ? WHERE id = ?').run(vettedTriggers, docId);
   const triggersChanged = vettedTriggers !== priorTriggers;
   // The index materializer does a full table scan — worth paying only when

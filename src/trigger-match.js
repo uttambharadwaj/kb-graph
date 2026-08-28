@@ -193,7 +193,7 @@ export function patternMatchesSegment(parts, segment) {
   return rest.every(p => partAppears(p, segment));
 }
 
-// entries = [{ id, title, patterns: [{ parts, hits, sessions }] }]. A note
+// entries = [{ id, title, block?, patterns: [{ parts, hits, sessions }] }]. A note
 // fires when ANY of its patterns matches ANY segment of the command — the
 // same predicate filterTriggers grades the corpus with, so the hook can never
 // fire on something the vet would have rejected as noise (or vice versa).
@@ -201,7 +201,10 @@ export function matchCommand(command, entries, { alreadyFired = new Set() } = {}
   const segments = commandSegments(command);
   const fired = [];
   for (const entry of entries) {
-    if (alreadyFired.has(entry.id)) continue;
+    // Advisory notes are once-per-session. A blocking policy is not: allowing
+    // the second identical destructive command would make the first denial a
+    // one-shot warning rather than an invariant.
+    if (!entry.block && alreadyFired.has(entry.id)) continue;
     let rarest = null;
     for (const { parts, hits } of entry.patterns || []) {
       if (parts.length && segments.some(seg => patternMatchesSegment(parts, seg))) {
@@ -212,9 +215,16 @@ export function matchCommand(command, entries, { alreadyFired = new Set() } = {}
     // rebuilt under this change) must produce a match object with no excerpt
     // key at all, not one holding `undefined` — callers and tests alike
     // distinguish "key absent" from "key present but empty".
-    if (rarest !== null) fired.push({ id: entry.id, title: entry.title, tier: entry.tier, ...(entry.excerpt ? { excerpt: entry.excerpt } : {}), hits: rarest });
+    if (rarest !== null) fired.push({
+      id: entry.id,
+      title: entry.title,
+      tier: entry.tier,
+      ...(entry.block ? { block: true } : {}),
+      ...(entry.excerpt ? { excerpt: entry.excerpt } : {}),
+      hits: rarest,
+    });
   }
-  return fired.sort((a, b) => a.hits - b.hits);
+  return fired.sort((a, b) => Number(b.block) - Number(a.block) || a.hits - b.hits);
 }
 
 // The hook must never break a tool call on a KB problem, so a missing or

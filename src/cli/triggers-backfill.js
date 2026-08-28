@@ -63,7 +63,11 @@ export function revetTriggers() {
     }
     if (!('triggers' in fm)) continue;
     seen += 1;
-    const vetted = filterTriggers(fm.triggers, { title: row.title, content: row.content }, { pinned: !!fm.triggers_pinned }) || null;
+    const pinned = !!fm.triggers_pinned;
+    const vetted = filterTriggers(fm.triggers, { title: row.title, content: row.content }, {
+      pinned,
+      block: pinned && fm.triggers_block === true,
+    }) || null;
     if (vetted !== row.triggers) {
       changed += 1;
       update.run(vetted, row.document_id);

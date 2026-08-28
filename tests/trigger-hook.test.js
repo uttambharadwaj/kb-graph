@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  decideAndRecord, buildTriggerMessage, resolveSession, MAX_SESSION_WARNINGS, FALLBACK_SESSION,
+  decideAndRecord, buildTriggerMessage, computeTriggerHook, resolveSession, MAX_SESSION_WARNINGS, FALLBACK_SESSION,
   TRIGGERS_LOG_DIR, TRIGGER_HOOK_ENABLED_FLAG,
 } from '../src/cli/trigger-hook.js';
 
@@ -27,6 +27,7 @@ function runHook(hookInput, extraEnv = {}) {
 }
 
 const ENTRY = { id: 7, title: 'Force-delete branch', tier: 'observed', patterns: [{ parts: ['gh pr merge', '--delete-branch'], hits: 2, sessions: 1 }] };
+const BLOCKING_ENTRY = { ...ENTRY, block: true };
 const INDEX = [ENTRY];
 const BASH = (command, extra = {}) => ({ session_id: 's1', tool_name: 'Bash', tool_input: { command }, cwd: '/x', ...extra });
 
@@ -114,6 +115,43 @@ describe('decideAndRecord — building the warning', () => {
     const inferredWithExcerpt = [{ ...ENTRY, tier: 'inferred', excerpt: 'body text' }];
     const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), { index: inferredWithExcerpt, enabled: true });
     assert.match(decision.message, /unconfirmed model conclusion — treat as a lead\) may apply to this command\.\n/);
+  });
+});
+
+describe('decideAndRecord — explicit blocking triggers', () => {
+  it('blocks a matching command even while advisory trigger emission is disabled', () => {
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), {
+      index: [BLOCKING_ENTRY],
+      enabled: false,
+    });
+    assert.strictEqual(decision.block, true);
+    assert.strictEqual(decision.emit, true);
+    assert.strictEqual(decision.firedId, null, 'blocking decisions are never session-deduped');
+    assert.strictEqual(JSON.parse(decision.logLine).blocked, true);
+  });
+
+  it('still blocks after the advisory cap and after the same note already fired', () => {
+    const decision = decideAndRecord(BASH('gh pr merge 1 --delete-branch'), {
+      index: [BLOCKING_ENTRY],
+      enabled: true,
+      fired: [7, 8],
+    });
+    assert.strictEqual(decision.block, true);
+    assert.strictEqual(decision.emit, true);
+  });
+
+  it('renders the host-supported deny envelope with a non-empty reason', () => {
+    const { output, plan } = computeTriggerHook(BASH('gh pr merge 1 --delete-branch'), {
+      commit: false,
+      index: [BLOCKING_ENTRY],
+      enabled: false,
+      fired: [],
+    });
+    const parsed = JSON.parse(output);
+    assert.strictEqual(parsed.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /KB TRIGGER: note #7/);
+    assert.match(parsed.hookSpecificOutput.additionalContext, /KB TRIGGER: note #7/);
+    assert.strictEqual(plan.marker, null, 'a denial must not burn a one-shot advisory marker');
   });
 });
 
@@ -320,6 +358,26 @@ describe('triggerHook — marker and log round trip', () => {
     assert.strictEqual(row.session, 'sess-integ-1');
     assert.strictEqual(row.emitted, false);
     assert.deepStrictEqual(row.matched, [{ id: 7, hits: 2 }]);
+  });
+
+  it('blocking entries deny by default and deny again on a repeated call', () => {
+    const kbDir = process.env.KB_DIR;
+    const indexPath = join(kbDir, 'trigger-index.json');
+    writeFileSync(indexPath, JSON.stringify([BLOCKING_ENTRY]));
+    const input = BASH('gh pr merge 1 --delete-branch', { session_id: 'sess-blocking' });
+
+    try {
+      for (let call = 1; call <= 2; call += 1) {
+        const stdout = runHook(input);
+        const parsed = JSON.parse(stdout);
+        assert.strictEqual(parsed.hookSpecificOutput.permissionDecision, 'deny', `call ${call}`);
+        assert.match(parsed.hookSpecificOutput.permissionDecisionReason, /KB TRIGGER: note #7/);
+      }
+      assert.strictEqual(existsSync(join(TRIGGERS_LOG_DIR, 'sess-blocking.json')), false,
+        'a blocking note is not consumed after one denial');
+    } finally {
+      writeFileSync(indexPath, JSON.stringify(INDEX));
+    }
   });
 
   it('enabled via the flag file: emits, writes the marker, and a second call for the same note is silent', () => {
