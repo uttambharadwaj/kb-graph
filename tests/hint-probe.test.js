@@ -46,4 +46,10 @@ describe('hint-probe', () => {
     hintProbe();
     assert.strictEqual(count(), before);
   });
+
+  it('can carry the scorer explanation without reimplementing it', () => {
+    const hit = hintProbe(undefined, { explain: true }).rows.find(r => r.hits.length)?.hits[0];
+    assert.ok(hit?.evidence?.families?.length >= 2, JSON.stringify(hit));
+    assert.ok(hit.evidence.families.every(family => Array.isArray(family.sources)));
+  });
 });
