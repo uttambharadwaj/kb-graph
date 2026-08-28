@@ -48,6 +48,17 @@ const agentHookFiles = (home = homedir()) =>
 // events there.
 const HOOK_SPECS = [
   {
+    event: 'PreCompact',
+    matcher: 'manual|auto',
+    subcommand: 'precompact-hook',
+    agents: [AGENT.CLAUDE],
+    // The pre-2026-08-26 inline hook printed these phrases as plain stdout.
+    // Current Claude Code parses PreCompact stdout as decision JSON, so this
+    // exact install must be replaced rather than left beside the silent hook.
+    legacy: command => command.includes('CRITICAL PRESERVATION INSTRUCTIONS FOR THIS SUMMARY:')
+      && command.includes('Git state at compaction:'),
+  },
+  {
     event: 'SessionStart',
     matcher: { [AGENT.CLAUDE]: 'startup|resume|clear|compact', [AGENT.CODEX]: 'startup|resume|clear' },
     subcommand: 'wakeup-hook',
@@ -103,6 +114,12 @@ export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLA
   for (const spec of HOOK_SPECS) {
     if (!spec.agents.includes(agent)) continue;
     const entries = (next.hooks[spec.event] = next.hooks[spec.event] ?? []);
+    if (spec.legacy) {
+      for (let i = entries.length - 1; i >= 0; i--) {
+        entries[i].hooks = (entries[i].hooks ?? []).filter(hook => !spec.legacy(hook.command ?? ''));
+        if (entries[i].hooks.length === 0) entries.splice(i, 1);
+      }
+    }
     const already = entries.some(e => (e.hooks ?? []).some(h => identifies(spec, h.command, agent)));
     if (already) continue;
     const entry = { hooks: [{ type: 'command', command: commandFor(spec, { nodeBin, kbJsPath, agent }) }] };

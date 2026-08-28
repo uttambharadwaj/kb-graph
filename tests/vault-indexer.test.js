@@ -4,11 +4,11 @@
 import './helpers/tmp-kb.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getDb } from '../src/db.js';
-import { scanVault, indexVaultFile } from '../src/vault/indexer.js';
+import { scanVault, indexVaultFile, pruneMissingVaultFiles, VAULT_INDEX_RACE_LOG } from '../src/vault/indexer.js';
 import { CORPUS_PATH, TRIGGER_INDEX_PATH, loadTriggerIndex, rebuildTriggerIndex } from '../src/trigger-relevance.js';
 
 // The indexer's triggers wiring uses filterTriggers's DEFAULT corpus (no
@@ -312,5 +312,50 @@ Watch for \`rare-marker-cmd\` in history.`);
     } finally {
       rmSync(outsideFile, { force: true });
     }
+  });
+
+  it('does not delete an acknowledged note that appears after a full-vault scan', () => {
+    const relPath = '05_research/concurrent-write.md';
+    const filePath = join(vaultDir, relPath);
+    const doc = getDb().prepare(
+      'INSERT INTO documents (title, content, source, doc_type, file_path) VALUES (?, ?, ?, ?, ?)'
+    ).run('Concurrent write', 'Acknowledged before the stale scan pruned.', `vault:${relPath}`, 'research', filePath);
+    getDb().prepare(
+      'INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type) VALUES (?, ?, ?, ?, ?)'
+    ).run(relPath, 'new-write-hash', doc.lastInsertRowid, 'Concurrent write', 'research');
+    writeFileSync(filePath, '# Concurrent write\n\nStill present on disk.');
+
+    try {
+      const result = pruneMissingVaultFiles(vaultDir, new Map([[relPath, 'old-scan-hash']]), new Set());
+
+      assert.deepStrictEqual(result, { deleted: 0, preserved: 1 });
+      assert.ok(getDb().prepare('SELECT 1 FROM documents WHERE id = ?').get(doc.lastInsertRowid));
+      assert.ok(getDb().prepare('SELECT 1 FROM vault_files WHERE vault_path = ?').get(relPath));
+      const event = JSON.parse(readFileSync(VAULT_INDEX_RACE_LOG, 'utf8').trim().split('\n').at(-1));
+      assert.deepStrictEqual(
+        { event: event.event, vault_path: event.vault_path },
+        { event: 'delete_skipped_file_present', vault_path: relPath },
+      );
+    } finally {
+      rmSync(filePath, { force: true });
+      getDb().prepare('DELETE FROM vault_files WHERE vault_path = ?').run(relPath);
+      getDb().prepare('DELETE FROM documents WHERE id = ?').run(doc.lastInsertRowid);
+    }
+  });
+
+  it('still deletes an indexed note whose source file is actually gone', () => {
+    const relPath = '05_research/actually-deleted.md';
+    const doc = getDb().prepare(
+      'INSERT INTO documents (title, content, source, doc_type) VALUES (?, ?, ?, ?)'
+    ).run('Actually deleted', 'No source file remains.', `vault:${relPath}`, 'research');
+    getDb().prepare(
+      'INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type) VALUES (?, ?, ?, ?, ?)'
+    ).run(relPath, 'deleted-hash', doc.lastInsertRowid, 'Actually deleted', 'research');
+
+    const result = pruneMissingVaultFiles(vaultDir, new Map([[relPath, 'deleted-hash']]), new Set());
+
+    assert.deepStrictEqual(result, { deleted: 1, preserved: 0 });
+    assert.strictEqual(getDb().prepare('SELECT 1 FROM documents WHERE id = ?').get(doc.lastInsertRowid), undefined);
+    assert.strictEqual(getDb().prepare('SELECT 1 FROM vault_files WHERE vault_path = ?').get(relPath), undefined);
   });
 });

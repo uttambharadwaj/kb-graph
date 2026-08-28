@@ -36,6 +36,12 @@ const COMMANDS = {
     valueEq: ['--socket'],
     run: a => import('../src/cli/mcp-shim.js').then(m => m.runMcpShimCli(a)),
   },
+  tool: {
+    summary: 'Invoke an allowlisted end-of-session KB tool with JSON from stdin or --input <file>',
+    args: '<name>',
+    value: ['--input'],
+    run: a => import('../src/cli/tool-cli.js').then(m => m.runToolCli(a)),
+  },
   serve: {
     summary: 'Run the resident MCP daemon on a unix socket (--status probes a running one, exit 1 when down)',
     boolean: ['--status'],
@@ -137,6 +143,10 @@ const COMMANDS = {
     summary: 'Print compact KB briefing (for SessionStart hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
     value: ['--agent'],
     run: a => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook(a)),
+  },
+  'precompact-hook': {
+    summary: 'Capture a silent continuity snapshot before Claude Code compacts the session',
+    run: () => import('../src/cli/precompact-hook.js').then(m => m.precompactHook()),
   },
   'prompt-hint': {
     summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',

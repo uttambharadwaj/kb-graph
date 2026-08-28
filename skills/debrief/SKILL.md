@@ -85,6 +85,30 @@ Size guide: gotcha lessons 3–8 lines; patterns 8–15; workflows 5–15 (comma
 
 Confirm counts match your writes, then `kb_search` one of the titles to confirm indexing. If any call failed, fix it before considering the debrief complete.
 
+## MCP transport fallback
+
+If the `kb_*` MCP tools are unavailable, continue automatically through the
+sanctioned direct CLI. Pipe the same JSON arguments you would have passed to
+the MCP tool into `kb tool <name>`; the CLI applies the same schema, handler,
+indexing, deduplication, redaction, and tool meter. It supports every operation
+this skill needs: `kb_search`, `kb_read`, `kb_check_duplicate`, `kb_write`,
+`kb_supersede`, `kb_promote`, `kb_fact_add`, `kb_fact_invalidate`, `kb_extract`,
+`kb_capture_session`, and `kb_capture_fix`.
+
+```bash
+printf '%s\n' '{"query":"topic","tags":"general"}' | kb tool kb_search
+printf '%s\n' '{"content":"exact candidate body"}' | kb tool kb_check_duplicate
+printf '%s\n' '{"title":"Title","type":"lesson","content":"Body"}' | kb tool kb_write
+```
+
+Treat a zero exit as success, exit 1 as a tool failure, and exit 2 as invalid
+input or a disallowed tool. Read and audit the output exactly as you would an
+MCP result. Verify the final write with `kb tool kb_search`. Do not write a
+pending vault markdown file and do not pass one to `kb ingest`: ingestion
+creates a detached second document instead of indexing the vault note. If the
+CLI itself is unavailable, preserve the exact JSON payloads in one pending
+file as the last-resort queue and report that capture remains incomplete.
+
 ## Notes
 
 - **Mid-session debrief:** for long sessions, run /debrief partway through so early insights survive context compression. Duplicate checks keep repeat runs safe.

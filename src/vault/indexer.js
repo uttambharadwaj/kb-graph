@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'fs';
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, extname, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { parseVaultNote } from './parser.js';
@@ -9,8 +9,11 @@ import {
   insertDocument, updateDocumentFull, getDb,
   getVaultFile, upsertVaultFile, deleteVaultFile, getAllVaultPaths,
 } from '../db.js';
+import { LOGS_DIR } from '../paths.js';
 
 let indexQueue = Promise.resolve();
+
+export const VAULT_INDEX_RACE_LOG = join(LOGS_DIR, 'vault-index-races.jsonl');
 
 const IGNORE_DIRS = new Set(['.obsidian', '.trash', '.git', '_assets', '_system', 'node_modules', 'textgenerator']);
 const IGNORE_FILES = new Set(['.DS_Store', 'Thumbs.db']);
@@ -115,8 +118,13 @@ async function _indexVaultFile(vaultPath, vaultFilePath, { embeddings = false, d
 }
 
 async function _indexVault(vaultPath, { embeddings = false } = {}) {
-  const files = scanVault(vaultPath);
+  // Snapshot the derived index before the source-of-truth files. A write that
+  // lands after this point is absent from existingPaths and cannot be pruned
+  // by this run. The final on-disk check below closes the remaining same-path
+  // recreation window across separate KB processes, whose module-local queues
+  // cannot serialize one another.
   const existingPaths = new Map(getAllVaultPaths().map(r => [r.vault_path, r.content_hash]));
+  const files = scanVault(vaultPath);
   const seenPaths = new Set();
 
   let indexed = 0;
@@ -160,15 +168,54 @@ async function _indexVault(vaultPath, { embeddings = false } = {}) {
     }
   }
 
-  // Delete tracking entries for files that no longer exist in vault
+  const pruned = pruneMissingVaultFiles(vaultPath, existingPaths, seenPaths);
+  deleted += pruned.deleted;
+
+  return { indexed, skipped, deleted, preserved: pruned.preserved, embedded, errors, total: files.length };
+}
+
+function recordPreservedWrite(vaultPath) {
+  try {
+    mkdirSync(LOGS_DIR, { recursive: true });
+    appendFileSync(VAULT_INDEX_RACE_LOG, `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: 'delete_skipped_file_present',
+      vault_path: vaultPath,
+      pid: process.pid,
+    })}\n`);
+  } catch {
+    // Race telemetry cannot be allowed to turn a safe reindex into a failure.
+  }
+}
+
+export function pruneMissingVaultFiles(vaultPath, existingPaths, seenPaths) {
+  let deleted = 0;
+  let preserved = 0;
+
   for (const [path] of existingPaths) {
-    if (!seenPaths.has(path)) {
-      deleteVaultFile(path);
-      deleted++;
+    if (seenPaths.has(path)) continue;
+
+    // The scan is a point-in-time view. A separate MCP/CLI process can write
+    // and index a note after its directory has already been walked. Disk is
+    // authoritative, so defer deletion when a valid source file now exists;
+    // the next full pass will index it if this one did not.
+    let current = null;
+    try {
+      current = statSync(join(vaultPath, path), { throwIfNoEntry: false });
+    } catch {
+      // A broken link or unreadable path is not a live vault note.
     }
+    if (current?.isFile() && extname(path).toLowerCase() === '.md') {
+      preserved++;
+      recordPreservedWrite(path);
+      continue;
+    }
+
+    deleteVaultFile(path);
+    deleted++;
   }
 
-  return { indexed, skipped, deleted, embedded, errors, total: files.length };
+  return { deleted, preserved };
 }
 
 async function embedIfMissing(relPath, embeddings, errors) {

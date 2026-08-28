@@ -42,8 +42,8 @@ Most memory systems fix this with discipline — *remember to save notes, rememb
 
 ### 1. Push, not pull
 
-Two hooks (installed by `kb setup` into Claude Code's `settings.json` and Codex's
-`hooks.json`) mean your agent never starts cold:
+Hooks installed by `kb setup` into Claude Code's `settings.json` and Codex's
+`hooks.json` mean your agent never starts cold:
 
 - **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
 
@@ -64,6 +64,12 @@ Two hooks (installed by `kb setup` into Claude Code's `settings.json` and Codex'
   are across the store — a measure that does not grow just because the prompt is
   long.
 
+- **Before compaction — continuity capture.** Claude Code's `PreCompact` hook
+  silently saves a bounded snapshot of recent session context and git state.
+  The compact session-start hook restores it after compaction, then consumes the
+  snapshot. Capture and recovery outcomes are recorded in
+  `~/.knowledge-base/logs/compact-hooks.jsonl`.
+
 Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (token-efficient briefing) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
 
 ### 2. Capture that doesn't rely on discipline
@@ -71,6 +77,10 @@ Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + sem
 - **Nightly harvest (03:30).** A scheduled job reads your agents' session transcripts and extracts the durable parts — lessons, decisions, fixes — as structured notes, deduplicated against what the KB already knows (`kb_check_duplicate` runs before every write). You debugged something gnarly at 2am and told no one? The harvest caught it. It does not extract *facts* unless you ask it to (`KB_HARVEST_FACTS=1`, or `kb harvest --facts`): unattended triple extraction runs a model call per chunk of every transcript, which is where nearly all the token cost of this system lives, and against an open predicate vocabulary most of what it writes is entities mentioned once that no later fact ever matches. Left off, facts come from `/debrief` and `kb_extract` — chosen rather than swept.
 
 - **Deliberate capture — `/debrief`.** At the end of a substantial session, run the bundled `/debrief` skill (installed to `~/.claude/skills/` by setup): it scans the conversation for lessons, decisions, workflows, and state changes, checks each against what the KB already knows, and writes the survivors with you approving the list. Deliberate capture is higher quality — better titles, richer context, immediately available; the nightly harvest is the safety net for everything you didn't capture deliberately. The companion `kb-workflow` skill teaches agents the retrieval-then-capture pattern for use mid-session, and `kb_capture_session` / `kb_capture_fix` / `kb_write` are the direct tools underneath both.
+
+  If an agent loses its MCP transport mid-session, `kb tool` invokes the same
+  validated handlers from JSON on stdin. `/debrief` uses that automatically;
+  it does not leave a pending markdown file for a later human to ingest.
 
 - **Entity facts.** Alongside prose notes, a lightweight fact store tracks `(subject, predicate, object)` triples with validity windows: `kb_fact_add`, `kb_fact_query`, `kb_fact_timeline` ("how did our auth approach evolve?"), `kb_fact_invalidate` (supersede without deleting history).
 
@@ -115,8 +125,8 @@ Everything above files knowledge by domain. Tunnels walk *between* domains. Ask 
                                   |
                     +-------------+--------------+
                     | kb mcp-shim (per session)  |
-                    | byte pipe to the daemon,   |
-                    | in-process server fallback |
+                    | session relay + reconnect, |
+                    | in-process startup fallback|
                     +-------------+--------------+
                                   |  unix socket (hooks use a second
                                   |  control socket, same fallback)
@@ -146,9 +156,11 @@ Data directory: `~/.knowledge-base/` (`kb.db`, ingested file copies, config).
 
 Without the daemon, every piece still works: `kb mcp-shim` probes the daemon
 socket for ~2s and runs a full server in-process when nothing answers, and the
-hooks do the same over the control socket. The daemon collapses N per-session
-server processes into one and puts hook latency on a warm path — worth setting
-up once you run more than a couple of concurrent agent sessions
+hooks do the same over the control socket. If a connected daemon restarts, the
+shim preserves the initialized MCP session, retries the socket, and invalidates
+the client's cached tool and resource lists after recovery. The daemon collapses
+N per-session server processes into one and puts hook latency on a warm path —
+worth setting up once you run more than a couple of concurrent agent sessions
 ([docs/daemon-setup.md](docs/daemon-setup.md)).
 
 ---
@@ -263,13 +275,17 @@ kb mcp-shim            What `kb register` points agents at: pipes the session
                        no daemon answers
 kb mcp                 Plain per-session MCP stdio server (the shim's fallback,
                        still available as a direct registration)
+kb tool <name>         End-of-session recovery path: invoke an allowlisted KB
+                       handler with one JSON object on stdin (or --input FILE)
 kb migrate             Apply pending schema migrations (--dry-run to preview,
                        --check to exit 3 when a database is behind)
 kb register            Register MCP with Claude Code / Gemini; prints the
                        config.toml block to paste for Codex
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
-kb vault reindex       Reindex the vault (embeddings included)
+kb vault reindex       Reindex the vault (embeddings included). A concurrent
+                       note write is preserved and recorded in
+                       ~/.knowledge-base/logs/vault-index-races.jsonl
 kb ingest <path>       Ingest a file or directory. Skips files it has already
                        ingested by name; does NOT similarity-check contents,
                        so importing the same text under two names keeps both.
@@ -287,7 +303,25 @@ kb status              Stats and server status
 kb meters prune        Delete old meter rows (--keep-days N required, --dry-run to preview)
 ```
 
-That is the set you reach for by hand. `kb --help` lists them all, including the
+`kb tool` is intentionally narrower than MCP. It permits the retrieval,
+capture, correction, promotion, and fact tools needed by `/debrief` and
+`/wrap`; it refuses bus and administrative tools. For example:
+
+```bash
+printf '%s\n' '{"query":"resident daemon restart"}' | kb tool kb_search
+printf '%s\n' '{"title":"Restart recovery","type":"lesson","content":"The shim reconnects after a resident daemon replacement."}' | kb tool kb_write
+printf '%s\n' '{"id":42,"replacement_id":57,"reason":"confirmed replacement"}' | kb tool kb_supersede
+```
+
+The CLI reuses the MCP tools' Zod schemas and handlers, including indexing,
+deduplication, redaction, and per-tool meters. Do not create a vault markdown
+file and run `kb ingest`: that stores a second detached copy instead of
+indexing the vault file. Direct fallback attempts are recorded without their
+arguments or error text in
+`~/.knowledge-base/logs/direct-tool-fallbacks.jsonl`; `kb serve --status`
+reports the 24-hour success denominator and per-tool counts.
+
+That is the set you reach for by hand. `kb --help` lists all 51, including the
 hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
 maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
 `retrieval-report`, `follow-through`, `hint-probe`, `surface-report`, `meters prune`).
@@ -445,10 +479,10 @@ Any other MCP client — point it at the stdio transport:
 }
 ```
 
-`mcp-shim` uses the resident daemon when one is running and falls back to a
-full in-process server when none is, so the same registration is correct on
-both kinds of machine. (`"mcp"` still works as a daemon-free direct
-registration.)
+`mcp-shim` uses the resident daemon when one is running, preserves the client
+session across daemon restarts, and falls back to a full in-process server when
+none is reachable at startup. The same registration is correct on both kinds
+of machine. (`"mcp"` still works as a daemon-free direct registration.)
 
 ### ChatGPT and remote agents (REST)
 

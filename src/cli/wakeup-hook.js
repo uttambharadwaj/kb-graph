@@ -10,6 +10,9 @@ import { TIER, tierLabel, tiersDiscriminate } from '../tiers.js';
 import { callDaemonOp, hookDaemonTimeoutMs, hookOutput, noteHookTiming, readAgentFlag, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
 import { staleHookWarnings } from './setup-hooks.js';
+import {
+  commitContinuityRecovery, findContinuitySnapshot, formatContinuitySnapshot,
+} from './precompact-hook.js';
 
 // Post-compact context loses everything not in the transcript summary,
 // including which workstream was active. Prefer the state note this session
@@ -114,6 +117,9 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
       else plannedDocIds.push(s.document_id);
     }
 
+    const recovery = hookInput.source === 'compact' ? findContinuitySnapshot(hookInput) : null;
+    const continuityText = recovery?.snapshot ? formatContinuitySnapshot(recovery.snapshot) : null;
+
     const lines = [
       `KB BRIEFING (knowledge-base MCP; ${total} docs, ${facts} current facts; types: ${byType.map(t => `${t.note_type} ${t.c}`).join(', ')})`,
       healthLine,
@@ -129,12 +135,17 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
     ];
 
     if (hookInput.source === 'compact') {
+      if (continuityText) lines.push(continuityText);
       try {
         const active = activeStateNote(db, session, states);
         const doc = active ? getDocument(active.document_id) : null;
         if (doc?.content) {
-          const truncated = doc.content.length > ACTIVE_NOTE_CAP;
-          const body = truncated ? doc.content.slice(0, ACTIVE_NOTE_CAP) : doc.content;
+          // Keep the combined recovery payload inside the same budget the
+          // active note previously owned by itself. The exact in-flight
+          // snapshot wins; state still gets at least 1k chars.
+          const noteCap = Math.max(1000, ACTIVE_NOTE_CAP - (continuityText?.length ?? 0));
+          const truncated = doc.content.length > noteCap;
+          const body = truncated ? doc.content.slice(0, noteCap) : doc.content;
           // Already logged/planned above if this note is also in `states`;
           // add it here only when it isn't, so the session-scoped pick
           // doesn't double-count.
@@ -145,7 +156,7 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
           lines.push(
             `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,
             body,
-            ...(truncated ? [`[truncated at ${ACTIVE_NOTE_CAP} chars — kb_read(${active.document_id}) for the rest]`] : []),
+            ...(truncated ? [`[truncated at ${noteCap} chars — kb_read(${active.document_id}) for the rest]`] : []),
           );
         }
       } catch {
@@ -153,11 +164,11 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
       }
     }
 
-    const plan = commit ? null : { docIds: plannedDocIds, eventId };
-    return { output: lines.join('\n'), plan };
+    const plan = commit ? null : { docIds: plannedDocIds, eventId, recovery };
+    return { output: lines.join('\n'), plan, recovery: commit ? recovery : null };
   } catch {
     // Never block session start on KB problems.
-    return { output: null, plan: null };
+    return { output: null, plan: null, recovery: null };
   }
 }
 
@@ -169,6 +180,7 @@ export function commitWakeupHookPlan(plan, { session, agent = null, fastWrite })
   for (const docId of plan.docIds) {
     logRetrieval({ docId, surface: SURFACE.BRIEFING, session, eventId: plan.eventId, agent, fastWrite });
   }
+  commitContinuityRecovery(plan.recovery);
 }
 
 // The event name Codex's envelope is stamped with. Taken off the hook's own
@@ -201,18 +213,24 @@ export async function wakeupHook(args = []) {
     const session = resolveSessionId(hookInput);
     const daemon = await callDaemonOp(HOOK_OP.WAKEUP_HOOK, { hookInput, session, agent }, { timeoutMs: hookDaemonTimeoutMs(HOOK_OP.WAKEUP_HOOK) });
     let output;
+    let recovery = null;
+    let plan = null;
     if (daemon.ok) {
-      // This is the one commit for this SessionStart — see commitPromptHintPlan's
-      // sibling comment in prompt-hint.js for why only the delivering process may do this.
-      commitWakeupHookPlan(daemon.plan, { session, agent, fastWrite: true });
       output = daemon.output;
+      plan = daemon.plan;
       noteHookTiming('daemon');
     } else {
       noteHookTiming('fallback');
-      ({ output } = computeWakeupHook({ hookInput, session, agent, fastWrite: true }));
+      ({ output, recovery } = computeWakeupHook({ hookInput, session, agent, fastWrite: true }));
     }
     const line = hookOutput(output, { agent, hookEventName: hookInput?.hook_event_name || DEFAULT_HOOK_EVENT });
-    if (line != null) console.log(line);
+    if (line != null) {
+      console.log(line);
+      // Only the process whose output was selected consumes/logs the snapshot.
+      // A daemon answer that missed the deadline leaves it for the fallback.
+      if (daemon.ok) commitWakeupHookPlan(plan, { session, agent, fastWrite: true });
+      else commitContinuityRecovery(recovery);
+    }
   } catch {
     // Never block session start on KB problems.
   }

@@ -6,10 +6,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { EventEmitter } from 'node:events';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { connectDaemonClient } from '../src/daemon-client.js';
-import { probeSocket, startDaemon } from '../src/daemon.js';
+import { probeSocket, probeSocketDetailed, startDaemon } from '../src/daemon.js';
 
 // A listening server holds the event loop open, so a daemon a test failed to
 // close does not fail that test — it hangs the whole file, long after the TAP
@@ -329,6 +330,19 @@ describe('resident daemon', () => {
 
     assert.strictEqual(await probeSocket(socketPath), 'occupied');
     await assertStartRefused({ socketPath }, /is not a socket/);
+  });
+
+  it('preserves a local connect error instead of reporting an unexplained unreachable socket', async () => {
+    const socket = new EventEmitter();
+    socket.destroy = () => {};
+    const pending = probeSocketDetailed(freshSocketPath(), {
+      connectFn: () => {
+        queueMicrotask(() => socket.emit('error', Object.assign(new Error('blocked'), { code: 'EPERM' })));
+        return socket;
+      },
+    });
+
+    assert.deepStrictEqual(await pending, { state: 'unknown', reason: 'error', errorCode: 'EPERM' });
   });
 
   it('refuses to start when a live daemon holds the socket', { timeout: CASE_TIMEOUT_MS }, async () => {
