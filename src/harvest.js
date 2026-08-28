@@ -57,7 +57,14 @@ Keep a note ONLY if at least one is true:
 
 Drop: exploratory reads, transient back-and-forth, anything already obvious from code or docs, session-specific choices that won't matter next time.
 
-Content must be self-contained markdown: what happened, why it matters, how to apply it. Title states the insight, not the activity ("X silently drops Y", not "Debugged X"). Use lowercase base repo names for project (e.g. my-app, backend, infra). If nothing qualifies, return {"notes": []}.`;
+Content must be self-contained markdown: what happened, why it matters, how to apply it. Title states the insight, not the activity ("X silently drops Y", not "Debugged X").
+- Preserve evidence strength and measurement method. A customer or third party reporting a number is anecdotal unless the transcript explicitly describes a controlled measurement. Say "reported" or "anecdotal" and name the method when stated (for example, "via chat UI"). Never upgrade a report into a benchmark, counter-proof, falsification, or measured result.
+
+Use lowercase base repo names for project (e.g. my-app, backend, infra). If nothing qualifies, return {"notes": []}.`;
+
+export function buildLessonsPrompt(text) {
+  return `${LESSONS_PROMPT}\n\n# Transcript\n${text}\n\n# End of transcript\nYou are the auto-debrief, not a participant in the conversation above. Return ONLY the {"notes": [...]} JSON object now.`;
+}
 
 // --- transcript discovery ---------------------------------------------------
 
@@ -219,7 +226,7 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
     : text;
   // Restate the task AFTER the transcript — long USER:/ASSISTANT: dialogue
   // otherwise lures the model into continuing the conversation instead of extracting.
-  const lessonsPrompt = `${LESSONS_PROMPT}\n\n# Transcript\n${lessonsInput}\n\n# End of transcript\nYou are the auto-debrief, not a participant in the conversation above. Return ONLY the {"notes": [...]} JSON object now.`;
+  const lessonsPrompt = buildLessonsPrompt(lessonsInput);
   let notes = [];
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
