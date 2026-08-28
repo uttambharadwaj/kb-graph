@@ -8,6 +8,7 @@ import { initSchema } from '../src/db.js';
 import { isTestSession, SURFACE } from '../src/retrieval.js';
 import {
   followThroughReport, groupEvents, classify, clusterBootstrapCI, triggerEvents, readTriggerFires,
+  measurementWindow,
 } from '../src/cli/follow-through.js';
 import { TRIGGERS_LOG_DIR } from '../src/cli/trigger-hook.js';
 
@@ -22,7 +23,7 @@ function insertDoc(db, { title = 't' } = {}) {
 }
 
 function insertRetrieval(db, {
-  docId = null, surface, query = null, session = null, created_at = null, eventId = null, isTest = 0, agent = null,
+  docId = null, surface, query = null, session = null, created_at = '2026-08-20T00:00:00Z', eventId = null, isTest = 0, agent = null,
 } = {}) {
   db.prepare(`
     INSERT INTO retrievals (doc_id, surface, query, session, created_at, event_id, is_test, agent)
@@ -95,6 +96,35 @@ describe('exclusion classification', () => {
 });
 
 describe('followThroughReport: hint surface', () => {
+  it('uses inclusive ISO measurement bounds for fires and their reads', () => {
+    const db = freshDb();
+    const before = insertDoc(db, { title: 'before' });
+    const start = insertDoc(db, { title: 'start' });
+    const end = insertDoc(db, { title: 'end' });
+    const after = insertDoc(db, { title: 'after' });
+    insertRetrieval(db, { docId: before, surface: SURFACE.HINT, session: 'before', eventId: 'before', created_at: '2026-08-10T09:59:59Z' });
+    insertRetrieval(db, { docId: start, surface: SURFACE.HINT, session: 'start', eventId: 'start', created_at: '2026-08-10T10:00:00Z' });
+    insertRetrieval(db, { docId: end, surface: SURFACE.HINT, session: 'end', eventId: 'end', created_at: '2026-08-10T10:30:00Z' });
+    insertRetrieval(db, { docId: after, surface: SURFACE.HINT, session: 'after', eventId: 'after', created_at: '2026-08-10T10:30:01Z' });
+    insertRetrieval(db, { docId: start, surface: SURFACE.READ, session: 'start', created_at: '2026-08-10T10:05:00Z' });
+    insertRetrieval(db, { docId: end, surface: SURFACE.READ, session: 'end', created_at: '2026-08-10T11:00:00Z' });
+
+    const report = followThroughReport(db, {
+      since: '2026-08-10T10:00:00Z',
+      through: '2026-08-10T11:00:00Z',
+    });
+
+    assert.deepStrictEqual(report.measurementWindow, {
+      since: '2026-08-10T10:00:00.000Z',
+      through: '2026-08-10T11:00:00.000Z',
+      eligibleEventThrough: '2026-08-10T10:30:00.000Z',
+      followWindowMinutes: 30,
+      bounds: 'inclusive',
+    });
+    assert.strictEqual(report.hint.fires, 2, 'both exact boundary events are included');
+    assert.strictEqual(report.hint.followed30, 2, 'the exact event and read edges are included');
+  });
+
   it('excludes test and envelope rows from the denominator and counts them separately', () => {
     const db = freshDb();
     const doc = insertDoc(db);
@@ -341,13 +371,35 @@ describe('--json output shape', () => {
 
     const report = followThroughReport(db);
     const roundTripped = JSON.parse(JSON.stringify(report));
-    assert.deepStrictEqual(Object.keys(roundTripped).sort(), ['briefing', 'hint', 'pullBenchmark', 'trigger', 'uncertainty', 'windowNote'].sort());
+    assert.deepStrictEqual(Object.keys(roundTripped).sort(), ['briefing', 'hint', 'measurementWindow', 'pullBenchmark', 'trigger', 'uncertainty', 'windowNote'].sort());
     assert.ok(!('fireEvents' in roundTripped.hint), 'internal working set must not leak into the report');
     for (const surface of [roundTripped.hint, roundTripped.briefing, roundTripped.pullBenchmark]) {
       assert.ok('events' in surface && 'excluded' in surface && 'followed30' in surface && 'followedUnbounded' in surface);
     }
     assert.strictEqual(typeof roundTripped.windowNote, 'string');
+    assert.ok(roundTripped.measurementWindow.through.endsWith('Z'));
     assert.ok('preCutoffCaveat' in roundTripped.trigger);
+  });
+});
+
+describe('measurement window validation', () => {
+  it('normalizes timezone-bearing timestamps and rejects ambiguous dates', () => {
+    assert.deepStrictEqual(
+      measurementWindow({ since: '2026-08-10T05:00:00-05:00', through: '2026-08-10T11:00:00Z' }),
+      {
+        since: '2026-08-10T10:00:00.000Z',
+        through: '2026-08-10T11:00:00.000Z',
+        eligibleEventThrough: '2026-08-10T10:30:00.000Z',
+        sinceMs: Date.parse('2026-08-10T10:00:00Z'),
+        throughMs: Date.parse('2026-08-10T11:00:00Z'),
+        eligibleEventThroughMs: Date.parse('2026-08-10T10:30:00Z'),
+      },
+    );
+    assert.throws(() => measurementWindow({ since: '2026-08-10', through: '2026-08-11T00:00:00Z' }), /timezone/);
+    assert.throws(
+      () => measurementWindow({ since: '2026-08-12T00:00:00Z', through: '2026-08-11T00:00:00Z' }),
+      /must not be later/,
+    );
   });
 });
 

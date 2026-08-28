@@ -28,7 +28,7 @@ import { getDb } from '../db.js';
 import { isTestSession, READ_SURFACES, SURFACE } from '../retrieval.js';
 import { AGENTS } from '../process-ancestry.js';
 import { TRIGGERS_LOG_DIR } from './trigger-hook.js';
-import { acceptFlags } from './flags.js';
+import { acceptFlags, readFlagValue, UsageError } from './flags.js';
 
 const WINDOW_MS = 30 * 60 * 1000;
 // Task notifications and subagent reports can land in the `query` column when
@@ -176,6 +176,40 @@ function readRows(db, surfaces, excludeSessions) {
   return db.prepare(sql).all(...params);
 }
 
+// Reads may use the whole observation window. Denominator events stop one
+// follow window earlier so an event at the right edge is not silently graded
+// as "not followed" before it has had 30 minutes to be read.
+function withinMeasurementWindow(row, window, { event = false } = {}) {
+  const at = toMs(row.created_at ?? row.ts);
+  const upper = event ? window.eligibleEventThroughMs : window.throughMs;
+  return at != null
+    && (window.sinceMs == null || at >= window.sinceMs)
+    && at <= upper;
+}
+
+function measurementWindow({ since = null, through = new Date().toISOString() } = {}) {
+  const parse = (value, name) => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+      throw new UsageError(`${name} must be an ISO-8601 timestamp with a timezone`, USAGE);
+    }
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms)) throw new UsageError(`${name} must be a valid ISO-8601 timestamp`, USAGE);
+    return { ms, iso: new Date(ms).toISOString() };
+  };
+
+  const end = parse(through, '--through');
+  const start = since == null ? null : parse(since, '--since');
+  if (start && start.ms > end.ms) throw new UsageError('--since must not be later than --through', USAGE);
+  return {
+    since: start?.iso ?? null,
+    through: end.iso,
+    eligibleEventThrough: new Date(end.ms - WINDOW_MS).toISOString(),
+    sinceMs: start?.ms ?? null,
+    throughMs: end.ms,
+    eligibleEventThroughMs: end.ms - WINDOW_MS,
+  };
+}
+
 // The same fire/followed pair the surface reports overall, split by the
 // client that was handed the push. Kept beside the totals rather than
 // replacing them: the aggregate numbers are what every earlier reading of
@@ -312,10 +346,14 @@ function readTriggerFires(dir = TRIGGERS_LOG_DIR) {
 // MAX_SESSION_WARNINGS, told the reader nothing and can't be followed
 // through on). The fired note is `matched[0]` — decideAndRecord in
 // trigger-hook.js picks the same index off the same array before logging it.
-function triggerEvents(excludeSessions) {
+// The report passes a window. Promotions deliberately does not: its candidate
+// feed must retain every already-followed trigger rather than inherit a
+// reporting cutoff.
+function triggerEvents(excludeSessions, window = null) {
   const excluded = new Set(excludeSessions);
   const events = [];
   for (const row of readTriggerFires()) {
+    if (window && !withinMeasurementWindow(row, window, { event: true })) continue;
     if (!row.emitted || !row.session) continue;
     if (isTestSession(row.session)) continue;
     if (excluded.has(row.session)) continue;
@@ -339,14 +377,18 @@ function triggerEvents(excludeSessions) {
 // derived, since it names a point in history, not a property of the data.
 const HONEST_SESSION_ID_CUTOFF_MS = Date.parse('2026-08-10T04:46:50Z');
 
-export function followThroughReport(db = getDb(), { excludeSessions = [] } = {}) {
+export function followThroughReport(db = getDb(), { excludeSessions = [], since = null, through = new Date().toISOString() } = {}) {
+  const window = measurementWindow({ since, through });
+  const eventRows = rows => rows.filter(row => withinMeasurementWindow(row, window, { event: true }));
+  const readRowsInWindow = rows => rows.filter(row => withinMeasurementWindow(row, window));
   const reads = readsBySession(db, excludeSessions);
+  for (const [session, rows] of reads) reads.set(session, readRowsInWindow(rows));
 
-  const hint = surfaceStats(readRows(db, [SURFACE.HINT], excludeSessions), reads, { declines: true });
-  const briefing = surfaceStats(readRows(db, [SURFACE.BRIEFING], excludeSessions), reads, { declines: false });
-  const pull = surfaceStats(readRows(db, [SURFACE.SEARCH], excludeSessions), reads, { declines: true });
+  const hint = surfaceStats(eventRows(readRows(db, [SURFACE.HINT], excludeSessions)), reads, { declines: true });
+  const briefing = surfaceStats(eventRows(readRows(db, [SURFACE.BRIEFING], excludeSessions)), reads, { declines: false });
+  const pull = surfaceStats(eventRows(readRows(db, [SURFACE.SEARCH], excludeSessions)), reads, { declines: true });
 
-  const trigger = triggerEvents(excludeSessions);
+  const trigger = triggerEvents(excludeSessions, window);
   for (const ev of trigger) markFollowed(ev, reads.get(ev.session) || []);
   const triggerFollowed30 = trigger.filter(e => e.followed30).length;
   const preCutoff = trigger.some(e => toMs(e.createdAt) < HONEST_SESSION_ID_CUTOFF_MS);
@@ -359,7 +401,14 @@ export function followThroughReport(db = getDb(), { excludeSessions = [] } = {})
   const strip = ({ fireEvents: _drop, ...rest }) => rest;
 
   return {
-    windowNote: `window: ${WINDOW_MS / 60000}min canonical; unbounded is shown alongside for continuity with earlier ad hoc measurements, which were unbounded — expect the canonical rate to read a few points below it, not as a regression`,
+    measurementWindow: {
+      since: window.since,
+      through: window.through,
+      eligibleEventThrough: window.eligibleEventThrough,
+      followWindowMinutes: WINDOW_MS / 60000,
+      bounds: 'inclusive',
+    },
+    windowNote: `window: ${WINDOW_MS / 60000}min canonical; denominator events end at eligibleEventThrough so each has the full follow window before through; unbounded is shown alongside for continuity with earlier ad hoc measurements`,
     hint: strip(hint),
     briefing: strip(briefing),
     pullBenchmark: strip(pull),
@@ -418,6 +467,7 @@ function printSurface(label, s) {
 function printReport(report) {
   console.log('KB Follow-Through Report');
   console.log('=========================');
+  console.log(`measurement: ${report.measurementWindow.since ?? 'beginning'} through ${report.measurementWindow.through} (inclusive); denominator events through ${report.measurementWindow.eligibleEventThrough}`);
   console.log(report.windowNote);
   console.log('\nPush surfaces (hint fires ANY of its docs read = followed):');
   printSurface('hint', report.hint);
@@ -439,10 +489,12 @@ function printReport(report) {
 }
 
 const EXCLUDE_SESSION_FLAG = '--exclude-session';
-const USAGE = `Usage: kb follow-through [--json] [${EXCLUDE_SESSION_FLAG} <id>]...`;
+const SINCE_FLAG = '--since';
+const THROUGH_FLAG = '--through';
+const USAGE = `Usage: kb follow-through [--json] [${SINCE_FLAG} <ISO-8601>] [${THROUGH_FLAG} <ISO-8601>] [${EXCLUDE_SESSION_FLAG} <id>]...`;
 
 export function runFollowThroughCli(args = []) {
-  if (!acceptFlags(args, { usage: USAGE, value: [EXCLUDE_SESSION_FLAG], boolean: ['--json'] })) return;
+  if (!acceptFlags(args, { usage: USAGE, value: [EXCLUDE_SESSION_FLAG, SINCE_FLAG, THROUGH_FLAG], boolean: ['--json'] })) return;
 
   // flags.js has no repeatable-value concept — --exclude-session can appear
   // any number of times, so it's collected here rather than via readFlagValue
@@ -456,12 +508,14 @@ export function runFollowThroughCli(args = []) {
     else if (args[i].startsWith(eqPrefix)) excludeSessions.push(args[i].slice(eqPrefix.length));
   }
   const asJson = args.includes('--json');
+  const since = readFlagValue(args, SINCE_FLAG) ?? null;
+  const through = readFlagValue(args, THROUGH_FLAG) ?? new Date().toISOString();
 
-  const report = followThroughReport(getDb(), { excludeSessions });
+  const report = followThroughReport(getDb(), { excludeSessions, since, through });
   if (asJson) console.log(JSON.stringify(report, null, 2));
   else printReport(report);
 }
 
 // Exported for direct unit testing of the pieces `followThroughReport`
 // composes, rather than only through the CLI's stdout/JSON.
-export { readTriggerFires, triggerEvents, clusterBootstrapCI, groupEvents, classify, toMs };
+export { readTriggerFires, triggerEvents, clusterBootstrapCI, groupEvents, classify, toMs, measurementWindow };
