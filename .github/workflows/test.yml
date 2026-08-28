@@ -10,7 +10,7 @@ jobs:
       # to child processes. Transformers.js writes directly to final cache
       # paths, so concurrent cold downloads can interleave or expose a partial
       # ONNX file that every embedding suite then fails to parse.
-      KB_EMBEDDING_CACHE_DIR: ${{ runner.temp }}/kb-embedding-cache
+      KB_EMBEDDING_CACHE_DIR: .cache/ci-embedding
     # The suite runs in well under a minute. Anything approaching this is a
     # hang, and the default six-hour ceiling burns a runner for all of it.
     timeout-minutes: 10
