@@ -1,6 +1,9 @@
 let pipeline = null;
 let pipelinePromise = null; // Mutex: prevents concurrent model loads
 
+export const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
+export const EMBEDDING_DIMENSIONS = 384;
+
 async function getEmbedder() {
   if (pipeline) return pipeline;
 
@@ -8,7 +11,9 @@ async function getEmbedder() {
   if (pipelinePromise) return pipelinePromise;
 
   pipelinePromise = (async () => {
-    const { pipeline: createPipeline } = await import('@huggingface/transformers');
+    const { env, pipeline: createPipeline } = await import('@huggingface/transformers');
+    const cacheDir = process.env.KB_EMBEDDING_CACHE_DIR?.trim();
+    if (cacheDir) env.cacheDir = cacheDir;
 
     // Race model load against a 60s timeout. Promise.race does not cancel the
     // loser, so the timer must be cleared explicitly — left pending it holds
@@ -17,7 +22,7 @@ async function getEmbedder() {
     let timeout;
     try {
       pipeline = await Promise.race([
-        createPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true }),
+        createPipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true }),
         new Promise((_, reject) => {
           timeout = setTimeout(() => reject(new Error('Embedding model load timed out after 60s')), 60000);
         }),
