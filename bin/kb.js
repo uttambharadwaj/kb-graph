@@ -119,8 +119,9 @@ const COMMANDS = {
     },
   },
   'hint-probe': {
-    summary: 'Replay every prompt the hint has seen against the current scorer; diff two runs to grade a change',
-    run: () => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli()),
+    summary: 'Replay every prompt the hint has seen against the current scorer; --explain shows why each note matched',
+    boolean: ['--explain'],
+    run: a => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli(a)),
   },
   'aliases-backfill': {
     summary: 'Propose retrieval aliases (one model call per note) for notes never asked, filter, store; --revet re-filters stored proposals with no model calls',

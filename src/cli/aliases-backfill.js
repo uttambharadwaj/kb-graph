@@ -55,15 +55,16 @@ export function neverAsked(filePath, key = 'aliases') {
 // file whose content hash is unchanged, and a filter change (a tightened
 // ceiling, a bigger corpus) changes no file. This is how the stored column
 // catches up with the filter as it stands today.
-export function revetAliases() {
+export function revetAliases(doc) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const rows = db.prepare(`
     SELECT vf.vault_path, vf.document_id, d.title, d.tags, d.content, d.aliases
     FROM vault_files vf JOIN documents d ON d.id = vf.document_id
     WHERE d.superseded_at IS NULL AND d.doc_type != 'archive'
+      ${doc === undefined ? '' : 'AND vf.document_id = ?'}
     ORDER BY vf.document_id
-  `).all();
+  `).all(...(doc === undefined ? [] : [doc]));
   const update = db.prepare('UPDATE documents SET aliases = ? WHERE id = ?');
   let seen = 0, changed = 0;
   for (const row of rows) {
@@ -88,12 +89,12 @@ export function revetAliases() {
 
 export async function runAliasesBackfillCli(args = []) {
   if (!acceptFlags(args, { usage: USAGE, value: ['--limit', '--doc'], boolean: ['--dry-run', '--revet'] })) return;
-  if (args.includes('--revet')) { revetAliases(); return; }
   const docRaw = readFlagValue(args, '--doc');
   const doc = docRaw === undefined ? undefined : Number(docRaw);
   if (docRaw !== undefined && !Number.isInteger(doc)) {
     throw new UsageError(`--doc must be a document id, got: ${docRaw}`, USAGE);
   }
+  if (args.includes('--revet')) { revetAliases(doc); return; }
   const limitRaw = readFlagValue(args, '--limit');
   const limit = limitRaw === undefined ? DEFAULT_LIMIT : Number(limitRaw);
   if (!Number.isInteger(limit) || limit < 1) {

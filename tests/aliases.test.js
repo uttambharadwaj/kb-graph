@@ -174,11 +174,21 @@ describe('aliases-backfill --revet', () => {
       .run('Wind instrument order', body, 'lesson', '', 'zephyrometer sweeper');
     getDb().prepare('INSERT INTO vault_files (vault_path, content_hash, document_id, title) VALUES (?, ?, ?, ?)')
       .run('notes/revet.md', 'revet-hash', info.lastInsertRowid, 'Wind instrument order');
+    writeFileSync(join(vault, 'notes', 'unscoped.md'), '---\ntitle: Unscoped note\naliases: [vanishword]\n---\nunrelated body');
+    const unscoped = getDb().prepare('INSERT INTO documents (title, content, doc_type, tags, aliases) VALUES (?, ?, ?, ?, ?)')
+      .run('Unscoped note', 'unrelated body', 'lesson', '', 'vanishword');
+    getDb().prepare('INSERT INTO vault_files (vault_path, content_hash, document_id, title) VALUES (?, ?, ?, ?)')
+      .run('notes/unscoped.md', 'unscoped-hash', unscoped.lastInsertRowid, 'Unscoped note');
 
-    revetAliases();
+    revetAliases(info.lastInsertRowid);
 
     const stored = getDb().prepare('SELECT aliases FROM documents WHERE id = ?').get(info.lastInsertRowid).aliases;
     assert.strictEqual(stored, 'zephyrometer');
+    assert.strictEqual(
+      getDb().prepare('SELECT aliases FROM documents WHERE id = ?').get(unscoped.lastInsertRowid).aliases,
+      'vanishword',
+      'a targeted re-vet must not mutate another note',
+    );
     assert.match(readFileSync(join(vault, 'notes', 'revet.md'), 'utf-8'), /sweeper/, 'frontmatter proposals stay whole');
   });
 });

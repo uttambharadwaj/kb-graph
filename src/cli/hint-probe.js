@@ -24,21 +24,26 @@ const PROMPT_EXCERPT = 64;
 
 const excerpt = (prompt) => prompt.replace(/\s+/g, ' ').trim().slice(0, PROMPT_EXCERPT);
 
-export function hintProbe(db = getDb()) {
+export function hintProbe(db = getDb(), { explain = false } = {}) {
   const prompts = db.prepare(
     'SELECT DISTINCT query FROM retrievals WHERE surface = ? AND query IS NOT NULL ORDER BY query'
   ).pluck().all(SURFACE.HINT);
 
   const rows = prompts.map(prompt => ({
     prompt: excerpt(prompt),
-    hits: relevantNotes(prompt, { limit: MAX_HINTS }).map(n => ({ id: n.id, title: n.title })),
+    hits: relevantNotes(prompt, { limit: MAX_HINTS, explain }).map(n => ({
+      id: n.id,
+      title: n.title,
+      ...(explain ? { evidence: n.evidence } : {}),
+    })),
   }));
 
   return { total: rows.length, fired: rows.filter(r => r.hits.length).length, rows };
 }
 
-export function runHintProbeCli() {
-  const { total, fired, rows } = hintProbe();
+export function runHintProbeCli(args = []) {
+  const explain = args.includes('--explain');
+  const { total, fired, rows } = hintProbe(undefined, { explain });
   if (!total) {
     console.log('No prompts recorded yet — the hint surface has not been asked anything.');
     return;
@@ -47,7 +52,15 @@ export function runHintProbeCli() {
   for (const row of rows) {
     const ids = row.hits.length ? row.hits.map(h => `#${h.id}`).join(' ') : 'DECLINE';
     console.log(`${ids.padEnd(20)} ${row.prompt}`);
-    for (const hit of row.hits) console.log(`${' '.repeat(20)}   #${hit.id} ${hit.title}`);
+    for (const hit of row.hits) {
+      console.log(`${' '.repeat(20)}   #${hit.id} ${hit.title}`);
+      if (explain) {
+        const families = hit.evidence.families
+          .map(family => `${family.terms.join('/')}[${family.sources.join('+')}]=${family.mass.toFixed(2)}`)
+          .join(' + ');
+        console.log(`${' '.repeat(20)}      ${families} => ${hit.evidence.total_mass.toFixed(2)} (min ${hit.evidence.min_mass.toFixed(2)})`);
+      }
+    }
   }
 
   const pct = Math.round((fired / total) * 100);
