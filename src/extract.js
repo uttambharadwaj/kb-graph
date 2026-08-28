@@ -583,7 +583,7 @@ export function retireContradicted(subject, pred, object, { validFrom } = {}) {
 export function consolidate(facts, { source, observationDate, observedAt } = {}) {
   const added = [], invalidated = [], skipped = [];
   const validFrom = observationDate || new Date().toISOString().split('T')[0];
-  const observedAtTs = normalizeObservedAt(observedAt) || sqlTimestamp();
+  const observedAtTs = normalizeObservedAt(observedAt);
   const conflicts = findSingleValuedConflicts(facts);
   const contested = new Set(conflicts.map(conflictKey));
 
@@ -641,7 +641,7 @@ export function consolidate(facts, { source, observationDate, observedAt } = {})
     // and gating this on the retirement decision would write a replay of old
     // text as current the moment the batch happened to be contested.
     const newer = contradicted.find(r => predatesHeld(r, factValidFrom)
-      || (r.recorded_at && r.recorded_at > observedAtTs));
+      || (observedAtTs && r.recorded_at && r.recorded_at > observedAtTs));
     if (newer) {
       skipped.push({
         fact: f,
