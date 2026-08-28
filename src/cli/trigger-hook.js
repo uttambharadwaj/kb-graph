@@ -5,11 +5,13 @@
 // (which loads db.js) or prompt-hint.js (which loads db.js transitively via
 // liveTierCounts/retrieval.js).
 //
-// Emission is gated behind a flag file (KB_DIR/trigger-hook-enabled) and
-// defaults OFF: until subagent session_id semantics are measured, the hook
-// only logs what it would have said. `kb trigger-hook-enable` deliberately
-// does not exist yet — create the flag file by hand once observation looks
-// sane.
+// Advisory emission is gated behind a flag file (KB_DIR/trigger-hook-enabled)
+// and defaults OFF: until subagent session_id semantics are measured, the hook
+// only logs what it would have said. Explicit human-pinned block policies are
+// independent of that rollout flag and deny every match; the index materializer
+// only grants that authority to observed/verified notes. `kb
+// trigger-hook-enable` deliberately does not exist yet — create the flag file
+// by hand once observation looks sane.
 import {
   existsSync, readFileSync, writeFileSync, renameSync, appendFileSync, mkdirSync, readdirSync, statSync, unlinkSync,
 } from 'fs';
@@ -175,15 +177,22 @@ export function decideAndRecord(input, { index = [], fired = [], enabled = false
   const session = resolveSession(input);
   const matches = matchCommand(command, index, { alreadyFired: new Set(fired) });
 
-  const emit = matches.length > 0 && enabled && fired.length < MAX_SESSION_WARNINGS;
-  const chosen = emit ? matches[0] : null; // matchCommand already sorts rarest-first
+  // matchCommand sorts blocking policies before advisory matches, then rarest
+  // first within each class. A policy denial is independent of the advisory
+  // rollout flag, per-session cap, and marker dedupe: each matching attempt
+  // must be denied, including the second one.
+  const blocker = matches.find(match => match.block) ?? null;
+  const block = blocker !== null;
+  const emit = block || (matches.length > 0 && enabled && fired.length < MAX_SESSION_WARNINGS);
+  const chosen = block ? blocker : emit ? matches[0] : null;
 
   const logLine = JSON.stringify({
     ts: new Date().toISOString(),
     session,
     cwd: cwd ?? null,
-    matched: matches.map(m => ({ id: m.id, hits: m.hits })),
+    matched: matches.map(m => ({ id: m.id, hits: m.hits, ...(m.block ? { block: true } : {}) })),
     emitted: emit,
+    blocked: block,
     // Splits inline/pointer eras and paths for `kb follow-through` analysis —
     // null (not omitted) when nothing was emitted, matching cwd's convention.
     mode: emit ? (chosen.excerpt ? 'inline' : 'pointer') : null,
@@ -194,8 +203,11 @@ export function decideAndRecord(input, { index = [], fired = [], enabled = false
     session,
     logLine,
     emit,
+    block,
     message: chosen ? buildTriggerMessage(chosen) : null,
-    firedId: chosen ? chosen.id : null,
+    // Blocking policies are never consumed. Advisory markers remain exactly
+    // as before and still enforce the warning cap/dedupe contract.
+    firedId: chosen && !block ? chosen.id : null,
   };
 }
 
@@ -225,13 +237,18 @@ async function readStdin() {
 // commitTriggerHookPlan, which also re-applies the A9 contract on the
 // client's own connection, since the daemon could not have proven the
 // marker write would succeed before optimistically returning `output`.
-export function computeTriggerHook(hookInput, { commit = true } = {}) {
+export function computeTriggerHook(hookInput, {
+  commit = true,
+  index,
+  fired,
+  enabled,
+} = {}) {
   try {
     const session = resolveSession(hookInput);
     const decision = decideAndRecord(hookInput, {
-      index: loadTriggerIndex(),
-      fired: readMarker(session),
-      enabled: existsSync(TRIGGER_HOOK_ENABLED_FLAG),
+      index: index ?? loadTriggerIndex(),
+      fired: fired ?? readMarker(session),
+      enabled: enabled ?? existsSync(TRIGGER_HOOK_ENABLED_FLAG),
     });
     if (!decision) return { output: null, plan: null };
 
@@ -240,7 +257,7 @@ export function computeTriggerHook(hookInput, { commit = true } = {}) {
 
     if (!decision.emit) return { output: null, plan };
 
-    if (commit) {
+    if (commit && decision.firedId !== null) {
       // A9: write before returning an answer to deliver, and only answer if
       // the write actually landed. A persistently failing marker write
       // (unwritable dir, disk full) must never be silently read back as
@@ -250,17 +267,23 @@ export function computeTriggerHook(hookInput, { commit = true } = {}) {
       // (inside appendMarker) still captures the write failure for triage.
       const persisted = appendMarker(decision.session, decision.firedId);
       if (!persisted) return { output: null, plan: null };
-    } else {
+    } else if (!commit && decision.firedId !== null) {
       plan.marker = { session: decision.session, firedId: decision.firedId };
     }
 
-    const output = JSON.stringify({
-      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: decision.message },
-    });
+    const hookSpecificOutput = {
+      hookEventName: 'PreToolUse',
+      additionalContext: decision.message,
+      ...(decision.block ? {
+        permissionDecision: 'deny',
+        permissionDecisionReason: decision.message,
+      } : {}),
+    };
+    const output = JSON.stringify({ hookSpecificOutput });
     return { output, plan };
   } catch (err) {
-    // Never block a tool call on a KB problem — but leave a marker, same
-    // stance as prompt-hint's hint path.
+    // A KB failure always fails open. Only a successfully loaded, explicitly
+    // curated policy may deny a tool call.
     recordHookFailure('trigger-hook', err);
     return { output: null, plan: null };
   }
@@ -309,8 +332,8 @@ export async function triggerHook() {
     }
     if (output) await deliver(output);
   } catch (err) {
-    // Never block a tool call on a KB problem — but leave a marker, same
-    // stance as prompt-hint's hint path.
+    // A KB failure always fails open. Only a successfully loaded, explicitly
+    // curated policy may deny a tool call.
     recordHookFailure('trigger-hook', err);
   }
   process.exit(0);

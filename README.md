@@ -70,6 +70,15 @@ Hooks installed by `kb setup` into Claude Code's `settings.json` and Codex's
   snapshot. Capture and recovery outcomes are recorded in
   `~/.knowledge-base/logs/compact-hooks.jsonl`.
 
+- **Before shell commands — action triggers.** Notes can carry vetted command
+  patterns in `triggers`. Advisory matches are log-only until
+  `KB_DIR/trigger-hook-enabled` exists. A one-way command can instead be made
+  an enforceable policy by setting both `triggers_pinned: true` and
+  `triggers_block: true` on an `observed` or `verified` note. That explicit
+  combination makes the PreToolUse hook deny every matching attempt; inferred
+  notes, model-proposed triggers, advisory caps, and prior warnings cannot gain
+  or consume blocking authority.
+
 Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (token-efficient briefing) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
 
 ### 2. Capture that doesn't rely on discipline

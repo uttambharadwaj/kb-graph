@@ -164,7 +164,7 @@ function isCommandShaped(part) {
 // The fabrication guards (code-span grounding, shape, caps) hold for pins
 // too: a human vouches for the noise trade, never for a command the note
 // doesn't contain.
-export function filterTriggers(proposed, { title, content }, { corpus, pinned = false } = {}) {
+export function filterTriggers(proposed, { title, content }, { corpus, pinned = false, block = false } = {}) {
   const patterns = parseTriggerProposals(proposed).map(parts => parts.map(normalize));
   if (!patterns.length) return '';
 
@@ -215,6 +215,11 @@ export function filterTriggers(proposed, { title, content }, { corpus, pinned = 
     seen.add(key);
     const entry = { parts, hits, sessions: sessionsHit.size };
     if (pinned) entry.pinned = true;
+    // Blocking is an operator policy, never a classifier decision. Requiring
+    // the same human pin that bypasses corpus-frequency gates makes that
+    // authority explicit and prevents a model-proposed trigger from silently
+    // becoming a command policy merely because a caller passed block=true.
+    if (pinned && block) entry.block = true;
     accepted.push(entry);
   }
 
@@ -263,7 +268,20 @@ export function rebuildTriggerIndex(path = TRIGGER_INDEX_PATH) {
   const entries = [];
   for (const r of rows) {
     try {
-      entries.push({ id: r.id, title: r.title, tier: r.tier, patterns: JSON.parse(r.triggers), excerpt: buildExcerpt(r.content) });
+      const patterns = JSON.parse(r.triggers);
+      // Only confirmed evidence can block a command. `triggers_block` is
+      // human-authored, but the note's evidence tier remains an independent
+      // trust boundary: an inferred/model conclusion may warn, never deny.
+      const block = ['observed', 'verified'].includes(r.tier)
+        && patterns.some(pattern => pattern.block === true);
+      entries.push({
+        id: r.id,
+        title: r.title,
+        tier: r.tier,
+        patterns,
+        excerpt: buildExcerpt(r.content),
+        ...(block ? { block: true } : {}),
+      });
     } catch {
       // Skip. The column is wrong, not this rebuild's job to repair.
     }
