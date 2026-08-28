@@ -94,8 +94,8 @@ const COMMANDS = {
     run: a => import('../src/cli/rediscoveries.js').then(m => m.runRediscoveriesCli(a)),
   },
   'follow-through': {
-    summary: 'Event-unit follow-through per push surface (hint/briefing), kb_search pull-rate benchmark, trigger fires, cluster-bootstrap CI (--json for machine-readable, --exclude-session <id> repeatable)',
-    value: ['--exclude-session'],
+    summary: 'Event-unit follow-through per push surface with reproducible ISO --since/--through bounds, agent cuts, trigger fires, and cluster-bootstrap CI',
+    value: ['--exclude-session', '--since', '--through'],
     boolean: ['--json'],
     run: a => import('../src/cli/follow-through.js').then(m => m.runFollowThroughCli(a)),
   },
