@@ -212,4 +212,19 @@ head-injection, which was fixed in commit b1d6832.`);
     assert.deepStrictEqual(inverted, [], 'stored a ticket as the thing doing the implementing');
     assert.ok(mentions(facts, 'tkt-99'), 'dropped the ticket the PR belongs to');
   });
+
+  it('uses one source-grounded spelling for a repeated entity', async () => {
+    const { facts } = await extractFacts(
+      'TKT-71 is owned by team Platform Foundations. '
+      + 'TKT-72 is owned by team Platform Foundations. '
+      + 'TKT-73 is owned by team Platform Foundations.',
+    );
+    const ownership = facts.filter(f => /owns|assigned_to/.test(f.predicate));
+    assert.ok(ownership.length >= 2, `dropped the repeated ownership facts: ${JSON.stringify(facts)}`);
+
+    const ownerOf = f => /^tkt-\d+$/i.test(f.subject.trim()) ? f.object : f.subject;
+    const owners = new Set(ownership.map(f => ownerOf(f).toLowerCase().replace(/[\s_-]+/g, '_')));
+    assert.strictEqual(owners.size, 1,
+      `invented multiple spellings for one source entity: ${JSON.stringify(ownership)}`);
+  });
 });

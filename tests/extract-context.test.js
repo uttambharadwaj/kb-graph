@@ -59,6 +59,12 @@ describe('extraction prompt context', () => {
     assert.match(EXTRACT_PROMPT, /past EVENT is still emittable/);
   });
 
+  it('requires one source-grounded spelling per entity across a response', () => {
+    assert.match(EXTRACT_PROMPT, /Use one spelling for each entity throughout the whole response/);
+    assert.match(EXTRACT_PROMPT, /do not invent suffixes/);
+    assert.match(EXTRACT_PROMPT, /reuse it exactly/);
+  });
+
   it('still splits on width when there are no sentence boundaries', () => {
     const chunks = chunkForExtract('x'.repeat(4000));
     assert.ok(chunks.length > 1, 'a boundary-free blob must still be split');
