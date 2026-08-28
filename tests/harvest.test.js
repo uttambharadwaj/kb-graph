@@ -37,10 +37,18 @@ writeFileSync(stub, [
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
 const { getDb, getHealth } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
+  it('keeps evidence-strength guidance in the production lessons prompt', () => {
+    const prompt = buildLessonsPrompt('A customer reported a number through a chat UI.');
+    assert.match(prompt, /Preserve evidence strength and measurement method/);
+    assert.match(prompt, /anecdotal unless the transcript explicitly describes a controlled measurement/);
+    assert.match(prompt, /Never upgrade a report into a benchmark/);
+    assert.match(prompt, /# Transcript\nA customer reported a number through a chat UI\./);
+  });
+
   it('extracts Claude Code user/assistant text turns', () => {
     const raw = [
       JSON.stringify({ type: 'user', message: { content: 'fix the login bug' } }),
