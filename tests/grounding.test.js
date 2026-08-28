@@ -9,7 +9,7 @@ import { join } from 'path';
 
 import {
   groundTriples, dateStatedIn, normalizeForGrounding,
-  UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX,
+  UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX,
 } from '../src/grounding.js';
 
 // A fake claude that answers off the marker in the prompt, so the wiring tests
@@ -55,6 +55,27 @@ case "$prompt" in
     facts: [{ subject: 'svc-c', predicate: 'status', object: 'live', valid_from: '2026-07-28' }],
     skipped: [],
   })}' ;;
+  *CASE_MERGE_REPRO*) echo '${envelope({
+    facts: [
+      { subject: 'pr #177', predicate: 'merged_via', object: 'commit fc4d595' },
+      { subject: 'pr #177', predicate: 'ci_state', object: 'green' },
+      { subject: 'vault-service delete v1 profiles profile_id lease', predicate: 'lacks', object: '404_response' },
+    ],
+    skipped: [],
+  })}' ;;
+  *CASE_STATUS_REPRO*) echo '${envelope({
+    facts: [
+      { subject: 'release stack', predicate: 'causes', object: 'ux-labs-frontend-5ah' },
+      { subject: 'pr #4420', predicate: 'status', object: 'needed' },
+    ],
+    skipped: [],
+  })}' ;;
+  *CASE_SUPPORT_REPRO*) echo '${envelope({
+    facts: [
+      { subject: 'knowledge base mcp server', predicate: 'supports', object: '26 enabled tools' },
+    ],
+    skipped: [],
+  })}' ;;
   *) echo '${envelope({ facts: [], skipped: [] })}' ;;
 esac
 `);
@@ -62,7 +83,7 @@ chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
 const { kbExtract } = await import('../src/extract.js');
-const { queryFact } = await import('../src/facts.js');
+const { addFact, queryFact } = await import('../src/facts.js');
 
 const triple = (subject, predicate, object, extra = {}) => ({ subject, predicate, object, ...extra });
 const reasons = res => res.skipped.map(s => s.reason);
@@ -164,7 +185,7 @@ describe('grounding extracted triples in the source text', () => {
       ['sandbox_pointing', 'production billing points at the sandbox.'],
     ]) {
       it(`grounds ${JSON.stringify(entity)} in ${JSON.stringify(text)}`, () => {
-        const res = groundTriples([triple(entity, 'status', 'live')], `${text} it is live.`, {});
+        const res = groundTriples([triple(entity, 'is', 'live')], `${text} it is live.`, {});
         assert.deepStrictEqual(reasons(res), [], `${entity} was rejected`);
       });
     }
@@ -182,15 +203,15 @@ describe('grounding extracted triples in the source text', () => {
       + 'Aleks proposed fixing this permanently by pre-warming the stealth template in provision.sh in the '
       + 'aws-control-tetra repo and completing the ASG lifecycle hook only after successful provisioning.';
 
-    for (const [subject, object, why] of [
-      ['tetra stealth instance template', 'stealth browser session failures', 'failing -> failures'],
-      ['stealth_browser_profile', 'cold_host_provisioning_failure', 'fails -> failure'],
-      ['aleks', 'asg_lifecycle_hook_post_provisioning_completion', 'completing -> completion'],
-      ['aleks', 'stealth_profile_prewarming_in_provision_sh', 'pre-warming -> prewarming, mid-name'],
-      ['aleks', 'provision_sh_stealth_template_prewarming', 'pre-warming -> prewarming, in last place'],
+    for (const [subject, predicate, object, why] of [
+      ['tetra stealth instance template', 'causes', 'stealth browser session failures', 'failing -> failures'],
+      ['stealth_browser_profile', 'causes', 'cold_host_provisioning_failure', 'fails -> failure'],
+      ['aleks', 'proposes', 'asg_lifecycle_hook_post_provisioning_completion', 'completing -> completion'],
+      ['aleks', 'proposes', 'stealth_profile_prewarming_in_provision_sh', 'pre-warming -> prewarming, mid-name'],
+      ['aleks', 'proposes', 'provision_sh_stealth_template_prewarming', 'pre-warming -> prewarming, in last place'],
     ]) {
       it(`grounds ${JSON.stringify(object)} (${why})`, () => {
-        const res = groundTriples([triple(subject, 'causes', object)], incident, {});
+        const res = groundTriples([triple(subject, predicate, object)], incident, {});
         assert.deepStrictEqual(reasons(res), []);
       });
     }
@@ -298,6 +319,159 @@ describe('grounding extracted triples in the source text', () => {
     });
   });
 
+  describe('the relationship the triple asserts', () => {
+    it('rejects merged_via when only review findings closed across a commit', () => {
+      const text = 'All seven review findings on PR #177 were closed across commit fc4d595. '
+        + 'PR #177 remains in CHANGES_REQUESTED state pending a re-request.';
+      const res = groundTriples([triple('pr #177', 'merged_via', 'commit fc4d595')], text, {});
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.match(res.skipped[0].reason, new RegExp(`^${CLAIM_UNGROUNDED_REASON_PREFIX}`));
+      assert.match(res.skipped[0].reason, /source does not state a merge/i);
+    });
+
+    it('rejects merged_via for got-commit phrasing', () => {
+      const res = groundTriples(
+        [triple('pr #4414', 'merged_via', 'commit b336a94f5')],
+        'Fixes were pushed: PR #4414 got commit b336a94f5 and remains open.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.ok(res.skipped[0].reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX));
+    });
+
+    it('scopes real merge evidence to the PR it names', () => {
+      const merged = triple('pr #4401', 'merged_via', 'commit aaaa111');
+      const open = triple('pr #4414', 'merged_via', 'commit b336a94f5');
+      const res = groundTriples(
+        [open, merged],
+        'PR #4414 got commit b336a94f5 and remains open. PR #4401 squash-merged as aaaa111.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, [merged]);
+      assert.equal(res.skipped[0].fact, open);
+      assert.ok(res.skipped[0].reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX));
+    });
+
+    it('keeps an explicit merge after a historically open review', () => {
+      const fact = triple('pr #177', 'merged_via', 'commit fc4d595');
+      const res = groundTriples(
+        [fact],
+        'PR #177 was open during review, then squash-merged as fc4d595.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, [fact]);
+      assert.deepStrictEqual(res.skipped, []);
+    });
+
+    it('rejects an apparent merge contradicted by an explicitly current pre-merge state', () => {
+      const res = groundTriples(
+        [triple('pr #177', 'merged_via', 'commit fc4d595')],
+        'PR #177 merged as fc4d595. PR #177 remains in CHANGES_REQUESTED pending a re-request.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.match(res.skipped[0].reason, /contradicts.*current pre-merge state/i);
+    });
+
+    it('rejects a causal edge grounded only by temporal adjacency', () => {
+      const res = groundTriples(
+        [triple('release stack', 'causes', 'ux-labs-frontend-5ah')],
+        'UX-LABS-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.ok(res.skipped[0].reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX));
+    });
+
+    it('keeps an explicit causal edge', () => {
+      const fact = triple('release stack', 'causes', 'ux-labs-frontend-5ah');
+      const res = groundTriples(
+        [fact],
+        'The release stack caused UX-LABS-FRONTEND-5AH.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, [fact]);
+    });
+
+    it('rejects supports when the source only names a client configuration for the subject', () => {
+      const res = groundTriples(
+        [triple('knowledge base mcp server', 'supports', '26 enabled tools')],
+        'The Codex CLI enabled_tools list for the knowledge-base MCP server was widened from 14 to 26 tools.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.match(res.skipped[0].reason, /does not state the supports relationship/i);
+    });
+
+    it('keeps an explicit supports claim', () => {
+      const fact = triple('knowledge base mcp server', 'supports', '35 tools');
+      const res = groundTriples(
+        [fact],
+        'The knowledge-base MCP server exposes 35 tools.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, [fact]);
+      assert.deepStrictEqual(res.skipped, []);
+    });
+
+    it('rejects a non-lifecycle status before it can retire a work item state', () => {
+      const res = groundTriples(
+        [triple('pr #4420', 'status', 'needed')],
+        'PR #4420 is confirmed still needed.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.match(res.skipped[0].reason, /not a lifecycle status/i);
+    });
+
+    it('keeps lifecycle statuses and leaves non-work-item status vocabulary alone', () => {
+      const lifecycle = triple('pr #4420', 'status', 'open');
+      const service = triple('wallet service', 'status', 'provider leg unconfirmed');
+      const res = groundTriples(
+        [lifecycle, service],
+        'PR #4420 is open. The wallet service status is provider leg unconfirmed.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, [lifecycle, service]);
+      assert.deepStrictEqual(res.skipped, []);
+    });
+
+    it('accepts narrow predicate-scoped paraphrases', () => {
+      const facts = [
+        triple('pr #177', 'ci_state', 'green'),
+        triple('vault-service delete v1 profiles profile_id lease', 'lacks', '404_response'),
+      ];
+      const text = 'PR #177 CI passed all seven checks. '
+        + 'The vault-service DELETE /v1/profiles/{profile_id}/lease endpoint has no 404 branch.';
+      const res = groundTriples(facts, text, {});
+
+      assert.deepStrictEqual(res.facts, facts);
+      assert.deepStrictEqual(res.skipped, []);
+    });
+
+    it('does not apply a paraphrase outside its predicate', () => {
+      const res = groundTriples(
+        [triple('vault-service', 'returns', '404_response')],
+        'The vault-service endpoint has no 404 branch.',
+        {},
+      );
+
+      assert.deepStrictEqual(res.facts, []);
+      assert.ok(res.skipped[0].reason.startsWith(UNGROUNDED_REASON_PREFIX));
+    });
+  });
+
   describe('dates the text states', () => {
     for (const spelling of [
       'merged on 2026-07-28 after review',
@@ -372,6 +546,45 @@ describe('grounding extracted triples in the source text', () => {
   // Through kb_extract itself, not the module: a filter tested only in
   // isolation goes on passing after someone unwires it from the call path.
   describe('wired into kb_extract', () => {
+    it('blocks the fabricated merge while keeping normalized true facts from the same call', async () => {
+      const text = 'CASE_MERGE_REPRO: All seven review findings on PR #177 were closed across commit fc4d595, '
+        + 'and CI passed all seven checks. The vault-service DELETE v1 profiles profile_id lease endpoint has no 404 branch. '
+        + 'PR #177 remains in CHANGES_REQUESTED state pending a re-request.';
+      const res = await kbExtract(text, { source: 'test', observationDate: '2026-07-29' });
+
+      assert.deepStrictEqual(
+        res.added.map(f => `${f.subject}|${f.predicate}|${f.object}`).sort(),
+        [
+          'pr #177|ci_state|green',
+          'vault-service delete v1 profiles profile_id lease|lacks|404_response',
+        ],
+      );
+      assert.ok(res.skipped.some(s => s.reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)));
+      assert.deepStrictEqual(queryFact('commit fc4d595', { direction: 'both' }), []);
+    });
+
+    it('blocks causal and non-lifecycle status claims without retiring the true state', async () => {
+      addFact('pr #4420', 'status', 'opened', { validFrom: '2026-08-18', source: 'seed' });
+      const text = 'CASE_STATUS_REPRO: PR #4420 (missing users row retry) confirmed still needed: '
+        + 'Sentry issue UX-LABS-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.';
+      const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-19' });
+
+      assert.deepStrictEqual(res.added, []);
+      assert.deepStrictEqual(res.invalidated, []);
+      assert.strictEqual(res.skipped.filter(s => s.reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)).length, 2);
+      assert.strictEqual(currentRow('pr #4420', 'status').object, 'opened');
+    });
+
+    it('blocks a server-subject assertion from client-side config wording', async () => {
+      const text = 'CASE_SUPPORT_REPRO: The Codex CLI enabled_tools list for the knowledge-base MCP server '
+        + 'was widened from 14 to 26 tools on 2026-08-23.';
+      const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-24' });
+
+      assert.deepStrictEqual(res.added, []);
+      assert.ok(res.skipped.some(s => s.reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)));
+      assert.deepStrictEqual(queryFact('knowledge base mcp server', { direction: 'outgoing', exact: true }), []);
+    });
+
     it('writes the stated fact and refuses the invented edge', async () => {
       const res = await kbExtract('GROUND_ME: svc-a depends on svc-b.', {
         source: 'test', observationDate: '2026-08-04',

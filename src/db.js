@@ -10,6 +10,7 @@ import {
 } from './tiers.js';
 import { logRetrievalResults } from './retrieval.js';
 import { canonicalPredicate } from './predicates.js';
+import { authoredBody } from './embeddings/embed.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 
 let db = null;
@@ -309,6 +310,11 @@ export const MIGRATIONS = [{
       emitted_count INTEGER NOT NULL,
       skipped_count INTEGER NOT NULL,
       chunk_failures INTEGER NOT NULL DEFAULT 0,
+      entity_rejections INTEGER NOT NULL DEFAULT 0,
+      claim_rejections INTEGER NOT NULL DEFAULT 0,
+      date_overrides INTEGER NOT NULL DEFAULT 0,
+      duplicate_skips INTEGER NOT NULL DEFAULT 0,
+      accepted_skip_conflicts INTEGER NOT NULL DEFAULT 0,
       dry_run INTEGER NOT NULL DEFAULT 0,
       failed INTEGER NOT NULL DEFAULT 0,
       from_preview INTEGER NOT NULL DEFAULT 0,
@@ -588,6 +594,35 @@ export const MIGRATIONS = [{
   name: 'agent tag on retrievals',
   applied: db => hasColumn(db, 'retrievals', 'agent'),
   up: db => addColumn(db, 'retrievals', 'agent', 'TEXT'),
+}, {
+  version: 21,
+  // Migration 7 now creates these columns for fresh databases. Existing
+  // databases need the additive migration so grounding regressions become
+  // visible as categorized counts instead of one undifferentiated skipped
+  // total. addColumn is individually idempotent, so an interrupted migration
+  // resumes safely from a partially updated table.
+  name: 'grounding rejection counts on extractions',
+  applied: db => !hasTable(db, 'extractions') || [
+    'entity_rejections', 'claim_rejections', 'date_overrides',
+  ].every(column => hasColumn(db, 'extractions', column)),
+  up: db => {
+    addColumn(db, 'extractions', 'entity_rejections', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn(db, 'extractions', 'claim_rejections', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn(db, 'extractions', 'date_overrides', 'INTEGER NOT NULL DEFAULT 0');
+  },
+}, {
+  version: 22,
+  // The final response reconciles model accounting with consolidation. These
+  // counters make the two repaired failure shapes visible without retaining
+  // the source text or the model's assertion prose.
+  name: 'extraction disposition reconciliation counts',
+  applied: db => !hasTable(db, 'extractions') || [
+    'duplicate_skips', 'accepted_skip_conflicts',
+  ].every(column => hasColumn(db, 'extractions', column)),
+  up: db => {
+    addColumn(db, 'extractions', 'duplicate_skips', 'INTEGER NOT NULL DEFAULT 0');
+    addColumn(db, 'extractions', 'accepted_skip_conflicts', 'INTEGER NOT NULL DEFAULT 0');
+  },
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
@@ -944,11 +979,47 @@ export function supersedeCandidates({ since = null, limit = 20 } = {}) {
     JOIN entities s ON f.subject = s.id
     JOIN entities o ON f.object = o.id
     WHERE f.valid_to IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM facts live
+        WHERE live.subject = f.subject
+          AND live.predicate = f.predicate
+          AND live.object = f.object
+          AND live.valid_to IS NULL
+      )
   `;
   const params = [];
   if (since) { sql += ' AND f.valid_to >= ?'; params.push(since); }
   sql += ' ORDER BY f.valid_to DESC';
   const retired = db.prepare(sql).all(...params);
+
+  const currentFact = db.prepare(`
+    SELECT o.name AS new_object FROM facts f
+    JOIN entities o ON f.object = o.id
+    WHERE f.subject = ? AND f.predicate = ? AND f.valid_to IS NULL
+      AND f.valid_from IS NOT NULL AND f.valid_from >= ?
+    ORDER BY f.valid_from DESC, f.created_at DESC, f.id DESC
+    LIMIT 1
+  `);
+  const staleNotes = db.prepare(`
+    SELECT id, title, content, created_at,
+           (CASE WHEN title LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS title_hit
+    FROM documents
+    WHERE superseded_at IS NULL
+      AND doc_type != 'archive'
+      AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
+      AND content LIKE ? ESCAPE '\\'
+    ORDER BY created_at ASC
+  `);
+  const replacementNotes = db.prepare(`
+    SELECT id, title, content FROM documents
+    WHERE superseded_at IS NULL AND doc_type != 'archive'
+      AND id != ? AND created_at > ?
+      AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
+      AND content LIKE ? ESCAPE '\\'
+    ORDER BY created_at DESC
+  `);
+  const authoredIncludes = (content, value) =>
+    authoredBody(content).toLowerCase().includes(value.toLowerCase());
 
   const candidates = [];
   const seen = new Set();
@@ -958,12 +1029,7 @@ export function supersedeCandidates({ since = null, limit = 20 } = {}) {
     if (!rf.subject_name || !rf.old_object) continue;
 
     // The value that replaced old_object for this (subject, predicate).
-    const current = db.prepare(`
-      SELECT o.name AS new_object FROM facts f
-      JOIN entities o ON f.object = o.id
-      WHERE f.subject = ? AND f.predicate = ? AND f.valid_to IS NULL
-      LIMIT 1
-    `).get(rf.subject, rf.predicate);
+    const current = currentFact.get(rf.subject, rf.predicate, rf.valid_to);
     if (!current?.new_object) continue;
 
     const oldVal = rf.old_object, newVal = current.new_object, subj = rf.subject_name;
@@ -971,29 +1037,18 @@ export function supersedeCandidates({ since = null, limit = 20 } = {}) {
     const subjLike = like(subj);
 
     // Stale LIVE notes: subject in title/tags AND the old value in content.
-    const stale = db.prepare(`
-      SELECT id, title, created_at,
-             (CASE WHEN title LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END) AS title_hit
-      FROM documents
-      WHERE superseded_at IS NULL
-        AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
-        AND content LIKE ? ESCAPE '\\'
-      ORDER BY created_at ASC
-    `).all(subjLike, subjLike, subjLike, like(oldVal));
+    const stale = staleNotes.all(subjLike, subjLike, subjLike, like(oldVal));
 
     for (const doc of stale) {
       if (candidates.length >= limit) break;
       if (seen.has(doc.id)) continue;
+      if (!authoredIncludes(doc.content, oldVal)) continue;
 
       // Evidence the note is genuinely behind: a NEWER live note asserts the
       // current value for the same subject.
-      const replacement = db.prepare(`
-        SELECT id, title FROM documents
-        WHERE superseded_at IS NULL AND id != ? AND created_at > ?
-          AND (title LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')
-          AND content LIKE ? ESCAPE '\\'
-        ORDER BY created_at DESC LIMIT 1
-      `).get(doc.id, doc.created_at, subjLike, subjLike, like(newVal));
+      const replacement = replacementNotes
+        .all(doc.id, doc.created_at, subjLike, subjLike, like(newVal))
+        .find(note => authoredIncludes(note.content, newVal));
       if (!replacement) continue;
 
       seen.add(doc.id);

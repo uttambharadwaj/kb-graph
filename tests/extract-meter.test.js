@@ -24,10 +24,27 @@ process.env.KB_DIR = tmp;
 const fakeClaude = join(tmp, 'fake-claude.sh');
 const envelope = payload => JSON.stringify({ result: JSON.stringify(payload) });
 const factResponse = (subject, object) => envelope({ facts: [{ subject, predicate: 'depends_on', object }], skipped: [] });
+const rejectionResponse = envelope({
+  facts: [
+    { subject: 'pr #177', predicate: 'merged_via', object: 'commit fc4d595' },
+    { subject: 'pr #177', predicate: 'ci_state', object: 'green', valid_from: '2099-01-01' },
+    { subject: 'invented service', predicate: 'status', object: 'live' },
+  ],
+  skipped: [],
+});
+const dispositionConflictResponse = envelope({
+  facts: [{ subject: 'svc-meter', predicate: 'depends_on', object: 'svc-target' }],
+  skipped: [
+    { assertion: 'svc-meter depends on svc-target', reason: 'not durable' },
+    { assertion: 'svc-meter depends on svc-target', reason: 'out of scope' },
+  ],
+});
 writeFileSync(fakeClaude, `#!/bin/sh
 prompt=$(cat)
 case "$prompt" in
   *"# Transcript"*PERMA_DEAD_CHUNK*) exit 3 ;;
+  *REJECTION_COUNTS*) echo '${rejectionResponse}' ;;
+  *DISPOSITION_CONFLICT*) echo '${dispositionConflictResponse}' ;;
   *SURVIVOR_CHUNK*) echo '${factResponse('svc-survivor', 'svc-target')}' ;;
   *) echo '${factResponse('svc-basic', 'svc-target')}' ;;
 esac
@@ -38,6 +55,7 @@ process.env.CLAUDE_PATH = fakeClaude;
 const { kbExtract } = await import('../src/extract.js');
 const { hashInput } = await import('../src/extract-meter.js');
 const { getDb } = await import('../src/db.js');
+const { getToolDefinitions } = await import('../src/tools.js');
 
 const rowFor = (text) =>
   getDb().prepare('SELECT * FROM extractions WHERE input_hash = ? ORDER BY id DESC LIMIT 1').get(hashInput(text));
@@ -62,6 +80,11 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(row.dry_run, 0);
     assert.strictEqual(row.failed, 0);
     assert.strictEqual(row.from_preview, 0);
+    assert.strictEqual(row.entity_rejections, 0);
+    assert.strictEqual(row.claim_rejections, 0);
+    assert.strictEqual(row.date_overrides, 0);
+    assert.strictEqual(row.duplicate_skips, 0);
+    assert.strictEqual(row.accepted_skip_conflicts, 0);
     assert.strictEqual(row.source, 'meter-test');
     assert.ok(row.duration_ms >= 0);
     assert.ok(row.created_at);
@@ -125,6 +148,35 @@ describe('kb_extract instrumentation', () => {
     assert.strictEqual(row.emitted_count, 1, 'only the surviving chunk emitted a fact');
   });
 
+  it('records total chunk failure as a failed call before throwing', async () => {
+    const text = 'PERMA_DEAD_CHUNK this single chunk never reaches the extractor model.';
+
+    await assert.rejects(
+      () => kbExtract(text, { source: 'meter-test' }),
+      /all 1 extraction chunk failed: claude exited 3/,
+    );
+
+    const row = rowFor(text);
+    assert.ok(row, 'no extraction record written for the total failure');
+    assert.strictEqual(row.chunk_count, 1);
+    assert.strictEqual(row.chunk_failures, 1);
+    assert.strictEqual(row.emitted_count, 0);
+    assert.strictEqual(row.skipped_count, 1);
+    assert.strictEqual(row.failed, 1);
+  });
+
+  it('surfaces total chunk failure as an MCP tool error', async () => {
+    const tool = getToolDefinitions().find(definition => definition.name === 'kb_extract');
+    const result = await tool.handler({
+      text: 'PERMA_DEAD_CHUNK this public tool call also loses its only chunk.',
+      source: 'meter-test',
+      dry_run: false,
+    });
+
+    assert.strictEqual(result.isError, true);
+    assert.match(result.content[0].text, /all 1 extraction chunk failed: claude exited 3/);
+  });
+
   // A commit that replays a dry-run preview never calls extractFacts again —
   // no chunks sent, near-zero duration. Without from_preview that reads as an
   // anomaly (facts appeared out of a call that did no visible work); with it,
@@ -143,5 +195,29 @@ describe('kb_extract instrumentation', () => {
     await kbExtract(freshText, { source: 'meter-test' });
     const freshRow = rowFor(freshText);
     assert.strictEqual(freshRow.from_preview, 0, 'a call that extracted fresh must not claim it replayed one');
+  });
+
+  it('separates entity, claim and date grounding rejections', async () => {
+    const text = 'REJECTION_COUNTS: PR #177 review findings closed across commit fc4d595 and CI passed. '
+      + 'PR #177 remains in CHANGES_REQUESTED pending a re-request. The stated service is live.';
+    await kbExtract(text, { source: 'meter-test', observationDate: '2026-08-26' });
+
+    const row = rowFor(text);
+    assert.strictEqual(row.emitted_count, 1);
+    assert.strictEqual(row.skipped_count, 3);
+    assert.strictEqual(row.entity_rejections, 1);
+    assert.strictEqual(row.claim_rejections, 1);
+    assert.strictEqual(row.date_overrides, 1);
+  });
+
+  it('records duplicate skips and skipped assertions that were actually added', async () => {
+    const text = 'DISPOSITION_CONFLICT: svc-meter depends on svc-target.';
+    const res = await kbExtract(text, { source: 'meter-test' });
+
+    assert.strictEqual(res.added.length, 1);
+    assert.deepStrictEqual(res.skipped, []);
+    const row = rowFor(text);
+    assert.strictEqual(row.duplicate_skips, 1);
+    assert.strictEqual(row.accepted_skip_conflicts, 1);
   });
 });
