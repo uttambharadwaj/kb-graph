@@ -150,8 +150,9 @@ function foldWriteDecisions(db, cutoff) {
   upsertRollups(db, 'write_decisions', [...totals, ...bands]);
 }
 
-// extractions has no reader anywhere in the codebase today (grepped, none
-// found) -- nothing to preserve, so it prunes with a plain delete.
+// The extraction status reader only covers the most recent 24 hours. Rows old
+// enough to reach normal pruning are outside that window, so there is no
+// historical read contract to preserve in a rollup.
 const FOLDERS = { tool_calls: foldToolCalls, write_decisions: foldWriteDecisions };
 
 // Delete rows older than `keepDays`, folding what would be lost into

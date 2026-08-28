@@ -1,3 +1,5 @@
+import { canonicalPredicate, retiresOnContradiction } from './predicates.js';
+
 // Grounding: the extractor asserts things its source text never states —
 // entities the text never names, and event dates it invents. Prompt rules do
 // not hold (measured ~16% compliance on this class), so the guarantee is this
@@ -56,7 +58,48 @@ const textTokensOf = (s) => {
 // prefixes rather than re-typing them. Both are about grounding, so neither can
 // be confused with a chunk failure or a vocabulary rejection.
 export const UNGROUNDED_REASON_PREFIX = 'ungrounded: ';
+export const CLAIM_UNGROUNDED_REASON_PREFIX = 'claim_ungrounded: ';
 export const DATE_OVERRIDE_REASON_PREFIX = 'date_ungrounded: ';
+
+// Predicates whose wrong relationship silently changes what the graph says,
+// even when both endpoint names appear in the source. The cue must occur in a
+// clause that names the subject, so one real merge cannot ground every other PR
+// in the same debrief. This is deliberately a closed, incident-backed list:
+// adding a generic relationship matcher would turn ordinary prose into proof.
+const CLAIM_CUES = Object.freeze({
+  causes: /\b(?:caus(?:e|es|ed|ing)|led to|leads? to|result(?:s|ed)? in|trigger(?:s|ed|ing)?|due to|because of)\b/i,
+  lacks: /\b(?:lacks?|without|missing|has no|have no|does not have|do not have|no)\b/i,
+  merged_via: /\b(?:merge(?:s|d|ing)?|squash[- ]merged|land(?:s|ed|ing))\b/i,
+  supports: /\b(?:supports?|provides?|exposes?|offers?|capable of)\b/i,
+});
+
+// A merge event and an explicitly current pre-merge state in the same source
+// cannot both be true. Historical wording ("was open, then merged") is left
+// alone; these forms say the state still holds now.
+const CURRENT_PRE_MERGE = /\b(?:(?:remains?|still|currently)\b[^.!?;\n]{0,80}\b(?:open|unmerged|changes[_ -]?requested|pending)\b|(?:is|are)\s+(?:still\s+)?(?:open|unmerged)\b|pending\s+(?:a\s+)?(?:re-?request|merge)\b)/i;
+
+// Only work-item lifecycle state retires the prior status row. Keep that
+// destructive path on a deliberately small domain: "still needed" describes
+// the value of doing work, not the work item's lifecycle, and must never erase
+// an existing "open" fact. Repos and services accumulate status facts, so this
+// guard leaves their wider operational vocabulary alone.
+const WORK_ITEM_LIFECYCLE_STATUS = /^(?:archived|backlog|blocked|cancelled|canceled|changes_requested|closed|complete|completed|created|deferred|done|draft|duplicate|filed|implemented|in_progress|in_review|merged|open|opened|pending|planned|ready_for_review|reopened|resolved|retired|shipped|superseded|todo|triage|unmerged|wontfix)$/;
+
+const normalizedStatus = value => String(value ?? '').trim().toLowerCase()
+  .replace(/[\s-]+/g, '_')
+  .replace(/^_+|_+$/g, '');
+
+// Predicate-scoped semantic normalizations the extractor is explicitly asked
+// to perform. Each was observed in a rejected true fact. Keeping the aliases
+// scoped prevents "branch" from grounding "response" on unrelated edges.
+const OBJECT_TOKEN_EQUIVALENTS = Object.freeze({
+  ci_state: Object.freeze({
+    [stemToken('green')]: Object.freeze(['pass', 'success', 'succeed'].map(stemToken)),
+  }),
+  lacks: Object.freeze({
+    [stemToken('response')]: Object.freeze(['branch'].map(stemToken)),
+  }),
+});
 
 // The references a string carries — "#3865", a ticket id, a commit SHA. The
 // extractor qualifies and un-qualifies these at will ("fde94d6" written back as
@@ -128,15 +171,58 @@ const isGrounded = (value, { textTokens, textRefs }) => {
   return tokens.length > 0 && tokens.every(t => textTokens.has(t));
 };
 
+const objectTokensGrounded = (value, ctx, predicate) => {
+  const equivalents = OBJECT_TOKEN_EQUIVALENTS[predicate] || {};
+  const tokens = tokensOf(value);
+  return tokens.length > 0 && tokens.every(token =>
+    ctx.textTokens.has(token) || equivalents[token]?.some(alias => ctx.textTokens.has(alias))
+  );
+};
+
 // The object side takes two extra rules the subject side does not: a bare
 // quantity is exempt, and a bare ISO date must be stated as a date rather than
 // as three separate numbers that happen to appear ("2026" and "28" from an
 // unrelated PR number would otherwise ground an invented 2026-07-28).
-const isObjectGrounded = (value, ctx) => {
+const isObjectGrounded = (value, ctx, predicate) => {
   const raw = String(value ?? '').trim();
   if (isIsoDate(raw)) return dateStatedIn(ctx.text, raw);
   if (VALUE_SHAPED.test(raw)) return true;
-  return isGrounded(raw, ctx);
+  if (isGrounded(raw, ctx)) return true;
+  return objectTokensGrounded(raw, ctx, predicate);
+};
+
+const clauseContexts = text => String(text ?? '')
+  .split(/[.!?;\n]+/)
+  .map(clause => clause.trim())
+  .filter(Boolean)
+  .map(clause => ({
+    text: clause,
+    textTokens: textTokensOf(clause),
+    textRefs: referencesIn(clause),
+  }));
+
+const subjectClauses = (subject, ctx) => {
+  const matching = ctx.clauses.filter(clause => isGrounded(subject, clause));
+  return matching.length ? matching.map(clause => clause.text).join('. ') : ctx.text;
+};
+
+const claimRejection = (fact, predicate, ctx) => {
+  if (predicate === 'status'
+      && retiresOnContradiction({ subject: fact.subject, predicate })
+      && !WORK_ITEM_LIFECYCLE_STATUS.test(normalizedStatus(fact.object))) {
+    return `${CLAIM_UNGROUNDED_REASON_PREFIX}object "${fact.object}" is not a lifecycle status for subject "${fact.subject}"`;
+  }
+  const cue = CLAIM_CUES[predicate];
+  if (!cue) return null;
+  const scope = subjectClauses(fact.subject, ctx);
+  if (!cue.test(scope)) {
+    const relation = predicate === 'merged_via' ? 'a merge' : `the ${predicate} relationship`;
+    return `${CLAIM_UNGROUNDED_REASON_PREFIX}source does not state ${relation} for subject "${fact.subject}"`;
+  }
+  if (predicate === 'merged_via' && CURRENT_PRE_MERGE.test(scope)) {
+    return `${CLAIM_UNGROUNDED_REASON_PREFIX}merged_via contradicts the source's current pre-merge state for subject "${fact.subject}"`;
+  }
+  return null;
 };
 
 // Which words of a rejected name the text does not have. Without this the
@@ -187,6 +273,7 @@ export function groundTriples(facts, text, { observationDate } = {}) {
     text: String(text ?? ''),
     textTokens: textTokensOf(text),
     textRefs: referencesIn(text),
+    clauses: clauseContexts(text),
   };
   const fallbackDate = observationDate || new Date().toISOString().split('T')[0];
   const kept = [], skipped = [];
@@ -201,7 +288,8 @@ export function groundTriples(facts, text, { observationDate } = {}) {
 
     const ungrounded = [];
     if (!isGrounded(fact.subject, ctx)) ungrounded.push(`subject "${fact.subject}"`);
-    if (!isObjectGrounded(fact.object, ctx)) ungrounded.push(`object "${fact.object}"`);
+    const predicate = canonicalPredicate(fact.predicate);
+    if (!isObjectGrounded(fact.object, ctx, predicate)) ungrounded.push(`object "${fact.object}"`);
     if (ungrounded.length) {
       skipped.push({
         assertion: assertionOf(fact),
@@ -209,6 +297,12 @@ export function groundTriples(facts, text, { observationDate } = {}) {
         reason: `${UNGROUNDED_REASON_PREFIX}${ungrounded.join(' and ')} not in source text`
           + missing([fact.subject, fact.object], ctx),
       });
+      continue;
+    }
+
+    const claimReason = claimRejection(fact, predicate, ctx);
+    if (claimReason) {
+      skipped.push({ assertion: assertionOf(fact), fact, reason: claimReason });
       continue;
     }
 

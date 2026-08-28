@@ -142,6 +142,112 @@ describe('supersedeCandidates', () => {
     // The whole point: a proposal, never a mutation.
     assert.strictEqual(getDocument(staleNote).superseded_at, null, 'candidate detection must not write superseded_at');
   });
+
+  it('does not treat a retired duplicate as semantic change when the same triple is current', () => {
+    const db = getDb();
+    const old = addFact('pf3658-reasserted', 'status', 'beta', { validFrom: '2026-05-01' });
+    addFact('pf3658-reasserted', 'status', 'GA', { validFrom: '2026-05-15' });
+    invalidateFact('pf3658-reasserted', 'status', 'beta', { ended: '2026-06-01' });
+
+    // Reassert the exact retired triple with a deterministic id. addFact's id
+    // includes Date.now(), so a same-millisecond re-add would make the fixture
+    // flaky even though the graph state itself is valid.
+    const row = db.prepare('SELECT subject, predicate, object FROM facts WHERE id = ?').get(old.id);
+    db.prepare(`
+      INSERT INTO facts (id, subject, predicate, object, valid_from, source)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(`${old.id}_reasserted`, row.subject, row.predicate, row.object, '2026-06-01', 'test');
+
+    const staleNote = insertDocument({
+      title: 'pf3658-reasserted overview', content: 'pf3658-reasserted status is beta', doc_type: 'decision', tags: '',
+    }).id;
+    const otherNote = insertDocument({
+      title: 'pf3658-reasserted alternate', content: 'pf3658-reasserted status is GA', doc_type: 'decision', tags: '',
+    }).id;
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-05-02 00:00:00', staleNote);
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-06-02 00:00:00', otherNote);
+
+    const candidates = supersedeCandidates({ limit: 100 });
+    assert.ok(!candidates.some(c => c.note_id === staleNote), 'a current triple was presented as retired');
+  });
+
+  it('does not call an older current fact the successor to a later retirement', () => {
+    const db = getDb();
+    addFact('pf3658-order', 'status', 'GA', { validFrom: '2026-01-01' });
+    addFact('pf3658-order', 'status', 'beta', { validFrom: '2026-05-01' });
+    invalidateFact('pf3658-order', 'status', 'beta', { ended: '2026-06-01' });
+
+    const staleNote = insertDocument({
+      title: 'pf3658-order overview', content: 'pf3658-order status is beta', doc_type: 'decision', tags: '',
+    }).id;
+    const olderFactNote = insertDocument({
+      title: 'pf3658-order historical', content: 'pf3658-order status is GA', doc_type: 'decision', tags: '',
+    }).id;
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-05-02 00:00:00', staleNote);
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-06-02 00:00:00', olderFactNote);
+
+    const candidates = supersedeCandidates({ limit: 100 });
+    assert.ok(!candidates.some(c => c.note_id === staleNote), 'a fact predating the retirement was called its successor');
+  });
+
+  it('does not propose archive snapshots for semantic supersession', () => {
+    const db = getDb();
+    addFact('pf3658-archive', 'status', 'beta', { validFrom: '2026-01-01' });
+    invalidateFact('pf3658-archive', 'status', 'beta', { ended: '2026-06-01' });
+    addFact('pf3658-archive', 'status', 'GA', { validFrom: '2026-06-01' });
+
+    const archive = insertDocument({
+      title: 'pf3658-archive snapshot', content: 'pf3658-archive status is beta', doc_type: 'archive', tags: '',
+    }).id;
+    const currentNote = insertDocument({
+      title: 'pf3658-archive overview', content: 'pf3658-archive status is GA', doc_type: 'decision', tags: '',
+    }).id;
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-01-02 00:00:00', archive);
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', currentNote);
+
+    const candidates = supersedeCandidates({ limit: 100 });
+    assert.ok(!candidates.some(c => c.note_id === archive), 'an archive snapshot was proposed for retirement');
+  });
+
+  it('does not use an archive snapshot as proof of a replacement', () => {
+    const db = getDb();
+    addFact('pf3658-proof-from-archive', 'status', 'beta', { validFrom: '2026-01-01' });
+    invalidateFact('pf3658-proof-from-archive', 'status', 'beta', { ended: '2026-06-01' });
+    addFact('pf3658-proof-from-archive', 'status', 'GA', { validFrom: '2026-06-01' });
+
+    const staleNote = insertDocument({
+      title: 'pf3658-proof-from-archive overview', content: 'pf3658-proof-from-archive status is beta', doc_type: 'decision', tags: '',
+    }).id;
+    const archive = insertDocument({
+      title: 'pf3658-proof-from-archive snapshot', content: 'pf3658-proof-from-archive status is GA', doc_type: 'archive', tags: '',
+    }).id;
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-01-02 00:00:00', staleNote);
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', archive);
+
+    const candidates = supersedeCandidates({ limit: 100 });
+    assert.ok(!candidates.some(c => c.note_id === staleNote), 'an archive was used as current-state replacement evidence');
+  });
+
+  it('does not treat an auto-generated Related link as an authored assertion', () => {
+    const db = getDb();
+    addFact('pf3658-related', 'status', 'shipped', { validFrom: '2026-07-01' });
+    invalidateFact('pf3658-related', 'status', 'shipped', { ended: '2026-07-02' });
+    addFact('pf3658-related', 'status', 'correct', { validFrom: '2026-07-02' });
+
+    const linkedOnly = insertDocument({
+      title: 'pf3658-related field parity',
+      content: 'The field names must match exactly.\n\n## Related\n- [[status]] — pf3658-related shipped successfully (0.7)',
+      doc_type: 'lesson', tags: '',
+    }).id;
+    const currentNote = insertDocument({
+      title: 'pf3658-related boundary', content: 'The pf3658-related placement is correct.', doc_type: 'decision', tags: '',
+    }).id;
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', linkedOnly);
+    db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-03 00:00:00', currentNote);
+
+    const candidates = supersedeCandidates({ limit: 100 });
+    assert.ok(!candidates.some(c => c.note_id === linkedOnly), 'generated links were treated as authored evidence');
+  });
 });
 
 describe('kb_supersede names what the pointer resolved to', () => {

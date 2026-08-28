@@ -55,7 +55,7 @@ case "$prompt" in
   *"contradict me"*) echo '${envelope({
     facts: [
       { subject: 'pr #999', predicate: 'status', object: 'open' },
-      { subject: 'pr #999', predicate: 'status', object: 'approved' },
+      { subject: 'pr #999', predicate: 'status', object: 'closed' },
     ],
     skipped: [],
   })}' ;;
@@ -74,6 +74,21 @@ case "$prompt" in
     ],
     skipped: [],
   })}' ;;
+  *CASE_DISPOSITION_REPRO*) echo '${envelope({
+    facts: [
+      { subject: 'ux-labs', predicate: 'gated_by', object: 'approving_review' },
+      { subject: 'ux-labs', predicate: 'gated_by', object: 'code_owner_review' },
+      { subject: 'ux-labs CODEOWNERS', predicate: 'includes', object: 'security_files' },
+      { subject: 'tinyfish-io/security_team', predicate: 'owns', object: 'security_files' },
+    ],
+    skipped: [
+      { assertion: 'ux-labs main branch ruleset requires 1 approving review and code-owner review', reason: 'standing policy' },
+      { assertion: 'ux-labs main branch ruleset requires 1 approving review and code-owner review', reason: 'background configuration' },
+      { assertion: 'tinyfish-io/security_team owns four security files in CODEOWNERS', reason: 'file names not stated' },
+      { assertion: 'tinyfish-io/security_team owns four security files in CODEOWNERS', reason: 'too vague' },
+      { assertion: 'CODEOWNERS covers only four security files owned by tinyfish-io/security_team', reason: 'process policy' },
+    ],
+  })}' ;;
   *) echo '${envelope({
     facts: [{ subject: 'pr #539', predicate: 'merged_via', object: 'commit fde94d6' }],
     skipped: [{ assertion: 'CodeRabbit raised a Major finding', reason: 'resolved in the same PR' }],
@@ -83,7 +98,10 @@ esac
 chmodSync(fakeClaude, 0o755);
 process.env.CLAUDE_PATH = fakeClaude;
 
-const { consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple, MAX_EXTRACT_CHARS } = await import('../src/extract.js');
+const {
+  consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple,
+  reconcileSkipped, MAX_EXTRACT_CHARS,
+} = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
 const { addFact, queryFact, invalidateFact, mergeEntity, entityKey } = await import('../src/facts.js');
 const { getDb } = await import('../src/db.js');
@@ -452,6 +470,34 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.skipped[0].reason, 'resolved in the same PR');
   });
 
+  it('gives each extracted assertion one final disposition', async () => {
+    const text = 'CASE_DISPOSITION_REPRO: The ux-labs main branch ruleset requires 1 approving review and code-owner review; '
+      + 'ux-labs CODEOWNERS covers only four security files owned by tinyfish-io/security_team.';
+    const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-07' });
+
+    assert.deepStrictEqual(
+      res.added.map(f => `${f.subject}|${f.predicate}|${f.object}`).sort(),
+      [
+        'tinyfish-io/security_team|owns|security_files',
+        'ux-labs CODEOWNERS|includes|security_files',
+        'ux-labs|gated_by|approving_review',
+        'ux-labs|gated_by|code_owner_review',
+      ],
+    );
+    assert.deepStrictEqual(res.skipped, [], 'reported written assertions as skipped');
+  });
+
+  it('does not reconcile one referenced entity against another with the same numeric prefix', () => {
+    const skip = { assertion: 'pr #177 merged via commit abc1234', reason: 'not durable' };
+    const res = reconcileSkipped(
+      [{ subject: 'pr #1', predicate: 'merged_via', object: 'commit abc1234' }],
+      [skip],
+    );
+
+    assert.deepStrictEqual(res.skipped, [skip]);
+    assert.strictEqual(res.acceptedSkipConflicts, 0);
+  });
+
   it('folds predicate synonyms onto one canonical edge', () => {
     const res = consolidate([
       { subject: 'pf-3013', predicate: 'child_ticket_of', object: 'pf-2991' },
@@ -514,17 +560,17 @@ describe('kb_extract consolidation', () => {
   // the dry-run-then-commit flow the retirements it used to cause landed at
   // commit time, where nobody was looking.
   it('previews the conflict a batch is about to contradict itself with', async () => {
-    const text = 'contradict me: pr #999 is open, and approved';
+    const text = 'contradict me: pr #999 is open, and closed';
     const res = await kbExtract(text, { source: 'test', observationDate: '2026-07-29', dryRun: true });
 
     assert.deepStrictEqual(
       res.conflicts.map(c => [c.subject, c.predicate, c.objects]),
-      [['pr #999', 'status', ['open', 'approved']]],
+      [['pr #999', 'status', ['open', 'closed']]],
     );
 
     const committed = await kbExtract(text, { source: 'test', observationDate: '2026-07-29' });
     assert.deepStrictEqual(committed.invalidated, []);
-    assert.deepStrictEqual(currentObject('pr #999', 'status').sort(), ['approved', 'open']);
+    assert.deepStrictEqual(currentObject('pr #999', 'status').sort(), ['closed', 'open']);
     assert.strictEqual(committed.conflicts.length, 1);
   });
 
@@ -616,11 +662,11 @@ describe('kb_extract consolidation', () => {
     assert.deepStrictEqual(res.added.map(f => f.object), ['merged'], 'kept the dead attempt output');
   });
 
-  it('reports a dead chunk instead of returning the survivors as complete', async () => {
-    const res = await kbExtract('DEAD_CHUNK', { source: 'test', observationDate: '2026-06-24' });
-
-    assert.strictEqual(res.added.length, 0);
-    assert.match(res.skipped[0].reason, /chunk_failed/);
+  it('throws when every extraction chunk dies', async () => {
+    await assert.rejects(
+      () => kbExtract('DEAD_CHUNK', { source: 'test', observationDate: '2026-06-24' }),
+      /all 1 extraction chunk failed: claude exited 3/,
+    );
   });
 
   // Through kbExtract, not consolidate: the rejection has to survive the layer

@@ -2,7 +2,13 @@ import { createHash } from 'crypto';
 import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { hashInput, logExtraction } from './extract-meter.js';
-import { groundExtraction, isIsoDate } from './grounding.js';
+import {
+  CLAIM_UNGROUNDED_REASON_PREFIX,
+  DATE_OVERRIDE_REASON_PREFIX,
+  UNGROUNDED_REASON_PREFIX,
+  groundExtraction,
+  isIsoDate,
+} from './grounding.js';
 import {
   VOCABULARY,
   canonicalPredicate,
@@ -47,6 +53,7 @@ Rules:
 - A COMPLETED transition ("was fixed", "no longer", "migrated from X to Y", "renamed to") asserts the state AFTER the change. Emit that state; never the pre-change state as if it were current.
 - Past tense ends a state even when nothing names the replacement: "used to", "was declared in", "previously", "before the fix", "the cause was". If the text says what replaced it, emit only the replacement. If it does not, emit nothing for that state and put it in skipped. Text reaches you in fragments, so the sentence describing the fix is often not in front of you — every fact you emit is dated today and claims to be true now. A past EVENT is still emittable — (nightly_job, caused, backlog) — it is the past STATE that is not.
 - Work still in flight ("moving", "migrating", "is proposing", "an open PR that will") has NOT happened. Emit the proposal — (pr_stack, proposes, wallet_identity_migration) — never the completed form. Open, unmerged, in review and planned all mean not yet.
+- A commit mentioned beside a PR is not merge evidence. Emit merged_via only when the text says the PR merged, landed, or was squash-merged; findings closed or "got commit abc123" still describe an open PR unless the text states otherwise.
 - Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: uses, depends_on, defaults_to — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
 - Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
 - Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
@@ -56,6 +63,8 @@ Rules:
 - A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
 - One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
 - status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive.
+- For a ticket or PR, status is a lifecycle value such as open, in_progress, closed, done, or merged. "Still needed", "important", and "required" describe why work matters, not its status; use a stated relationship such as tracks, or skip it.
+- Keep the grammatical owner as the subject. In "the Codex CLI enabled_tools list for the knowledge-base MCP server", the list belongs to Codex CLI; "for the server" does not make the server support that client-side count. Emit supports only when the text says the subject supports, provides, exposes, offers, or is capable of the object.
 - Name only what the text names. Both sides of every triple are checked against the transcript and the triple is dropped if either is absent, so a coined name must be built from words the text uses. Never assert a relationship the text does not state — no blocked_by unless something is said to block, no assigned_to unless something is said to be assigned.
 - When the text states the date of the event ("merged on July 28", "shipped 2026-07-28"), add "valid_from": "YYYY-MM-DD" to that fact — otherwise it is dated the day the transcript was read, which is not when it happened. Omit the field when the text gives no date; a date the text does not state is discarded.
 - Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
@@ -254,6 +263,18 @@ const CHUNK_ATTEMPTS = 2;
 // can't drift apart.
 const CHUNK_FAILED_REASON_PREFIX = 'chunk_failed: ';
 
+const totalChunkFailure = failures => {
+  const noun = failures.length === 1 ? 'chunk' : 'chunks';
+  const details = [...new Set(failures.map(entry =>
+    String(entry.reason).slice(CHUNK_FAILED_REASON_PREFIX.length).trim()
+  ))]
+    .filter(Boolean)
+    .slice(0, 3)
+    .join('; ')
+    .slice(0, 500);
+  return new Error(`all ${failures.length} extraction ${noun} failed${details ? `: ${details}` : ''}`);
+};
+
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
 export async function extractFacts(text) {
   const examined = text.slice(0, MAX_EXTRACT_CHARS);
@@ -309,6 +330,76 @@ export async function extractFacts(text) {
 }
 
 const normEntity = s => s.toLowerCase().trim().replace(/\s+/g, ' ');
+
+// The extractor can describe one assertion twice: once as a candidate triple
+// and once in its prose `skipped` accounting. Consolidation is the final
+// disposition, so a fact that was actually accepted wins over the model's
+// contradictory prose verdict. This is deliberately lexical and conservative:
+// both the accepted subject and object must occur in the assertion after the
+// same separator folding entity ids already rely on.
+const normAssertion = value => String(value ?? '')
+  .toLowerCase()
+  .replace(/[_/\\-]+/g, ' ')
+  .replace(/[^a-z0-9#]+/g, ' ')
+  .trim()
+  .replace(/\s+/g, ' ');
+
+const skipIdentity = skip => {
+  if (skip?.assertion) return `assertion\0${normAssertion(skip.assertion)}`;
+  if (skip?.fact?.subject && skip?.fact?.predicate && skip?.fact?.object) {
+    const fact = canonicalTriple(skip.fact);
+    return `fact\0${normAssertion(fact.subject)}\0${fact.predicate}\0${normAssertion(fact.object)}`;
+  }
+  return null;
+};
+
+const factCoversAssertion = (fact, assertion) => {
+  if (!fact?.subject || !fact?.object || !assertion) return false;
+  const text = normAssertion(assertion);
+  const subject = normAssertion(fact.subject);
+  const object = normAssertion(fact.object);
+  const containsPhrase = phrase => ` ${text} `.includes(` ${phrase} `);
+  return subject.length >= 3 && object.length >= 3
+    && containsPhrase(subject) && containsPhrase(object);
+};
+
+const isModelDisposition = skip => {
+  const reason = String(skip?.reason ?? '');
+  return !reason.startsWith(UNGROUNDED_REASON_PREFIX)
+    && !reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)
+    && !reason.startsWith(DATE_OVERRIDE_REASON_PREFIX)
+    && !reason.startsWith('input_truncated:')
+    && !reason.startsWith('chunk_failed:')
+    && reason !== 'extractor_returned_no_skipped_list';
+};
+
+export function reconcileSkipped(acceptedFacts, skipped) {
+  const unique = [];
+  const seen = new Set();
+  let duplicateSkips = 0;
+
+  for (const entry of skipped) {
+    // Grounding corrections are independent safeguards, not model
+    // dispositions. Keep each visible even if two happen to name one fact.
+    const key = isModelDisposition(entry) ? skipIdentity(entry) : null;
+    if (key && seen.has(key)) {
+      duplicateSkips++;
+      continue;
+    }
+    if (key) seen.add(key);
+    unique.push(entry);
+  }
+
+  let acceptedSkipConflicts = 0;
+  const reconciled = unique.filter(entry => {
+    const shadowed = isModelDisposition(entry) && entry?.assertion
+      && acceptedFacts.some(fact => factCoversAssertion(fact, entry.assertion));
+    if (shadowed) acceptedSkipConflicts++;
+    return !shadowed;
+  });
+
+  return { skipped: reconciled, duplicateSkips, acceptedSkipConflicts };
+}
 
 // The reference an entity string carries, if any: "#3865", a ticket id, a commit
 // SHA. The SHA arm needs a digit — English words are hexadecimal more often than
@@ -659,6 +750,8 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
   const started = Date.now();
   let inputHash = null, inputChars = 0, chunkChars = [];
   let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false, fromPreview = false;
+  let entityRejections = 0, claimRejections = 0, dateOverrides = 0;
+  let duplicateSkips = 0, acceptedSkipConflicts = 0;
   try {
     inputHash = hashInput(text);
     inputChars = text.length;
@@ -672,8 +765,23 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // the text never mentions, or dated a day the text never states, is filtered
     // here (see grounding.js) rather than in consolidation, so the preview
     // remembered below and the row eventually written are the same triple.
+    const extracted = previewed || await extractFacts(text);
+    // Seed the meter before grounding or consolidation can throw. In
+    // particular, total model failure must be both caller-visible and recorded
+    // with the same chunk denominator that proves it was total.
+    chunkChars = extracted.chunkChars;
+    emittedCount = extracted.facts.length;
+    skippedCount = extracted.skipped.length;
+    const failedChunks = extracted.skipped.filter(s =>
+      s?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)
+    );
+    chunkFailures = failedChunks.length;
+    if (!previewed && chunkChars.length > 0 && chunkFailures === chunkChars.length) {
+      throw totalChunkFailure(failedChunks);
+    }
+
     const { facts, skipped, chunkChars: shape } = previewed
-      || groundExtraction(await extractFacts(text), text, { observationDate });
+      || groundExtraction(extracted, text, { observationDate });
     // The shape actually sent — a fresh call's own extractFacts call, or (on a
     // replay) the shape the ORIGINAL dry run sent, carried forward by
     // rememberPreview below. Never recomputed independently: a second
@@ -687,6 +795,9 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // here even when the call as a whole reports facts added, which is exactly
     // the silent-partial-failure shape this meter exists to catch.
     chunkFailures = skipped.filter(s => s?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)).length;
+    entityRejections = skipped.filter(s => s?.reason?.startsWith(UNGROUNDED_REASON_PREFIX)).length;
+    claimRejections = skipped.filter(s => s?.reason?.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)).length;
+    dateOverrides = skipped.filter(s => s?.reason?.startsWith(DATE_OVERRIDE_REASON_PREFIX)).length;
     // The extractor's own skips ride along with consolidation's, so an empty
     // `skipped` beside an input full of triples is a claim the caller can trust.
     const notExtracted = skipped.map(s => ({ ...s, reason: s?.reason || 'not_extracted' }));
@@ -712,23 +823,33 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
       // Previewed too: the whole point of a self-contradicting batch is that its
       // retirements land invisibly at commit time, and a preview that showed only
       // the candidates would be the last place to catch it before they do.
+      const reconciled = reconcileSkipped(candidates, [...refused, ...notExtracted]);
+      duplicateSkips = reconciled.duplicateSkips;
+      acceptedSkipConflicts = reconciled.acceptedSkipConflicts;
+      skippedCount = reconciled.skipped.length;
       return {
         dry_run: true,
         candidates,
         conflicts: findSingleValuedConflicts(facts),
-        skipped: [...refused, ...notExtracted],
+        skipped: reconciled.skipped,
         preview_key: key,
       };
     }
 
     const res = consolidate(facts, { source, observationDate, observedAt });
-    return { ...res, skipped: [...res.skipped, ...notExtracted], from_preview: fromPreview };
+    const reconciled = reconcileSkipped(res.added, [...res.skipped, ...notExtracted]);
+    duplicateSkips = reconciled.duplicateSkips;
+    acceptedSkipConflicts = reconciled.acceptedSkipConflicts;
+    skippedCount = reconciled.skipped.length;
+    return { ...res, skipped: reconciled.skipped, from_preview: fromPreview };
   } catch (err) {
     failed = true;
     throw err;
   } finally {
     logExtraction({
       inputHash, inputChars, chunkChars, emittedCount, skippedCount, chunkFailures,
+      entityRejections, claimRejections, dateOverrides,
+      duplicateSkips, acceptedSkipConflicts,
       dryRun, failed, fromPreview, durationMs: Date.now() - started, source: source ?? null,
     });
   }

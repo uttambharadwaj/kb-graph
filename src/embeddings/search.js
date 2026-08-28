@@ -49,10 +49,16 @@ export function duplicatesIn(similar, threshold = DUP_THRESHOLD) {
 // nothing at or above it is ever accepted, so there is nothing there to report.
 export const NEAR_FLOOR = 0.6;
 export const NEAR_K = 3;
+const NEAR_PHASE = Object.freeze({ CHECK: 'check', EXPLORE: 'explore', WRITE: 'write' });
+const NEAR_NEXT_STEP = Object.freeze({
+  [NEAR_PHASE.CHECK]: 'This is not a duplicate and is clear to write. These related live notes are context; only supersede one if the new note actually contradicts or replaces it.',
+  [NEAR_PHASE.EXPLORE]: 'At the requested threshold this is not a duplicate. This was an exploratory check, not the kb_write verdict; rerun without threshold before writing. These related live notes are context only.',
+  [NEAR_PHASE.WRITE]: 'The note was written. These related live notes are context for linking; only call kb_supersede if the new note actually contradicts or replaces one.',
+});
 
 /**
- * The live notes an accepted note lands beside, and the one action that
- * resolves them.
+ * The live notes an accepted note lands beside, and the action appropriate to
+ * where the caller is in the write flow.
  *
  * At write time a note that contradicts a live note looks exactly like one that
  * agrees with it, and this does not try to tell them apart — no model runs here.
@@ -62,9 +68,10 @@ export const NEAR_K = 3;
  * Self-gating: returns {} when there is nothing worth saying, so every surface
  * spreads it unconditionally and a write onto clean ground stays quiet. Shared
  * so kb_write's accept and kb_check_duplicate's non-duplicate verdict cannot
- * describe the same neighbourhood differently — that drift shipped once.
+ * select different neighbours. Their guidance differs intentionally: the
+ * pre-check says the note is clear to write; the write says it was written.
  */
-export function nearNeighborSignal(similar, { threshold = DUP_THRESHOLD } = {}) {
+export function nearNeighborSignal(similar, { threshold = DUP_THRESHOLD, phase = NEAR_PHASE.WRITE } = {}) {
   // Ceiling is the caller's own duplicate line, so a candidate is reported as a
   // duplicate or as a neighbour, never as both and never as neither.
   const near = similar.filter((s) => s.score >= NEAR_FLOOR && s.score < threshold).slice(0, NEAR_K);
@@ -75,7 +82,7 @@ export function nearNeighborSignal(similar, { threshold = DUP_THRESHOLD } = {}) 
       title: s.title,
       score: Math.round(s.score * 100) / 100,
     })),
-    next_step: 'These live notes already cover this ground. If this note contradicts or replaces one, call kb_supersede with that note\'s id and a reason.',
+    next_step: NEAR_NEXT_STEP[phase] ?? NEAR_NEXT_STEP[NEAR_PHASE.WRITE],
   };
 }
 
@@ -171,7 +178,10 @@ export async function checkDuplicate(content, { threshold = DUP_THRESHOLD } = {}
     // Only beside a not-a-duplicate verdict, which is what makes this the
     // pre-check for the write it precedes: the write returns early on a
     // refusal, so it never reports neighbours either.
-    ...(matches.length ? {} : nearNeighborSignal(similar, { threshold })),
+    ...(matches.length ? {} : nearNeighborSignal(similar, {
+      threshold,
+      phase: threshold === DUP_THRESHOLD ? NEAR_PHASE.CHECK : NEAR_PHASE.EXPLORE,
+    })),
   };
 }
 

@@ -44,7 +44,8 @@ async function getEmbedder() {
  * when this and the embedding write were in different modules, whether a note's
  * vector was comparable to its neighbours' depended on which path produced it.
  */
-export const embeddableBody = (body) => body.replace(/\n+## Related\n[\s\S]*$/, '').slice(0, 2000);
+export const authoredBody = (body) => body.replace(/\n+## Related\n[\s\S]*$/, '');
+export const embeddableBody = (body) => authoredBody(body).slice(0, 2000);
 
 /**
  * Embed `content` for `documentId` and store it.

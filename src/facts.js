@@ -219,6 +219,8 @@ export function queryFact(entityName, { asOf, direction = 'both', exact = false 
   ];
 }
 
+const endsBeforeStart = (validFrom, endDate) => Boolean(validFrom && validFrom > endDate);
+
 export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const db = getDb();
   const subId = entityKey(subject);
@@ -244,7 +246,7 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   const row = db.prepare(
     'SELECT MAX(valid_from) AS valid_from FROM facts WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL'
   ).get(subId, pred, objId);
-  if (row?.valid_from && row.valid_from > endDate) {
+  if (endsBeforeStart(row?.valid_from, endDate)) {
     return { invalidated: 0, ended: endDate, refused: 'ended_before_valid_from', valid_from: row.valid_from };
   }
 
@@ -253,6 +255,36 @@ export function invalidateFact(subject, predicate, object, { ended } = {}) {
   ).run(endDate, subId, pred, objId);
 
   return { invalidated: result.changes, ended: endDate };
+}
+
+export function invalidateFactById(id, { ended } = {}) {
+  const db = getDb();
+  const endDate = ended || new Date().toISOString().split('T')[0];
+  const row = db.prepare(
+    'SELECT valid_from, valid_to FROM facts WHERE id = ?'
+  ).get(id);
+
+  if (!row) {
+    return { id, invalidated: 0, ended: endDate, refused: 'fact_not_found' };
+  }
+  if (row.valid_to !== null) {
+    return { id, invalidated: 0, ended: endDate, refused: 'fact_not_current', valid_to: row.valid_to };
+  }
+  if (endsBeforeStart(row.valid_from, endDate)) {
+    return {
+      id,
+      invalidated: 0,
+      ended: endDate,
+      refused: 'ended_before_valid_from',
+      valid_from: row.valid_from,
+    };
+  }
+
+  const result = db.prepare(
+    'UPDATE facts SET valid_to = ? WHERE id = ? AND valid_to IS NULL'
+  ).run(endDate, id);
+
+  return { id, invalidated: result.changes, ended: endDate };
 }
 
 export function factTimeline(entityName) {

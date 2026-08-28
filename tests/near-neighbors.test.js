@@ -63,7 +63,7 @@ describe('an accepted note is told what it landed beside', () => {
   // else, so emptying it isolates the scores from every note a sibling wrote.
   beforeEach(() => getDb().exec('DELETE FROM embeddings'));
 
-  it('names the live notes on the same ground and how to resolve them', async () => {
+  it('names related live notes as context after the write', async () => {
     const content = 'The relay clears its lease table on every restart, so leases never outlive a deploy.';
     const held = await plantNeighborAt(0.75, { title: 'Relay lease behaviour', content });
 
@@ -72,8 +72,11 @@ describe('an accepted note is told what it landed beside', () => {
 
     const signal = signalOf(res.text);
     assert.deepStrictEqual(signal.near_notes, [{ id: held.id, title: 'Relay lease behaviour', score: 0.75 }]);
+    assert.match(signal.next_step, /note was written/i);
+    assert.match(signal.next_step, /context for linking/i);
     assert.match(signal.next_step, /kb_supersede/, 'the line must name the tool that resolves this');
     assert.match(signal.next_step, /contradicts or replaces/);
+    assert.doesNotMatch(signal.next_step, /already cover/i);
     assert.strictEqual(wrote('Relay leases, revisited'), 1, 'the note is still accepted');
   });
 
@@ -160,7 +163,12 @@ describe('the pre-check and the write describe the same neighbourhood', () => {
 
     const post = signalOf((await call('kb_write', { title: 'Retry caps', content, type: 'lesson' })).text);
     assert.deepStrictEqual(pre.near_notes, post.near_notes);
-    assert.strictEqual(pre.next_step, post.next_step);
+    assert.match(pre.next_step, /not a duplicate/i);
+    assert.match(pre.next_step, /clear to write/i);
+    assert.doesNotMatch(pre.next_step, /already cover/i);
+    assert.match(post.next_step, /note was written/i);
+    assert.match(post.next_step, /context for linking/i);
+    assert.doesNotMatch(post.next_step, /already cover/i);
   });
 
   it('kb_check_duplicate omits them on a duplicate verdict, as the write omits them on a refusal', async () => {
@@ -170,6 +178,17 @@ describe('the pre-check and the write describe the same neighbourhood', () => {
     const pre = JSON.parse((await call('kb_check_duplicate', { content })).text);
     assert.strictEqual(pre.is_duplicate, true);
     assert.deepStrictEqual(Object.keys(pre), ['is_duplicate', 'matches']);
+  });
+
+  it('does not green-light a write after an exploratory threshold hides a real duplicate', async () => {
+    const content = 'Retries are capped at three attempts, with jitter between them.';
+    await plantNeighborAt(DUP_THRESHOLD + 0.02, { title: 'Retry policy', content });
+
+    const pre = JSON.parse((await call('kb_check_duplicate', { content, threshold: DUP_THRESHOLD + 0.04 })).text);
+    assert.strictEqual(pre.is_duplicate, false);
+    assert.match(pre.next_step, /exploratory check/i);
+    assert.match(pre.next_step, /rerun without threshold/i);
+    assert.doesNotMatch(pre.next_step, /clear to write/i);
   });
 
   it('kb_ingest carries the same fields as kb_write', async () => {

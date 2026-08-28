@@ -11,7 +11,7 @@ import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search
 import { metered } from './tool-meter.js';
 import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
-import { addFact, queryFact, invalidateFact, factTimeline, factStats, nearbyEntities } from './facts.js';
+import { addFact, queryFact, invalidateFact, invalidateFactById, factTimeline, factStats, nearbyEntities } from './facts.js';
 import { kbExtract, canonicalTriple, retireContradicted } from './extract.js';
 import { inVocabulary, PredicateNotInVocabularyError } from './predicates.js';
 import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
@@ -259,7 +259,7 @@ function defineTools() {
 
     {
       name: 'kb_write',
-      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces. A successful write reports near_notes when live notes already cover the same ground — read them: if the note you just wrote contradicts or replaces one, retire it with kb_supersede, or the two sit side by side and later recall gets both.',
+      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces. A successful write can report related near_notes as context for linking. They are not duplicate matches; retire one with kb_supersede only if the note you just wrote actually contradicts or replaces it.',
       schema: {
         title: z.string().describe('Note title'),
         content: z.string().describe('Markdown content (body text, no frontmatter needed)'),
@@ -359,7 +359,7 @@ function defineTools() {
 
     {
       name: 'kb_supersede_candidates',
-      description: 'Propose notes that may be stale, from retired facts in the temporal graph. Reach for this when a briefing or a search result contradicts something you have just observed to be true, after a session that retired several facts, or as a periodic sweep of a knowledge base you have started to distrust. SUGGESTIONS ONLY — this never marks anything superseded, so it is safe to run at any time. Each candidate is a live note whose content asserts a value a later fact retired, alongside a newer note asserting the current value. Review, then confirm real ones with kb_supersede. Conservative by design (prefers misses over false retires), so an empty result is not proof the base is current.',
+      description: 'Propose notes that may be stale, from retired facts in the temporal graph. Reach for this when a briefing or a search result contradicts something you have just observed to be true, after a session that retired several facts, or as a periodic sweep of a knowledge base you have started to distrust. SUGGESTIONS ONLY — this never marks anything superseded, so it is safe to run at any time. Each candidate is a live non-archive note whose content asserts a value a later fact retired, alongside a newer non-archive note asserting a current fact that began no earlier than the retirement. A retired row whose exact triple is current again is ignored. Review, then confirm real ones with kb_supersede. Conservative by design (prefers misses over false retires), so an empty result is not proof the base is current.',
       schema: {
         since: z.string().optional().describe('Only consider facts retired on/after this ISO date (YYYY-MM-DD)'),
         limit: z.number().int().optional().default(20).describe('Max candidates to return'),
@@ -784,7 +784,7 @@ function defineTools() {
 
     {
       name: 'kb_extract',
-      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued AND the subject names one state-bearing thing — a ticket or issue id (tkt-4821 status "in_review" -> "done"). A repo, project or person accumulates instead, so "knowledge-base-server status X" never retires "status Y"; retire those by hand with kb_fact_invalidate. Cumulative predicates (owns, chose, shipped_via) always keep both. Where one call asserts two objects for the same single-valued pair, nothing is retired — the call gives no order for them — and the pair comes back in "conflicts" for you to resolve. Assertions the extractor chose not to record come back in "skipped" with a reason, and so does every triple the filter refused: a triple whose subject or object the text never names is not written ("ungrounded: ..."), and a valid_from the text never states is replaced by the observation date and reported ("date_ungrounded: ...") rather than corrected silently. The predicate vocabulary is also CLOSED: a fact whose predicate is outside it comes back as "predicate_not_in_vocabulary", with the nearest listed predicates and the file to widen. Those are never coerced onto a near match and never silently dropped; a dry run reports them the same way, so its candidate list is exactly what a commit will write. Input past 12,000 characters is not examined and comes back there too, as "input_truncated" with the count — call again with the remainder if it matters. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
+      description: 'Auto-extract durable facts from a raw conversation or session transcript into the knowledge graph. The LLM pulls subject-predicate-object triples; consolidation dedupes identical facts and retires a contradicted one only where the predicate is single-valued AND the subject names one state-bearing thing — a ticket or issue id (tkt-4821 status "in_review" -> "done"). A repo, project or person accumulates instead, so "knowledge-base-server status X" never retires "status Y"; retire those by hand with kb_fact_invalidate. Cumulative predicates (owns, chose, shipped_via) always keep both. Where one call asserts two objects for the same single-valued pair, nothing is retired — the call gives no order for them — and the pair comes back in "conflicts" for you to resolve. Assertions the extractor chose not to record come back in "skipped" with a reason, and so does every triple the filter refused: a triple whose subject or object the text never names is not written ("ungrounded: ..."), and a valid_from the text never states is replaced by the observation date and reported ("date_ungrounded: ...") rather than corrected silently. If one model chunk fails after its retries while others succeed, that chunk stays visible in "skipped"; if every chunk fails, the tool returns an error instead of an empty success. The predicate vocabulary is also CLOSED: a fact whose predicate is outside it comes back as "predicate_not_in_vocabulary", with the nearest listed predicates and the file to widen. Those are never coerced onto a near match and never silently dropped; a dry run reports them the same way, so its candidate list is exactly what a commit will write. Input past 12,000 characters is not examined and comes back there too, as "input_truncated" with the count — call again with the remainder if it matters. Use at session end (e.g. from /debrief) instead of hand-writing kb_fact_add calls. Set dry_run to preview candidates without writing.',
       schema: {
         text: z.string().describe('The conversation or session transcript to extract facts from'),
         source: z.string().optional().describe('Provenance for the facts (e.g. "debrief:2026-06-24", "session:<id>")'),
@@ -872,17 +872,29 @@ function defineTools() {
 
     {
       name: 'kb_fact_invalidate',
-      description: 'Mark a fact as no longer true (set end date). Use when decisions are reversed, architectures change, or states expire. E.g. invalidate("my-app", "uses", "legacy-auth") after removing it. Refuses with "refused": "ended_before_valid_from" if the end date precedes the fact\'s valid_from — an interval cannot end before it begins.',
+      description: 'Mark a fact as no longer true (set end date). Address the exact row with the id returned by kb_extract/kb_fact_add, or use the legacy subject + predicate + object triple. Provide one addressing form, not both. Refuses with "refused": "ended_before_valid_from" if the end date precedes the fact\'s valid_from — an interval cannot end before it begins.',
       schema: {
-        subject: z.string().describe('Entity'),
-        predicate: z.string().describe('Relationship'),
-        object: z.string().describe('Target entity'),
+        id: z.string().min(1).optional().describe('Exact fact id returned by kb_extract or kb_fact_add (preferred)'),
+        subject: z.string().optional().describe('Entity (legacy triple form; requires predicate and object)'),
+        predicate: z.string().optional().describe('Relationship (legacy triple form; requires subject and object)'),
+        object: z.string().optional().describe('Target entity (legacy triple form; requires subject and predicate)'),
         ended: z.string().optional().describe('When it stopped being true (YYYY-MM-DD, default: today)'),
       },
-      // Canonicalised with kb_fact_add, or the spelling that named a row on the
-      // way in could not name it again on the way out.
-      handler: async ({ subject, predicate, object, ended }) => {
+      // Triple addressing is canonicalised with kb_fact_add, or the spelling
+      // that named a row on the way in could not name it again on the way out.
+      handler: async ({ id, subject, predicate, object, ended }) => {
         try {
+          const tripleFields = [subject, predicate, object];
+          const anyTriple = tripleFields.some(value => value !== undefined);
+          const completeTriple = tripleFields.every(value => typeof value === 'string');
+          if ((id !== undefined && anyTriple) || (id === undefined && !completeTriple)) {
+            throw new Error('provide either id or the complete subject, predicate, object triple');
+          }
+          if (id !== undefined) {
+            const result = invalidateFactById(id, { ended });
+            if (result.refused === 'fact_not_found') throw new Error(`fact id not found: ${id}`);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          }
           const t = canonicalTriple({ subject, predicate, object });
           const result = invalidateFact(t.subject, t.predicate, t.object, { ended });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
