@@ -160,7 +160,7 @@ describe('harvest candidate selection', () => {
     assert.strictEqual(selectWork(candidates).length, 4);
   });
 
-  // PF-3187: the harvest read a session that was still open and wrote near-
+  // TKT-3187: the harvest read a session that was still open and wrote near-
   // duplicates of notes that session's human was writing by hand. The automatic
   // copy arrives first, so the deliberate note is the one dedup then refuses.
   it('leaves a session that is still being written for the next run', async () => {

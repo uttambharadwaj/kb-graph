@@ -42,14 +42,14 @@ async function inOverrideInstall(config, body) {
 
 describe('fold-inverses migration', () => {
   it('rewrites a minority-direction row onto the canonical one', () => {
-    legacy('pf_200', 'blocks', 'pf_201', '2026-07-01');
+    legacy('tkt_200', 'blocks', 'tkt_201', '2026-07-01');
     foldInverses({ apply: true });
 
-    const live = liveFor('pf_200');
+    const live = liveFor('tkt_200');
     assert.strictEqual(live.length, 1);
     assert.strictEqual(live[0].predicate, 'blocked_by');
-    assert.strictEqual(live[0].subject, 'pf_201');
-    assert.strictEqual(live[0].object, 'pf_200');
+    assert.strictEqual(live[0].subject, 'tkt_201');
+    assert.strictEqual(live[0].object, 'tkt_200');
   });
 
   it('preserves valid_from when it rewrites', () => {
@@ -59,11 +59,11 @@ describe('fold-inverses migration', () => {
   });
 
   it('merges a legacy row into the twin that already holds the relationship', () => {
-    legacy('pf_300', 'blocks', 'pf_301', '2026-07-02');
-    legacy('pf_301', 'blocked_by', 'pf_300', '2026-07-05');
+    legacy('tkt_300', 'blocks', 'tkt_301', '2026-07-02');
+    legacy('tkt_301', 'blocked_by', 'tkt_300', '2026-07-05');
     foldInverses({ apply: true });
 
-    const live = liveFor('pf_301');
+    const live = liveFor('tkt_301');
     assert.strictEqual(live.length, 1, `expected one row, got ${JSON.stringify(live)}`);
     // The survivor keeps the earlier date — the relationship has been true since
     // the legacy row said so, not since the canonical row restated it.
@@ -74,30 +74,30 @@ describe('fold-inverses migration', () => {
   // consistency but must never be merged away into a live twin — that would
   // delete the record of when the relationship stopped being stated that way.
   it('folds a retired row without merging it into a live twin', () => {
-    legacy('pf_500', 'blocks', 'pf_501', '2026-07-01');
-    invalidateFact('pf_500', 'blocks', 'pf_501', { ended: '2026-07-03' });
-    legacy('pf_501', 'blocked_by', 'pf_500', '2026-07-04');
+    legacy('tkt_500', 'blocks', 'tkt_501', '2026-07-01');
+    invalidateFact('tkt_500', 'blocks', 'tkt_501', { ended: '2026-07-03' });
+    legacy('tkt_501', 'blocked_by', 'tkt_500', '2026-07-04');
 
     foldInverses({ apply: true });
 
-    const all = queryFact('pf_501', { direction: 'both' });
+    const all = queryFact('tkt_501', { direction: 'both' });
     assert.strictEqual(all.length, 2, `retired row must survive: ${JSON.stringify(all)}`);
     assert.ok(all.every(r => r.predicate === 'blocked_by'), 'both rows fold to the canonical direction');
     assert.strictEqual(all.filter(r => r.current).length, 1);
   });
 
   it('reports without writing on a dry run', () => {
-    legacy('pf_600', 'blocks', 'pf_601', '2026-07-01');
+    legacy('tkt_600', 'blocks', 'tkt_601', '2026-07-01');
     const res = foldInverses();
 
     assert.strictEqual(res.folded, 1);
     assert.strictEqual(res.merged, 0);
-    const live = liveFor('pf_600');
+    const live = liveFor('tkt_600');
     assert.strictEqual(live[0].predicate, 'blocks', 'a dry run must not rewrite');
   });
 
   it('is re-runnable: a second pass finds nothing left to do', () => {
-    legacy('pf_700', 'owned_by', 'team_x', '2026-07-01');
+    legacy('tkt_700', 'owned_by', 'team_x', '2026-07-01');
     foldInverses({ apply: true });
     assert.deepStrictEqual(foldInverses({ apply: true }), { folded: 0, merged: 0 });
   });
@@ -169,18 +169,18 @@ describe('fold-inverses migration', () => {
   });
 
   // consolidate matches its subject exactly and its object through sameEntity,
-  // so "ux-labs pr #3865" and "pr #3865" are one fact to the writer. Matching
+  // so "sample-web pr #3865" and "pr #3865" are one fact to the writer. Matching
   // objects exactly here would split what the next write then treats as a
   // duplicate — two live rows the writer believes are one.
   it('merges into a twin whose object is an equivalent spelling', () => {
     legacy('pr #3865', 'blocks', 'svc_q', '2026-07-01');
-    legacy('svc_q', 'blocked_by', 'ux-labs pr #3865', '2026-07-05');
+    legacy('svc_q', 'blocked_by', 'sample-web pr #3865', '2026-07-05');
     foldInverses({ apply: true });
 
     const live = liveFor('svc_q');
     assert.strictEqual(live.length, 1, `expected one row, got ${JSON.stringify(live)}`);
     // The graph's existing spelling wins, as it does in consolidate.
-    assert.strictEqual(live[0].object, 'ux-labs pr #3865');
+    assert.strictEqual(live[0].object, 'sample-web pr #3865');
     assert.strictEqual(live[0].valid_from, '2026-07-01');
   });
 
@@ -189,7 +189,7 @@ describe('fold-inverses migration', () => {
   // the scan's ORDER BY rather than from any explicit sort — so this locks that
   // ordering, which otherwise reads as cosmetic.
   it('merges into the oldest of several equivalent twins', () => {
-    legacy('svc_r', 'blocked_by', 'ux-labs pr #4100', '2026-06-20');
+    legacy('svc_r', 'blocked_by', 'sample-web pr #4100', '2026-06-20');
     legacy('svc_r', 'blocked_by', 'pr #4100', '2026-06-25');
     // Older than both, so whichever twin absorbs it is the one that gets
     // backdated — that is what makes the choice observable at all.
@@ -198,7 +198,7 @@ describe('fold-inverses migration', () => {
 
     const live = liveFor('svc_r').filter(r => r.predicate === 'blocked_by');
     const backdated = live.filter(r => r.valid_from === '2026-06-01');
-    assert.deepStrictEqual(backdated.map(r => r.object), ['ux-labs pr #4100'],
+    assert.deepStrictEqual(backdated.map(r => r.object), ['sample-web pr #4100'],
       `the oldest twin must be the one that absorbed it: ${JSON.stringify(live)}`);
     assert.strictEqual(live.length, 2, `the fold must not add a third row: ${JSON.stringify(live)}`);
   });
@@ -207,8 +207,8 @@ describe('fold-inverses migration', () => {
   // the earliest start there is. Treating it as a missing one and keeping the
   // dated survivor hides the relationship for every date before that.
   it('carries an unbounded start onto the survivor', () => {
-    legacy('svc_s', 'blocked_by', 'pf_910', '2026-06-01');
-    addFact('pf_910', 'blocks', 'svc_s', { source: 'pre-fold' }); // no valid_from
+    legacy('svc_s', 'blocked_by', 'tkt_910', '2026-06-01');
+    addFact('tkt_910', 'blocks', 'svc_s', { source: 'pre-fold' }); // no valid_from
     foldInverses({ apply: true });
 
     const live = liveFor('svc_s');
@@ -225,8 +225,8 @@ describe('fold-inverses migration', () => {
   // that early — a mismatch consolidate never creates, because it does not
   // backdate at all.
   it('carries source along with the date it backdates to', () => {
-    addFact('svc_t', 'blocked_by', 'pf_920', { validFrom: '2026-06-01', source: 'canonical-src' });
-    addFact('pf_920', 'blocks', 'svc_t', { validFrom: '2026-05-01', source: 'legacy-src' });
+    addFact('svc_t', 'blocked_by', 'tkt_920', { validFrom: '2026-06-01', source: 'canonical-src' });
+    addFact('tkt_920', 'blocks', 'svc_t', { validFrom: '2026-05-01', source: 'legacy-src' });
     foldInverses({ apply: true });
 
     const live = liveFor('svc_t');
@@ -291,13 +291,13 @@ describe('fold-inverses migration', () => {
   // direction. Once folded, the next mention must land as a duplicate, not a
   // second live row.
   it('stops a legacy row from duplicating on the next mention', () => {
-    legacy('pf_800', 'blocks', 'pf_801', '2026-07-01');
+    legacy('tkt_800', 'blocks', 'tkt_801', '2026-07-01');
     foldInverses({ apply: true });
 
-    const res = consolidate([{ subject: 'pf_800', predicate: 'blocks', object: 'pf_801' }],
+    const res = consolidate([{ subject: 'tkt_800', predicate: 'blocks', object: 'tkt_801' }],
       { observationDate: '2026-07-30' });
 
     assert.strictEqual(res.added.length, 0);
-    assert.strictEqual(liveFor('pf_801').length, 1);
+    assert.strictEqual(liveFor('tkt_801').length, 1);
   });
 });

@@ -30,22 +30,22 @@ describe('inverse predicate folding', () => {
 
   it('swaps subject and object onto the canonical direction', () => {
     assert.deepStrictEqual(
-      canonicalTriple(triple('eva', 'owned_by', 'core_technologies')),
-      triple('core_technologies', 'owns', 'eva'),
+      canonicalTriple(triple('orca', 'owned_by', 'core_technologies')),
+      triple('core_technologies', 'owns', 'orca'),
     );
   });
 
   it('leaves a predicate that is already canonical alone', () => {
     assert.deepStrictEqual(
-      canonicalTriple(triple('core_technologies', 'owns', 'eva')),
-      triple('core_technologies', 'owns', 'eva'),
+      canonicalTriple(triple('core_technologies', 'owns', 'orca')),
+      triple('core_technologies', 'owns', 'orca'),
     );
   });
 
   it('normalizes the predicate of a fact it does not swap', () => {
     assert.deepStrictEqual(
-      canonicalTriple(triple('pf-1', 'Subtask Of', 'pf-2')),
-      triple('pf-1', 'child_of', 'pf-2'),
+      canonicalTriple(triple('tkt-1', 'Subtask Of', 'tkt-2')),
+      triple('tkt-1', 'child_of', 'tkt-2'),
     );
   });
 
@@ -84,14 +84,14 @@ describe('inverse predicate folding', () => {
   // The bug: both directions live, so a change phrased in one leaves the other
   // asserting the old state. One row means one thing to retire.
   it('stores both spellings of one relationship as a single fact', () => {
-    const first = consolidate([triple('pf_2815', 'blocks', 'pf_2816')], { observationDate: '2026-07-01' });
+    const first = consolidate([triple('tkt_2815', 'blocks', 'tkt_2816')], { observationDate: '2026-07-01' });
     assert.strictEqual(first.added.length, 1);
 
-    const second = consolidate([triple('pf_2816', 'blocked_by', 'pf_2815')], { observationDate: '2026-07-02' });
+    const second = consolidate([triple('tkt_2816', 'blocked_by', 'tkt_2815')], { observationDate: '2026-07-02' });
     assert.strictEqual(second.added.length, 0, 'the mirrored spelling must not add a second row');
     assert.strictEqual(second.skipped[0].reason, 'duplicate');
 
-    const live = queryFact('pf_2816', { direction: 'both' }).filter(r => r.current);
+    const live = queryFact('tkt_2816', { direction: 'both' }).filter(r => r.current);
     assert.strictEqual(live.length, 1, `expected one live row, got ${JSON.stringify(live)}`);
     assert.strictEqual(live[0].predicate, 'blocked_by');
   });
@@ -107,14 +107,14 @@ describe('inverse predicate folding', () => {
     const { execFileSync } = await import('child_process');
     const script = `
       const { canonicalTriple } = await import(${JSON.stringify(new URL('../src/extract.js', import.meta.url).href)});
-      const t = canonicalTriple({ subject: 'pf-1', predicate: 'assigned_to', object: 'alice' });
+      const t = canonicalTriple({ subject: 'tkt-1', predicate: 'assigned_to', object: 'alice' });
       console.log(JSON.stringify(t));
     `;
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       env: { ...process.env, KB_DIR: dir },
       encoding: 'utf8',
     });
-    assert.deepStrictEqual(JSON.parse(out.trim()), triple('pf-1', 'assigned_to', 'alice'));
+    assert.deepStrictEqual(JSON.parse(out.trim()), triple('tkt-1', 'assigned_to', 'alice'));
   });
 
   // An alias resolves to a single-valued predicate, so checking the raw spelling
@@ -131,13 +131,13 @@ describe('inverse predicate folding', () => {
     const { execFileSync } = await import('child_process');
     const script = `
       const { canonicalTriple } = await import(${JSON.stringify(new URL('../src/extract.js', import.meta.url).href)});
-      console.log(JSON.stringify(canonicalTriple({ subject: 'pf-1', predicate: 'owned_by', object: 'alice' })));
+      console.log(JSON.stringify(canonicalTriple({ subject: 'tkt-1', predicate: 'owned_by', object: 'alice' })));
     `;
     const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
       env: { ...process.env, KB_DIR: dir },
       encoding: 'utf8',
     });
-    assert.deepStrictEqual(JSON.parse(out.trim()), triple('pf-1', 'owned_by', 'alice'));
+    assert.deepStrictEqual(JSON.parse(out.trim()), triple('tkt-1', 'owned_by', 'alice'));
   });
 
   // A key the alias map rewrites can never be looked up, because canonicalTriple
@@ -192,11 +192,11 @@ describe('inverse predicate folding', () => {
   // Reassignment is what the refusal above protects: it only supersedes because
   // the ticket is the subject.
   it('supersedes an assignment when the ticket keeps the subject position', () => {
-    consolidate([triple('pf-2794', 'assigned_to', 'uttam')], { observationDate: '2026-07-01' });
-    const res = consolidate([triple('pf-2794', 'assigned_to', 'catherine')], { observationDate: '2026-07-02' });
+    consolidate([triple('tkt-2794', 'assigned_to', 'devuser')], { observationDate: '2026-07-01' });
+    const res = consolidate([triple('tkt-2794', 'assigned_to', 'casey')], { observationDate: '2026-07-02' });
 
     assert.strictEqual(res.invalidated.length, 1);
-    const live = queryFact('pf-2794', { direction: 'outgoing' }).filter(r => r.current);
-    assert.deepStrictEqual(live.map(r => r.object), ['catherine']);
+    const live = queryFact('tkt-2794', { direction: 'outgoing' }).filter(r => r.current);
+    assert.deepStrictEqual(live.map(r => r.object), ['casey']);
   });
 });

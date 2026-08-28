@@ -12,8 +12,8 @@ describe('ingest helpers', () => {
     const metadata = getMarkdownIngestMetadata(`---
 title: "Large PR Protocol: design-led, invariant-gated"
 type: workflow
-tags: [ux-labs, large-pr, review]
-project: ux-labs
+tags: [sample-web, large-pr, review]
+project: sample-web
 ---
 
 # Body
@@ -24,13 +24,13 @@ Use invariants.`, 'large-pr-protocol.md');
       title: 'Large PR Protocol: design-led, invariant-gated',
       content: '# Body\n\nUse invariants.',
       doc_type: 'workflow',
-      tags: 'ux-labs, large-pr, review',
+      tags: 'sample-web, large-pr, review',
     });
   });
 
   it('keeps string tag arguments backward-compatible for kb_ingest callers', () => {
-    assert.deepStrictEqual(normalizeIngestOptions('ux-labs,large-pr'), {
-      tags: 'ux-labs,large-pr',
+    assert.deepStrictEqual(normalizeIngestOptions('sample-web,large-pr'), {
+      tags: 'sample-web,large-pr',
     });
   });
 });

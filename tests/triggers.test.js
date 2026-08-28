@@ -353,32 +353,32 @@ describe('commandSegments / matchCommand — quote-aware segmentation', () => {
 });
 
 describe('matchCommand — token boundary vs flag substring', () => {
-  const entry = { id: 'g', title: 'Watch eva mentions', tier: 'observed', patterns: [{ parts: ['grep', 'eva'], hits: 1, sessions: 1 }] };
+  const entry = { id: 'g', title: 'Watch orca mentions', tier: 'observed', patterns: [{ parts: ['grep', 'orca'], hits: 1, sessions: 1 }] };
 
-  it('does not match "eva" embedded in relevantNotes', () => {
+  it('does not match "orca" embedded in relevantNotes', () => {
     assert.deepStrictEqual(matchCommand('grep relevantnotes src/hint-relevance.js', [entry]), []);
   });
 
-  it('does not match "eva" embedded in parseVaultNote', () => {
+  it('does not match "orca" embedded in parseVaultNote', () => {
     assert.deepStrictEqual(matchCommand('grep parsevaultnote src/vault/indexer.js', [entry]), []);
   });
 
-  it('matches "eva" as a standalone token', () => {
-    const hits = matchCommand('grep eva src/main.js', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', tier: 'observed', hits: 1 }]);
+  it('matches "orca" as a standalone token', () => {
+    const hits = matchCommand('grep orca src/main.js', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch orca mentions', tier: 'observed', hits: 1 }]);
   });
 
   // A3: partAppears now caches its RegExp per distinct part (module-level
   // Map) instead of compiling fresh on every call. Correctness check, not a
   // benchmark — a stale/shared regex object reused incorrectly across calls
   // would show up here as a decline that should have matched, or vice versa,
-  // since the SAME 'eva' part is graded against three different commands in
+  // since the SAME 'orca' part is graded against three different commands in
   // a row within this one process.
   it('the cached regex for a reused part still grades each call independently — a miss, a miss, then a real match', () => {
     assert.deepStrictEqual(matchCommand('grep relevantnotes src/hint-relevance.js', [entry]), []);
     assert.deepStrictEqual(matchCommand('grep parsevaultnote src/vault/indexer.js', [entry]), []);
-    const hits = matchCommand('grep eva src/other.js', [entry]);
-    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch eva mentions', tier: 'observed', hits: 1 }]);
+    const hits = matchCommand('grep orca src/other.js', [entry]);
+    assert.deepStrictEqual(hits, [{ id: 'g', title: 'Watch orca mentions', tier: 'observed', hits: 1 }]);
   });
 
   it('a flag-shaped part matches as a plain substring, by design', () => {

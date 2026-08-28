@@ -59,13 +59,13 @@ case "$prompt" in
     facts: [
       { subject: 'pr #177', predicate: 'merged_via', object: 'commit fc4d595' },
       { subject: 'pr #177', predicate: 'ci_state', object: 'green' },
-      { subject: 'vault-service delete v1 profiles profile_id lease', predicate: 'lacks', object: '404_response' },
+      { subject: 'credential-store delete v1 profiles profile_id lease', predicate: 'lacks', object: '404_response' },
     ],
     skipped: [],
   })}' ;;
   *CASE_STATUS_REPRO*) echo '${envelope({
     facts: [
-      { subject: 'release stack', predicate: 'causes', object: 'ux-labs-frontend-5ah' },
+      { subject: 'release stack', predicate: 'causes', object: 'sample-web-frontend-5ah' },
       { subject: 'pr #4420', predicate: 'status', object: 'needed' },
     ],
     skipped: [],
@@ -194,17 +194,17 @@ describe('grounding extracted triples in the source text', () => {
     // single token — a category noun the extractor hung off a phrase the text
     // does state, or a compound the text writes hyphenated. Its text, abridged
     // only by dropping whole sentences.
-    const incident = 'The cause was stealth browser sessions failing on the Tetra data plane: '
-      + 'WADL\'s combined resolver returned 400 "No instance template with name tetra-stealth-fed7059431d7" '
+    const incident = 'The cause was stealth browser sessions failing on the browser-runtime data plane: '
+      + 'WADL\'s combined resolver returned 400 "No instance template with name browser-runtime-stealth-fed7059431d7" '
       + 'from the AWS resolver and the bare-metal fallback. '
-      + 'Root cause: the Tetra instance template for the stealth browser profile fails its cold-host prepare step '
+      + 'Root cause: the browser-runtime instance template for the stealth browser profile fails its cold-host prepare step '
       + 'with "Browser did not become ready within 10000ms". '
       + 'The initial root-cause analysis posted by TinyIgor was refuted. '
       + 'Aleks proposed fixing this permanently by pre-warming the stealth template in provision.sh in the '
-      + 'aws-control-tetra repo and completing the ASG lifecycle hook only after successful provisioning.';
+      + 'aws-control-browser-runtime repo and completing the ASG lifecycle hook only after successful provisioning.';
 
     for (const [subject, predicate, object, why] of [
-      ['tetra stealth instance template', 'causes', 'stealth browser session failures', 'failing -> failures'],
+      ['browser-runtime stealth instance template', 'causes', 'stealth browser session failures', 'failing -> failures'],
       ['stealth_browser_profile', 'causes', 'cold_host_provisioning_failure', 'fails -> failure'],
       ['aleks', 'proposes', 'asg_lifecycle_hook_post_provisioning_completion', 'completing -> completion'],
       ['aleks', 'proposes', 'stealth_profile_prewarming_in_provision_sh', 'pre-warming -> prewarming, mid-name'],
@@ -241,9 +241,9 @@ describe('grounding extracted triples in the source text', () => {
     // here is a morphological variant of anything in its text, so nothing here
     // may be grounded by it.
     for (const [subject, object, text, why] of [
-      ['eva', 'eva production', 'eva staging is live and healthy.', 'staging is not production'],
+      ['orca', 'orca production', 'orca staging is live and healthy.', 'staging is not production'],
       ['checkout', 'vault service production', 'the vault service sandbox handles the checkout.', 'nor at the end of a longer stated phrase'],
-      ['eva', 'eva postgres', 'eva uses mysql.', 'mysql is not postgres'],
+      ['orca', 'orca postgres', 'orca uses mysql.', 'mysql is not postgres'],
       ['migration', 'primary replica', 'the migration ran on the primary.', 'a replica is not a kind of primary'],
       ['change', 'pasha dudka', 'pasha approved the change.', 'a surname is not implied by a first name'],
       ['deploy', 'deploy failure', 'the deploy succeeded.', 'succeeded is not a failure'],
@@ -380,8 +380,8 @@ describe('grounding extracted triples in the source text', () => {
 
     it('rejects a causal edge grounded only by temporal adjacency', () => {
       const res = groundTriples(
-        [triple('release stack', 'causes', 'ux-labs-frontend-5ah')],
-        'UX-LABS-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.',
+        [triple('release stack', 'causes', 'sample-web-frontend-5ah')],
+        'sample-web-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.',
         {},
       );
 
@@ -390,10 +390,10 @@ describe('grounding extracted triples in the source text', () => {
     });
 
     it('keeps an explicit causal edge', () => {
-      const fact = triple('release stack', 'causes', 'ux-labs-frontend-5ah');
+      const fact = triple('release stack', 'causes', 'sample-web-frontend-5ah');
       const res = groundTriples(
         [fact],
-        'The release stack caused UX-LABS-FRONTEND-5AH.',
+        'The release stack caused sample-web-FRONTEND-5AH.',
         {},
       );
 
@@ -450,10 +450,10 @@ describe('grounding extracted triples in the source text', () => {
     it('accepts narrow predicate-scoped paraphrases', () => {
       const facts = [
         triple('pr #177', 'ci_state', 'green'),
-        triple('vault-service delete v1 profiles profile_id lease', 'lacks', '404_response'),
+        triple('credential-store delete v1 profiles profile_id lease', 'lacks', '404_response'),
       ];
       const text = 'PR #177 CI passed all seven checks. '
-        + 'The vault-service DELETE /v1/profiles/{profile_id}/lease endpoint has no 404 branch.';
+        + 'The credential-store DELETE /v1/profiles/{profile_id}/lease endpoint has no 404 branch.';
       const res = groundTriples(facts, text, {});
 
       assert.deepStrictEqual(res.facts, facts);
@@ -462,8 +462,8 @@ describe('grounding extracted triples in the source text', () => {
 
     it('does not apply a paraphrase outside its predicate', () => {
       const res = groundTriples(
-        [triple('vault-service', 'returns', '404_response')],
-        'The vault-service endpoint has no 404 branch.',
+        [triple('credential-store', 'returns', '404_response')],
+        'The credential-store endpoint has no 404 branch.',
         {},
       );
 
@@ -548,15 +548,15 @@ describe('grounding extracted triples in the source text', () => {
   describe('wired into kb_extract', () => {
     it('blocks the fabricated merge while keeping normalized true facts from the same call', async () => {
       const text = 'CASE_MERGE_REPRO: All seven review findings on PR #177 were closed across commit fc4d595, '
-        + 'and CI passed all seven checks. The vault-service DELETE v1 profiles profile_id lease endpoint has no 404 branch. '
+        + 'and CI passed all seven checks. The credential-store DELETE v1 profiles profile_id lease endpoint has no 404 branch. '
         + 'PR #177 remains in CHANGES_REQUESTED state pending a re-request.';
       const res = await kbExtract(text, { source: 'test', observationDate: '2026-07-29' });
 
       assert.deepStrictEqual(
         res.added.map(f => `${f.subject}|${f.predicate}|${f.object}`).sort(),
         [
+          'credential-store delete v1 profiles profile_id lease|lacks|404_response',
           'pr #177|ci_state|green',
-          'vault-service delete v1 profiles profile_id lease|lacks|404_response',
         ],
       );
       assert.ok(res.skipped.some(s => s.reason.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)));
@@ -566,7 +566,7 @@ describe('grounding extracted triples in the source text', () => {
     it('blocks causal and non-lifecycle status claims without retiring the true state', async () => {
       addFact('pr #4420', 'status', 'opened', { validFrom: '2026-08-18', source: 'seed' });
       const text = 'CASE_STATUS_REPRO: PR #4420 (missing users row retry) confirmed still needed: '
-        + 'Sentry issue UX-LABS-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.';
+        + 'Sentry issue sample-web-FRONTEND-5AH logged 27 events in the 48 hours after the release stack merged.';
       const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-19' });
 
       assert.deepStrictEqual(res.added, []);

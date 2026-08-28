@@ -145,9 +145,9 @@ describe('supersedeCandidates', () => {
 
   it('does not treat a retired duplicate as semantic change when the same triple is current', () => {
     const db = getDb();
-    const old = addFact('pf3658-reasserted', 'status', 'beta', { validFrom: '2026-05-01' });
-    addFact('pf3658-reasserted', 'status', 'GA', { validFrom: '2026-05-15' });
-    invalidateFact('pf3658-reasserted', 'status', 'beta', { ended: '2026-06-01' });
+    const old = addFact('tkt3658-reasserted', 'status', 'beta', { validFrom: '2026-05-01' });
+    addFact('tkt3658-reasserted', 'status', 'GA', { validFrom: '2026-05-15' });
+    invalidateFact('tkt3658-reasserted', 'status', 'beta', { ended: '2026-06-01' });
 
     // Reassert the exact retired triple with a deterministic id. addFact's id
     // includes Date.now(), so a same-millisecond re-add would make the fixture
@@ -159,10 +159,10 @@ describe('supersedeCandidates', () => {
     `).run(`${old.id}_reasserted`, row.subject, row.predicate, row.object, '2026-06-01', 'test');
 
     const staleNote = insertDocument({
-      title: 'pf3658-reasserted overview', content: 'pf3658-reasserted status is beta', doc_type: 'decision', tags: '',
+      title: 'tkt3658-reasserted overview', content: 'tkt3658-reasserted status is beta', doc_type: 'decision', tags: '',
     }).id;
     const otherNote = insertDocument({
-      title: 'pf3658-reasserted alternate', content: 'pf3658-reasserted status is GA', doc_type: 'decision', tags: '',
+      title: 'tkt3658-reasserted alternate', content: 'tkt3658-reasserted status is GA', doc_type: 'decision', tags: '',
     }).id;
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-05-02 00:00:00', staleNote);
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-06-02 00:00:00', otherNote);
@@ -173,15 +173,15 @@ describe('supersedeCandidates', () => {
 
   it('does not call an older current fact the successor to a later retirement', () => {
     const db = getDb();
-    addFact('pf3658-order', 'status', 'GA', { validFrom: '2026-01-01' });
-    addFact('pf3658-order', 'status', 'beta', { validFrom: '2026-05-01' });
-    invalidateFact('pf3658-order', 'status', 'beta', { ended: '2026-06-01' });
+    addFact('tkt3658-order', 'status', 'GA', { validFrom: '2026-01-01' });
+    addFact('tkt3658-order', 'status', 'beta', { validFrom: '2026-05-01' });
+    invalidateFact('tkt3658-order', 'status', 'beta', { ended: '2026-06-01' });
 
     const staleNote = insertDocument({
-      title: 'pf3658-order overview', content: 'pf3658-order status is beta', doc_type: 'decision', tags: '',
+      title: 'tkt3658-order overview', content: 'tkt3658-order status is beta', doc_type: 'decision', tags: '',
     }).id;
     const olderFactNote = insertDocument({
-      title: 'pf3658-order historical', content: 'pf3658-order status is GA', doc_type: 'decision', tags: '',
+      title: 'tkt3658-order historical', content: 'tkt3658-order status is GA', doc_type: 'decision', tags: '',
     }).id;
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-05-02 00:00:00', staleNote);
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-06-02 00:00:00', olderFactNote);
@@ -192,15 +192,15 @@ describe('supersedeCandidates', () => {
 
   it('does not propose archive snapshots for semantic supersession', () => {
     const db = getDb();
-    addFact('pf3658-archive', 'status', 'beta', { validFrom: '2026-01-01' });
-    invalidateFact('pf3658-archive', 'status', 'beta', { ended: '2026-06-01' });
-    addFact('pf3658-archive', 'status', 'GA', { validFrom: '2026-06-01' });
+    addFact('tkt3658-archive', 'status', 'beta', { validFrom: '2026-01-01' });
+    invalidateFact('tkt3658-archive', 'status', 'beta', { ended: '2026-06-01' });
+    addFact('tkt3658-archive', 'status', 'GA', { validFrom: '2026-06-01' });
 
     const archive = insertDocument({
-      title: 'pf3658-archive snapshot', content: 'pf3658-archive status is beta', doc_type: 'archive', tags: '',
+      title: 'tkt3658-archive snapshot', content: 'tkt3658-archive status is beta', doc_type: 'archive', tags: '',
     }).id;
     const currentNote = insertDocument({
-      title: 'pf3658-archive overview', content: 'pf3658-archive status is GA', doc_type: 'decision', tags: '',
+      title: 'tkt3658-archive overview', content: 'tkt3658-archive status is GA', doc_type: 'decision', tags: '',
     }).id;
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-01-02 00:00:00', archive);
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', currentNote);
@@ -211,15 +211,15 @@ describe('supersedeCandidates', () => {
 
   it('does not use an archive snapshot as proof of a replacement', () => {
     const db = getDb();
-    addFact('pf3658-proof-from-archive', 'status', 'beta', { validFrom: '2026-01-01' });
-    invalidateFact('pf3658-proof-from-archive', 'status', 'beta', { ended: '2026-06-01' });
-    addFact('pf3658-proof-from-archive', 'status', 'GA', { validFrom: '2026-06-01' });
+    addFact('tkt3658-proof-from-archive', 'status', 'beta', { validFrom: '2026-01-01' });
+    invalidateFact('tkt3658-proof-from-archive', 'status', 'beta', { ended: '2026-06-01' });
+    addFact('tkt3658-proof-from-archive', 'status', 'GA', { validFrom: '2026-06-01' });
 
     const staleNote = insertDocument({
-      title: 'pf3658-proof-from-archive overview', content: 'pf3658-proof-from-archive status is beta', doc_type: 'decision', tags: '',
+      title: 'tkt3658-proof-from-archive overview', content: 'tkt3658-proof-from-archive status is beta', doc_type: 'decision', tags: '',
     }).id;
     const archive = insertDocument({
-      title: 'pf3658-proof-from-archive snapshot', content: 'pf3658-proof-from-archive status is GA', doc_type: 'archive', tags: '',
+      title: 'tkt3658-proof-from-archive snapshot', content: 'tkt3658-proof-from-archive status is GA', doc_type: 'archive', tags: '',
     }).id;
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-01-02 00:00:00', staleNote);
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', archive);
@@ -230,17 +230,17 @@ describe('supersedeCandidates', () => {
 
   it('does not treat an auto-generated Related link as an authored assertion', () => {
     const db = getDb();
-    addFact('pf3658-related', 'status', 'shipped', { validFrom: '2026-07-01' });
-    invalidateFact('pf3658-related', 'status', 'shipped', { ended: '2026-07-02' });
-    addFact('pf3658-related', 'status', 'correct', { validFrom: '2026-07-02' });
+    addFact('tkt3658-related', 'status', 'shipped', { validFrom: '2026-07-01' });
+    invalidateFact('tkt3658-related', 'status', 'shipped', { ended: '2026-07-02' });
+    addFact('tkt3658-related', 'status', 'correct', { validFrom: '2026-07-02' });
 
     const linkedOnly = insertDocument({
-      title: 'pf3658-related field parity',
-      content: 'The field names must match exactly.\n\n## Related\n- [[status]] — pf3658-related shipped successfully (0.7)',
+      title: 'tkt3658-related field parity',
+      content: 'The field names must match exactly.\n\n## Related\n- [[status]] — tkt3658-related shipped successfully (0.7)',
       doc_type: 'lesson', tags: '',
     }).id;
     const currentNote = insertDocument({
-      title: 'pf3658-related boundary', content: 'The pf3658-related placement is correct.', doc_type: 'decision', tags: '',
+      title: 'tkt3658-related boundary', content: 'The tkt3658-related placement is correct.', doc_type: 'decision', tags: '',
     }).id;
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-01 00:00:00', linkedOnly);
     db.prepare('UPDATE documents SET created_at = ? WHERE id = ?').run('2026-07-03 00:00:00', currentNote);

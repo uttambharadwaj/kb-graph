@@ -76,17 +76,17 @@ case "$prompt" in
   })}' ;;
   *CASE_DISPOSITION_REPRO*) echo '${envelope({
     facts: [
-      { subject: 'ux-labs', predicate: 'gated_by', object: 'approving_review' },
-      { subject: 'ux-labs', predicate: 'gated_by', object: 'code_owner_review' },
-      { subject: 'ux-labs CODEOWNERS', predicate: 'includes', object: 'security_files' },
-      { subject: 'tinyfish-io/security_team', predicate: 'owns', object: 'security_files' },
+      { subject: 'sample-web', predicate: 'gated_by', object: 'approving_review' },
+      { subject: 'sample-web', predicate: 'gated_by', object: 'code_owner_review' },
+      { subject: 'sample-web CODEOWNERS', predicate: 'includes', object: 'security_files' },
+      { subject: 'example-org/security_team', predicate: 'owns', object: 'security_files' },
     ],
     skipped: [
-      { assertion: 'ux-labs main branch ruleset requires 1 approving review and code-owner review', reason: 'standing policy' },
-      { assertion: 'ux-labs main branch ruleset requires 1 approving review and code-owner review', reason: 'background configuration' },
-      { assertion: 'tinyfish-io/security_team owns four security files in CODEOWNERS', reason: 'file names not stated' },
-      { assertion: 'tinyfish-io/security_team owns four security files in CODEOWNERS', reason: 'too vague' },
-      { assertion: 'CODEOWNERS covers only four security files owned by tinyfish-io/security_team', reason: 'process policy' },
+      { assertion: 'sample-web main branch ruleset requires 1 approving review and code-owner review', reason: 'standing policy' },
+      { assertion: 'sample-web main branch ruleset requires 1 approving review and code-owner review', reason: 'background configuration' },
+      { assertion: 'example-org/security_team owns four security files in CODEOWNERS', reason: 'file names not stated' },
+      { assertion: 'example-org/security_team owns four security files in CODEOWNERS', reason: 'too vague' },
+      { assertion: 'CODEOWNERS covers only four security files owned by example-org/security_team', reason: 'process policy' },
     ],
   })}' ;;
   *) echo '${envelope({
@@ -149,18 +149,18 @@ describe('kb_extract consolidation', () => {
   });
 
   it('retires a stale fact when a new one contradicts it (in_review -> done)', () => {
-    addFact('pf-4100', 'status', 'in_review', { validFrom: '2026-01-01', source: 'seed' });
-    assert.deepStrictEqual(currentObject('pf-4100', 'status'), ['in_review']);
+    addFact('tkt-4100', 'status', 'in_review', { validFrom: '2026-01-01', source: 'seed' });
+    assert.deepStrictEqual(currentObject('tkt-4100', 'status'), ['in_review']);
 
     const res = consolidate(
-      [{ subject: 'pf-4100', predicate: 'status', object: 'done' }],
+      [{ subject: 'tkt-4100', predicate: 'status', object: 'done' }],
       { source: 'test', observationDate: '2026-06-24' },
     );
 
     assert.strictEqual(res.invalidated.length, 1);
     assert.strictEqual(res.added.length, 1);
     // Only done is current now; in_review is retired (no longer in the current set).
-    assert.deepStrictEqual(currentObject('pf-4100', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-4100', 'status'), ['done']);
     // A retirement says which fact displaced it — otherwise a wrong one is
     // unrecognisable without reconstructing the extractor's reasoning.
     assert.strictEqual(res.invalidated[0].superseded_by, 'done');
@@ -205,46 +205,46 @@ describe('kb_extract consolidation', () => {
   });
 
   it('still retires for an issue-in-repo subject, not just a bare ticket id', () => {
-    addFact('vault-service#59', 'status', 'open', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('credential-store#59', 'status', 'open', { validFrom: '2026-07-01', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'vault-service#59', predicate: 'status', object: 'closed' }],
+      [{ subject: 'credential-store#59', predicate: 'status', object: 'closed' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
     assert.strictEqual(res.invalidated.length, 1);
-    assert.deepStrictEqual(currentObject('vault-service#59', 'status'), ['closed']);
+    assert.deepStrictEqual(currentObject('credential-store#59', 'status'), ['closed']);
   });
 
   it('never retires a choice, because choosing one thing does not un-choose another', () => {
-    addFact('pf-4101', 'chose', 'embeddings at write time', {
+    addFact('tkt-4101', 'chose', 'embeddings at write time', {
       validFrom: '2026-07-01', source: 'seed',
     });
 
     const res = consolidate(
-      [{ subject: 'pf-4101', predicate: 'chose', object: 'restart on source change' }],
+      [{ subject: 'tkt-4101', predicate: 'chose', object: 'restart on source change' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
     // Single-entity subject, so the subject rule would allow it — `chose` is out
     // of single_valued entirely, because a decision log is cumulative.
     assert.strictEqual(res.invalidated.length, 0);
-    assert.strictEqual(currentObject('pf-4101', 'chose').length, 2);
+    assert.strictEqual(currentObject('tkt-4101', 'chose').length, 2);
   });
 
   it('does not let an older observation retire a fact recorded after it', () => {
     // Replaying yesterday's text asserts yesterday's state against whatever
     // a session has written since.
-    addFact('pf-9001', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+    addFact('tkt-9001', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
 
     const res = consolidate(
-      [{ subject: 'pf-9001', predicate: 'status', object: 'in_review' }],
+      [{ subject: 'tkt-9001', predicate: 'status', object: 'in_review' }],
       { source: 'replay', observationDate: '2026-07-28' },
     );
 
     assert.strictEqual(res.invalidated.length, 0);
     assert.strictEqual(res.added.length, 0);
-    assert.deepStrictEqual(currentObject('pf-9001', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-9001', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
     assert.strictEqual(res.skipped[0].existing_since, '2026-07-29');
   });
@@ -252,15 +252,15 @@ describe('kb_extract consolidation', () => {
   it('does not let a same-day older transcript retire an afternoon correction', () => {
     // Both sides truncate to the same YYYY-MM-DD, so only the recorded instant
     // can order them: 10am text replayed against a 4pm debrief.
-    addFact('pf-9010', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+    addFact('tkt-9010', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
 
     const res = consolidate(
-      [{ subject: 'pf-9010', predicate: 'status', object: 'in_review' }],
+      [{ subject: 'tkt-9010', predicate: 'status', object: 'in_review' }],
       { source: 'replay', observationDate: '2026-07-29', observedAt: '2026-07-29 10:00:00' },
     );
 
     assert.strictEqual(res.invalidated.length, 0);
-    assert.deepStrictEqual(currentObject('pf-9010', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-9010', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
   });
 
@@ -268,15 +268,15 @@ describe('kb_extract consolidation', () => {
   // instant look newer than every same-day row — the guard fails open on the
   // spelling a caller is most likely to reach for.
   it('orders an ISO-8601 observed_at against recorded_at, not above it', () => {
-    addFact('pf-9020', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
+    addFact('tkt-9020', 'status', 'done', { validFrom: '2026-07-29', source: 'debrief' });
 
     const res = consolidate(
-      [{ subject: 'pf-9020', predicate: 'status', object: 'in_review' }],
+      [{ subject: 'tkt-9020', predicate: 'status', object: 'in_review' }],
       { source: 'replay', observationDate: '2026-07-29', observedAt: '2026-07-29T10:00:00.000Z' },
     );
 
     assert.strictEqual(res.invalidated.length, 0, 'an older observation must not retire the newer fact');
-    assert.deepStrictEqual(currentObject('pf-9020', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-9020', 'status'), ['done']);
     assert.strictEqual(res.skipped[0].reason, 'stale_observation');
   });
 
@@ -344,21 +344,21 @@ describe('kb_extract consolidation', () => {
 
   it('rejects an observed_at that is not a date rather than mis-ordering it', () => {
     assert.throws(
-      () => consolidate([{ subject: 'pf-9030', predicate: 'status', object: 'done' }], { observedAt: 'yesterday' }),
+      () => consolidate([{ subject: 'tkt-9030', predicate: 'status', object: 'done' }], { observedAt: 'yesterday' }),
       /observed_at is not a date/,
     );
   });
 
   it('still retires when the observation is later than the held row was recorded', () => {
-    addFact('pf-9011', 'status', 'in_review', { validFrom: '2026-07-29', source: 'seed' });
+    addFact('tkt-9011', 'status', 'in_review', { validFrom: '2026-07-29', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-9011', predicate: 'status', object: 'done' }],
+      [{ subject: 'tkt-9011', predicate: 'status', object: 'done' }],
       { source: 'debrief', observationDate: '2026-07-29', observedAt: '2999-01-01 00:00:00' },
     );
 
     assert.strictEqual(res.invalidated.length, 1);
-    assert.deepStrictEqual(currentObject('pf-9011', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-9011', 'status'), ['done']);
   });
 
   it('refuses when any live row of the triple would invert, not just the first', () => {
@@ -366,17 +366,17 @@ describe('kb_extract consolidation', () => {
     // writer produces that state any more — addFact refuses it and a merge now
     // collapses it. Rows from before that are still on disk, and the UPDATE
     // below hits all of them, so the latest start decides.
-    addFact('pf-9012', 'status', 'label-beta', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('tkt-9012', 'status', 'label-beta', { validFrom: '2026-07-01', source: 'seed' });
     getDb().prepare(
       'INSERT INTO facts (id, subject, predicate, object, valid_from, source) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run('f_pf-9012_status_label-beta_dup', entityKey('pf-9012'), 'status', entityKey('label-beta'), '2026-07-29', 'seed');
+    ).run('f_pf-9012_status_label-beta_dup', entityKey('tkt-9012'), 'status', entityKey('label-beta'), '2026-07-29', 'seed');
 
-    const res = invalidateFact('pf-9012', 'status', 'label-beta', { ended: '2026-07-15' });
+    const res = invalidateFact('tkt-9012', 'status', 'label-beta', { ended: '2026-07-15' });
 
     assert.strictEqual(res.invalidated, 0);
     assert.strictEqual(res.refused, 'ended_before_valid_from');
     assert.strictEqual(
-      queryFact('pf-9012', { direction: 'outgoing', exact: true })
+      queryFact('tkt-9012', { direction: 'outgoing', exact: true })
         .filter(r => r.valid_to && r.valid_from > r.valid_to).length,
       0,
       'left an inverted interval on a row the .get() never looked at',
@@ -384,35 +384,35 @@ describe('kb_extract consolidation', () => {
   });
 
   it('still retires when the held fact carries no valid_from to compare', () => {
-    addFact('pf-9002', 'status', 'open', { source: 'seed' });
+    addFact('tkt-9002', 'status', 'open', { source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-9002', predicate: 'status', object: 'done' }],
+      [{ subject: 'tkt-9002', predicate: 'status', object: 'done' }],
       { source: 'test', observationDate: '2026-07-28' },
     );
 
     assert.strictEqual(res.invalidated.length, 1);
-    assert.deepStrictEqual(currentObject('pf-9002', 'status'), ['done']);
+    assert.deepStrictEqual(currentObject('tkt-9002', 'status'), ['done']);
   });
 
   it('refuses to end a fact before it began, and says so', () => {
-    addFact('pf-9003', 'status', 'shipped', { validFrom: '2026-07-29', source: 'seed' });
+    addFact('tkt-9003', 'status', 'shipped', { validFrom: '2026-07-29', source: 'seed' });
 
-    const res = invalidateFact('pf-9003', 'status', 'shipped', { ended: '2026-07-01' });
+    const res = invalidateFact('tkt-9003', 'status', 'shipped', { ended: '2026-07-01' });
 
     assert.strictEqual(res.invalidated, 0);
     assert.strictEqual(res.refused, 'ended_before_valid_from');
     // Still current — an inverted interval would have hidden it from every
     // as-of query instead, at every date.
-    assert.deepStrictEqual(currentObject('pf-9003', 'status'), ['shipped']);
-    assert.strictEqual(queryFact('pf-9003', { direction: 'outgoing', exact: true, asOf: '2026-07-30' }).length, 1);
+    assert.deepStrictEqual(currentObject('tkt-9003', 'status'), ['shipped']);
+    assert.strictEqual(queryFact('tkt-9003', { direction: 'outgoing', exact: true, asOf: '2026-07-30' }).length, 1);
   });
 
   it('does not retire a fact in favour of a re-spelling of itself', () => {
-    addFact('pf-2988', 'shipped_via', 'ux-labs PR #3865', { validFrom: '2026-07-20', source: 'seed' });
+    addFact('tkt-2988', 'shipped_via', 'sample-web PR #3865', { validFrom: '2026-07-20', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-2988', predicate: 'shipped_via', object: 'pr #3865' }],
+      [{ subject: 'tkt-2988', predicate: 'shipped_via', object: 'pr #3865' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
@@ -420,43 +420,43 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.added.length, 0, 'wrote a second spelling of a live fact');
     assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
     // The spelling already in the graph wins, so re-runs converge instead of churning.
-    assert.deepStrictEqual(currentObject('pf-2988', 'shipped_via'), ['ux-labs PR #3865']);
+    assert.deepStrictEqual(currentObject('tkt-2988', 'shipped_via'), ['sample-web PR #3865']);
   });
 
   it('still retires a genuine contradiction when a variant of the new value is also held', () => {
     // kb_fact_add writes without consolidating, so a single-valued predicate can
     // already hold both a spelling of the incoming value and a real contradiction.
-    addFact('pf-9004', 'assigned_to', 'ux-labs PR #100', { validFrom: '2026-07-01', source: 'seed' });
-    addFact('pf-9004', 'assigned_to', 'ux-labs PR #200', { validFrom: '2026-07-02', source: 'seed' });
+    addFact('tkt-9004', 'assigned_to', 'sample-web PR #100', { validFrom: '2026-07-01', source: 'seed' });
+    addFact('tkt-9004', 'assigned_to', 'sample-web PR #200', { validFrom: '2026-07-02', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-9004', predicate: 'assigned_to', object: 'pr #100' }],
+      [{ subject: 'tkt-9004', predicate: 'assigned_to', object: 'pr #100' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
     assert.strictEqual(res.invalidated.length, 1, 'left a contradicted object current');
-    assert.strictEqual(res.invalidated[0].object, 'ux-labs PR #200');
+    assert.strictEqual(res.invalidated[0].object, 'sample-web PR #200');
     assert.strictEqual(res.skipped[0].reason, 'equivalent_spelling_of_existing');
-    assert.deepStrictEqual(currentObject('pf-9004', 'assigned_to'), ['ux-labs PR #100']);
+    assert.deepStrictEqual(currentObject('tkt-9004', 'assigned_to'), ['sample-web PR #100']);
   });
 
   it('keeps same-numbered PRs in different repos apart', () => {
-    addFact('pf-9001', 'reviewed_by', 'internal-tools-backend PR #539', { validFrom: '2026-07-20', source: 'seed' });
+    addFact('tkt-9001', 'reviewed_by', 'sample-backend PR #539', { validFrom: '2026-07-20', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-9001', predicate: 'reviewed_by', object: 'ux-labs PR #539' }],
+      [{ subject: 'tkt-9001', predicate: 'reviewed_by', object: 'sample-web PR #539' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
     assert.strictEqual(res.added.length, 1, 'merged two different PRs that share a number');
-    assert.strictEqual(currentObject('pf-9001', 'reviewed_by').length, 2);
+    assert.strictEqual(currentObject('tkt-9001', 'reviewed_by').length, 2);
   });
 
   it('treats a bare commit SHA and its qualified form as one entity', () => {
-    addFact('pf-9002', 'merged_via', 'commit fde94d6', { validFrom: '2026-07-20', source: 'seed' });
+    addFact('tkt-9002', 'merged_via', 'commit fde94d6', { validFrom: '2026-07-20', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'pf-9002', predicate: 'merged_via', object: 'fde94d6' }],
+      [{ subject: 'tkt-9002', predicate: 'merged_via', object: 'fde94d6' }],
       { source: 'test', observationDate: '2026-07-29' },
     );
 
@@ -465,22 +465,22 @@ describe('kb_extract consolidation', () => {
   });
 
   it('keeps both objects of a many-valued predicate (owning a new epic ≠ dropping the old)', () => {
-    addFact('uttam', 'owns', 'PF-2746', { validFrom: '2026-01-01', source: 'seed' });
+    addFact('devuser', 'owns', 'TKT-2746', { validFrom: '2026-01-01', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'uttam', predicate: 'owns', object: 'PF-2986' }],
+      [{ subject: 'devuser', predicate: 'owns', object: 'TKT-2986' }],
       { source: 'test', observationDate: '2026-06-24' },
     );
 
     assert.strictEqual(res.invalidated.length, 0);
-    assert.deepStrictEqual(currentObject('uttam', 'owns').sort(), ['PF-2746', 'PF-2986']);
+    assert.deepStrictEqual(currentObject('devuser', 'owns').sort(), ['TKT-2746', 'TKT-2986']);
   });
 
   it('defaults an unregistered predicate to many-valued rather than retiring', () => {
     addFact('goldfish', 'talks_to', 'wadl', { validFrom: '2026-01-01', source: 'seed' });
 
     const res = consolidate(
-      [{ subject: 'goldfish', predicate: 'talks_to', object: 'eva' }],
+      [{ subject: 'goldfish', predicate: 'talks_to', object: 'orca' }],
       { source: 'test', observationDate: '2026-06-24' },
     );
 
@@ -490,18 +490,18 @@ describe('kb_extract consolidation', () => {
 
   it('honours the per-install predicates.json (adds single-valued, removes built-ins)', () => {
     // Ticket-shaped subjects: a single-valued predicate only retires for a
-    // subject that names one state-bearing thing, so bare 'tetra' would prove
+    // subject that names one state-bearing thing, so bare 'browser-runtime' would prove
     // nothing about the override.
-    addFact('tetra#1', 'pinned_to', 'v1', { validFrom: '2026-01-01', source: 'seed' });
-    addFact('eva#1', 'version', '1.0', { validFrom: '2026-01-01', source: 'seed' });
+    addFact('browser-runtime#1', 'pinned_to', 'v1', { validFrom: '2026-01-01', source: 'seed' });
+    addFact('orca#1', 'version', '1.0', { validFrom: '2026-01-01', source: 'seed' });
 
     const res = consolidate([
-      { subject: 'tetra#1', predicate: 'pinned_to', object: 'v2' }, // added by the override
-      { subject: 'eva#1', predicate: 'version', object: '2.0' },    // built-in, demoted by the override
+      { subject: 'browser-runtime#1', predicate: 'pinned_to', object: 'v2' }, // added by the override
+      { subject: 'orca#1', predicate: 'version', object: '2.0' },    // built-in, demoted by the override
     ], { source: 'test', observationDate: '2026-06-24' });
 
-    assert.deepStrictEqual(currentObject('tetra#1', 'pinned_to'), ['v2']);
-    assert.deepStrictEqual(currentObject('eva#1', 'version').sort(), ['1.0', '2.0']);
+    assert.deepStrictEqual(currentObject('browser-runtime#1', 'pinned_to'), ['v2']);
+    assert.deepStrictEqual(currentObject('orca#1', 'version').sort(), ['1.0', '2.0']);
     assert.strictEqual(res.invalidated.length, 1);
   });
 
@@ -514,17 +514,17 @@ describe('kb_extract consolidation', () => {
   });
 
   it('gives each extracted assertion one final disposition', async () => {
-    const text = 'CASE_DISPOSITION_REPRO: The ux-labs main branch ruleset requires 1 approving review and code-owner review; '
-      + 'ux-labs CODEOWNERS covers only four security files owned by tinyfish-io/security_team.';
+    const text = 'CASE_DISPOSITION_REPRO: The sample-web main branch ruleset requires 1 approving review and code-owner review; '
+      + 'sample-web CODEOWNERS covers only four security files owned by example-org/security_team.';
     const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-07' });
 
     assert.deepStrictEqual(
       res.added.map(f => `${f.subject}|${f.predicate}|${f.object}`).sort(),
       [
-        'tinyfish-io/security_team|owns|security_files',
-        'ux-labs CODEOWNERS|includes|security_files',
-        'ux-labs|gated_by|approving_review',
-        'ux-labs|gated_by|code_owner_review',
+        'example-org/security_team|owns|security_files',
+        'sample-web CODEOWNERS|includes|security_files',
+        'sample-web|gated_by|approving_review',
+        'sample-web|gated_by|code_owner_review',
       ],
     );
     assert.deepStrictEqual(res.skipped, [], 'reported written assertions as skipped');
@@ -543,49 +543,49 @@ describe('kb_extract consolidation', () => {
 
   it('folds predicate synonyms onto one canonical edge', () => {
     const res = consolidate([
-      { subject: 'pf-3013', predicate: 'child_ticket_of', object: 'pf-2991' },
+      { subject: 'tkt-3013', predicate: 'child_ticket_of', object: 'tkt-2991' },
       { subject: 'readMetronomeContractId', predicate: 'declared_by', object: 'rates_stack' },
     ], { source: 'test', observationDate: '2026-07-29' });
 
     assert.strictEqual(res.added.length, 2);
     // kb_fact_query matches on predicate, so synonyms must converge or every
     // query under-returns across the silos.
-    assert.deepStrictEqual(currentObject('pf-3013', 'child_of'), ['pf-2991']);
+    assert.deepStrictEqual(currentObject('tkt-3013', 'child_of'), ['tkt-2991']);
     assert.deepStrictEqual(currentObject('readMetronomeContractId', 'declared_in'), ['rates_stack']);
   });
 
   it('matches a row stored under a pre-alias spelling', () => {
     // Written before pinned_at was aliased, so the graph holds the old spelling.
-    legacyFact('pf-8001', 'pinned_at', 'v1', '2026-07-01');
-    assert.deepStrictEqual(currentObject('pf-8001', 'pinned_at'), ['v1'], 'seed did not store the stale spelling');
+    legacyFact('tkt-8001', 'pinned_at', 'v1', '2026-07-01');
+    assert.deepStrictEqual(currentObject('tkt-8001', 'pinned_at'), ['v1'], 'seed did not store the stale spelling');
 
     const res = consolidate(
-      [{ subject: 'pf-8001', predicate: 'pinned_to', object: 'v2' }],
+      [{ subject: 'tkt-8001', predicate: 'pinned_to', object: 'v2' }],
       { source: 'test', observationDate: '2026-07-20' },
     );
 
     // Without normalising the stored predicate the old row is invisible here,
     // and a single-valued predicate ends up with two live objects.
     assert.strictEqual(res.invalidated.length, 1);
-    assert.deepStrictEqual(currentObject('pf-8001', 'pinned_at'), []);
-    assert.deepStrictEqual(currentObject('pf-8001', 'pinned_to'), ['v2']);
+    assert.deepStrictEqual(currentObject('tkt-8001', 'pinned_at'), []);
+    assert.deepStrictEqual(currentObject('tkt-8001', 'pinned_to'), ['v2']);
   });
 
   it('dedups across a real alias even where neither side retires', () => {
     // merged_as/merged_via is the shipped alias pair, and merged_via is
     // many-valued — so normalisation has to hold for the duplicate check too,
     // not just for retirement, or the same commit lands twice.
-    legacyFact('pf-8002', 'merged_as', 'commit aaa1111', '2026-07-01');
-    assert.strictEqual(currentObject('pf-8002', 'merged_as').length, 1, 'seed did not store the stale spelling');
+    legacyFact('tkt-8002', 'merged_as', 'commit aaa1111', '2026-07-01');
+    assert.strictEqual(currentObject('tkt-8002', 'merged_as').length, 1, 'seed did not store the stale spelling');
 
     const res = consolidate(
-      [{ subject: 'pf-8002', predicate: 'merged_via', object: 'commit aaa1111' }],
+      [{ subject: 'tkt-8002', predicate: 'merged_via', object: 'commit aaa1111' }],
       { source: 'test', observationDate: '2026-07-20' },
     );
 
     assert.strictEqual(res.added.length, 0);
     assert.strictEqual(res.invalidated.length, 0);
-    assert.strictEqual(currentObject('pf-8002', 'merged_as').length, 1);
+    assert.strictEqual(currentObject('tkt-8002', 'merged_as').length, 1);
   });
 
   it('previews the canonical predicate, not the alias the extractor emitted', async () => {

@@ -17,7 +17,7 @@ describe('isQualifiedForm', () => {
     ['auth_service_prod_image', 'auth_service', true, 'a multi-word named variant'],
     ['prod_100_percent', 'prod', true, 'digits inside a phrase are not an id'],
     ['pr_3583', 'pr', false, 'a pull request is not a variant of "pr"'],
-    ['pf_1605', 'pf', false, 'a ticket is not a variant of its prefix'],
+    ['tkt_1605', 'tkt', false, 'a ticket is not a variant of its prefix'],
     ['pr_#11', 'pr', false, 'issue numbers arrive with the hash intact'],
     ['prod_2026_07_21', 'prod', false, 'a date is a run of numbers, not a qualifier'],
     ['press', 'pr', false, 'no separator, so not an extension at all'],
