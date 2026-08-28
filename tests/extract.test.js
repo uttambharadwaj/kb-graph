@@ -765,11 +765,27 @@ describe('kb_extract consolidation', () => {
   // directions when a repeated value came back from a second chunk.
   describe('a batch that contradicts itself', () => {
     it('keeps all three values and retires none', () => {
-      const res = consolidate([
-        { subject: 'pr #4801', predicate: 'status', object: 'open' },
-        { subject: 'pr #4801', predicate: 'status', object: 'approved' },
-        { subject: 'pr #4801', predicate: 'status', object: 'queued_for_merge' },
-      ], { source: 'test', observationDate: '2026-07-30' });
+      // Reproduce the UTC-second boundary behind the CI flake without sleeping:
+      // the second row lands one second after consolidate's start timestamp, so
+      // the third row must not mistake its same-call sibling for a later replay.
+      const db = getDb();
+      db.exec(`
+        CREATE TEMP TRIGGER advance_second_after_approved
+        AFTER INSERT ON facts WHEN NEW.object = 'approved'
+        BEGIN
+          UPDATE facts SET created_at = datetime('now', '+1 second') WHERE id = NEW.id;
+        END
+      `);
+      let res;
+      try {
+        res = consolidate([
+          { subject: 'pr #4801', predicate: 'status', object: 'open' },
+          { subject: 'pr #4801', predicate: 'status', object: 'approved' },
+          { subject: 'pr #4801', predicate: 'status', object: 'queued_for_merge' },
+        ], { source: 'test', observationDate: '2026-07-30' });
+      } finally {
+        db.exec('DROP TRIGGER advance_second_after_approved');
+      }
 
       assert.strictEqual(res.added.length, 3);
       assert.deepStrictEqual(res.invalidated, []);
