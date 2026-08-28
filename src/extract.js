@@ -244,13 +244,12 @@ export function chunkForExtract(text) {
   return chunks.length ? attachNamedQualifiers(chunks, sentences, size) : [text];
 }
 
-// 120s: 60s was killing calls during slow API windows (observed 2026-07-07,
-// exit 143). This is a deadline per chunk, not for the whole call, and the two
-// numbers being equal is why a timed-out chunk can never report in time: chunks
-// run concurrently, so a chunk reaching this deadline means the call has
-// already spent the same 120s an MCP client gives the whole tool, and it gets
-// backgrounded before the failure row reaches the caller.
+// A chunk may use the model helper's full ceiling, but the extraction as a
+// whole may not. MCP callers background a tool at 120s; leaving 15s for child
+// pipe cleanup, grounding, consolidation, telemetry and transport makes a
+// timeout an ordinary caller-visible result instead of a late notification.
 const CHUNK_TIMEOUT_MS = 120000;
+export const EXTRACT_CALL_BUDGET_MS = 105000;
 
 // A second attempt, as the lessons pass in harvest.js already does. It cannot
 // rescue the interactive contract — a retry only starts once the first attempt
@@ -276,8 +275,17 @@ const totalChunkFailure = failures => {
   return new Error(`all ${failures.length} extraction ${noun} failed${details ? `: ${details}` : ''}`);
 };
 
-// I/O: ask the LLM for candidate facts, one call per chunk, all in flight together.
-export async function extractFacts(text) {
+// I/O: ask the LLM for candidate facts, one call per chunk, all in flight
+// together. The injectable clock/runner make the shared deadline deterministic
+// to test without sleeping or invoking a live model.
+export async function extractFacts(text, {
+  runModel = runClaudeJSON,
+  now = Date.now,
+  callBudgetMs = EXTRACT_CALL_BUDGET_MS,
+} = {}) {
+  const modelStartedAt = now();
+  const deadline = modelStartedAt + callBudgetMs;
+  let attemptCount = 0;
   const examined = text.slice(0, MAX_EXTRACT_CHARS);
   const dropped = text.length - examined.length;
   const chunks = chunkForExtract(examined);
@@ -285,6 +293,8 @@ export async function extractFacts(text) {
     const prompt = buildExtractPrompt(chunk, { before: chunks[i - 1] ?? '', after: chunks[i + 1] ?? '' });
     let failure;
     for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
+      const remainingMs = deadline - now();
+      if (remainingMs <= 0) break;
       try {
         // One result per chunk however many attempts it took: a failed attempt
         // rejects without a value (runClaude drops stdout unless the exit was
@@ -293,7 +303,11 @@ export async function extractFacts(text) {
         // Also lands a row in model_calls (model-meter.js) per chunk call;
         // logExtraction below aggregates the extract-specific shape that
         // generic table doesn't carry (input hash, per-chunk chars, conflicts).
-        return await runClaudeJSON(prompt, { timeout: CHUNK_TIMEOUT_MS, caller: 'extract' });
+        attemptCount++;
+        return await runModel(prompt, {
+          timeout: Math.max(1, Math.min(CHUNK_TIMEOUT_MS, remainingMs)),
+          caller: 'extract',
+        });
       } catch (err) {
         failure = err;
         console.error(`kb_extract: chunk ${i + 1}/${chunks.length} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${err.message}`);
@@ -301,7 +315,8 @@ export async function extractFacts(text) {
     }
     // A dead chunk is input nobody looked at. Silently returning the other
     // chunks' facts would report partial coverage as complete.
-    return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `${CHUNK_FAILED_REASON_PREFIX}${failure.message}` }] };
+    const reason = failure?.message || `call budget exhausted after ${callBudgetMs}ms`;
+    return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `${CHUNK_FAILED_REASON_PREFIX}${reason}` }] };
   }));
 
   return {
@@ -312,6 +327,8 @@ export async function extractFacts(text) {
     // onto a claim in another chunk; the copy is real payload, so the meter
     // should see it. The two columns were never meant to reconcile.
     chunkChars: chunks.map(c => c.length),
+    attemptCount,
+    modelDurationMs: Math.max(0, now() - modelStartedAt),
     // A response with no usable skipped list has told us nothing about what it
     // passed over. Coercing that to [] would restate the silent-omission bug
     // this accounting exists to expose, so say the accounting is missing.
@@ -753,6 +770,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
   let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false, fromPreview = false;
   let entityRejections = 0, claimRejections = 0, dateOverrides = 0;
   let duplicateSkips = 0, acceptedSkipConflicts = 0;
+  let attemptCount = 0, modelDurationMs = 0, consolidationDurationMs = 0;
   try {
     inputHash = hashInput(text);
     inputChars = text.length;
@@ -767,6 +785,8 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // here (see grounding.js) rather than in consolidation, so the preview
     // remembered below and the row eventually written are the same triple.
     const extracted = previewed || await extractFacts(text);
+    attemptCount = extracted.attemptCount ?? 0;
+    modelDurationMs = extracted.modelDurationMs ?? 0;
     // Seed the meter before grounding or consolidation can throw. In
     // particular, total model failure must be both caller-visible and recorded
     // with the same chunk denominator that proves it was total.
@@ -837,7 +857,9 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
       };
     }
 
+    const consolidationStartedAt = Date.now();
     const res = consolidate(facts, { source, observationDate, observedAt });
+    consolidationDurationMs = Date.now() - consolidationStartedAt;
     const reconciled = reconcileSkipped(res.added, [...res.skipped, ...notExtracted]);
     duplicateSkips = reconciled.duplicateSkips;
     acceptedSkipConflicts = reconciled.acceptedSkipConflicts;
@@ -851,6 +873,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
       inputHash, inputChars, chunkChars, emittedCount, skippedCount, chunkFailures,
       entityRejections, claimRejections, dateOverrides,
       duplicateSkips, acceptedSkipConflicts,
+      attemptCount, modelDurationMs, consolidationDurationMs,
       dryRun, failed, fromPreview, durationMs: Date.now() - started, source: source ?? null,
     });
   }
