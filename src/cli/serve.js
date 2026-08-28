@@ -74,10 +74,16 @@ export async function runServeCli(args) {
       shuttingDown = true;
       console.error(`[kb serve] ${signal} — draining`);
       daemon.close().then(
-        () => process.exit(0),
+        // Do not force process.exit() here. The embedding runtime owns native
+        // worker threads whose teardown races a forced V8 exit on macOS,
+        // aborting with libc++ "mutex lock failed" after an otherwise-clean
+        // drain. Once both sockets and every transport are closed, no JS
+        // handles remain: setting the code lets Node unwind native resources
+        // in their normal order and exit on its own.
+        () => { process.exitCode = 0; },
         (err) => {
           console.error(`[kb serve] shutdown failed: ${err.message}`);
-          process.exit(1);
+          process.exitCode = 1;
         },
       );
     });
