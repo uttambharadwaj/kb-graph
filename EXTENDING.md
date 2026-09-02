@@ -8,7 +8,7 @@ This document is written for AI agents, not humans. When a user says "make this 
 
 ### Core Stack
 
-- **Runtime:** Node.js (>=18) with ES modules (`"type": "module"` in package.json)
+- **Runtime:** Node.js 22, 24, or 26 with ES modules (`"type": "module"` in package.json)
 - **Database:** SQLite via better-sqlite3 with FTS5 virtual tables for full-text search
 - **Server:** Express 4 serving a web dashboard, REST API, and MCP endpoints
 - **MCP:** Model Context Protocol server with two transports -- stdio (local) and StreamableHTTP (remote)
