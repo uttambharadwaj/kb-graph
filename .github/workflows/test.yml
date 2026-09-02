@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node: [22, 26]
+        node: [22, 24, 26]
     env:
       # A fresh job-owned cache is warmed once before Node fans test files out
       # to child processes. Transformers.js writes directly to final cache

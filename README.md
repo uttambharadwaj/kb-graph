@@ -178,7 +178,7 @@ worth setting up once you run more than a couple of concurrent agent sessions
 
 ### Prerequisites
 
-- Node.js 20+. `.node-version` pins 22 (what CI runs); `npm install` fails fast with `EBADENGINE` on any Node better-sqlite3 has no prebuilt binary for.
+- Node.js 22, 24, or 26. `.node-version` pins 22 for local development; CI runs all three supported majors.
 - That's it. No external databases, no Docker, no cloud dependencies.
 
 ### Install
