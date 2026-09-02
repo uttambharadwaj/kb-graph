@@ -6,8 +6,8 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const workflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
 
 describe('test runtime contract', () => {
-  it('rejects Node versions newer than the supported native dependency range', () => {
-    assert.strictEqual(pkg.engines.node, '>=18 <23');
+  it('pins the runtime range better-sqlite3 ships prebuilt binaries for', () => {
+    assert.strictEqual(pkg.engines.node, '>=20');
     assert.strictEqual(readFileSync(new URL('../.node-version', import.meta.url), 'utf8').trim(), '22');
     assert.match(
       readFileSync(new URL('../.npmrc', import.meta.url), 'utf8'),
@@ -20,6 +20,6 @@ describe('test runtime contract', () => {
     assert.strictEqual(pkg.scripts.test, 'npm run test:suite');
     assert.ok(workflow.indexOf('npm run test:preflight') < workflow.indexOf('npm run test:suite'));
     assert.match(workflow, /KB_EMBEDDING_CACHE_DIR:/);
-    assert.match(workflow, /node-version: 22/);
+    assert.match(workflow, /node: \[22, 26\]/);
   });
 });

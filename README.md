@@ -14,7 +14,6 @@ kb-graph gives every AI agent you run — Claude Code, Codex, Gemini, anything s
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
 cd kb-graph
-nvm use         # Node 18-22; .node-version pins 22
 npm install
 node bin/kb.js setup
 ```
@@ -179,7 +178,7 @@ worth setting up once you run more than a couple of concurrent agent sessions
 
 ### Prerequisites
 
-- Node.js 18-22. `.node-version` pins 22, so `nvm use` (or fnm/volta) picks it up. Node 23+ fails `npm install` with `EBADENGINE`: better-sqlite3 has no build for it.
+- Node.js 20+. `.node-version` pins 22 (what CI runs); `npm install` fails fast with `EBADENGINE` on any Node better-sqlite3 has no prebuilt binary for.
 - That's it. No external databases, no Docker, no cloud dependencies.
 
 ### Install
