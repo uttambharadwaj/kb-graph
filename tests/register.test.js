@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from 'node:test';
 import { stableNodePath } from '../src/cli/runtime-node.js';
 import assert from 'node:assert';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -47,6 +47,12 @@ describe('MCP registration', () => {
       command: stableNodePath(),
       args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
     });
+  });
+
+  it('creates a missing config owner-only, since mcp.json conventionally carries API keys', () => {
+    const homeDir = makeHome();
+    const [r] = registerAgents(['cursor'], homeDir);
+    assert.strictEqual(statSync(r.path).mode & 0o777, 0o600);
   });
 
   it('writes config files for the agents whose configs it owns', () => {

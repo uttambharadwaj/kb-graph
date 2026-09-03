@@ -42,8 +42,9 @@ Most memory systems fix this with discipline — *remember to save notes, rememb
 
 ### 1. Push, not pull
 
-Hooks installed by `kb setup` into Claude Code's `settings.json` and Codex's
-`hooks.json` mean your agent never starts cold:
+Hooks installed by `kb setup` into Claude Code's `settings.json`, Codex's
+`hooks.json`, and Cursor's `hooks.json` (briefing only there: Cursor's prompt
+and tool hooks cannot inject context) mean your agent never starts cold:
 
 - **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
 

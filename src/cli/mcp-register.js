@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { stableNodePath } from './runtime-node.js';
@@ -117,7 +117,12 @@ export function registerAgents(agents, homeDir = homedir(), { force = false } = 
     mkdirSync(join(path, '..'), { recursive: true });
     if (!config.mcpServers) config.mcpServers = {};
     config.mcpServers[KB_MCP_SERVER_NAME] = KB_MCP_SERVER_CONFIG;
-    writeFileSync(path, JSON.stringify(config, null, 2));
+    // The file holds every MCP server the agent has, often with API keys in
+    // headers, and the agent itself rewrites it: write-then-rename so a crash
+    // cannot truncate it, owner-only when we are the one creating it.
+    const tmp = `${path}.kb-tmp`;
+    writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
+    renameSync(tmp, path);
     return { agent, path, written: true, from, to: KB_ENTRYPOINT_PATH };
   });
 }

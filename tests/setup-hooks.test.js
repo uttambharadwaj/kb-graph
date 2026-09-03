@@ -425,3 +425,10 @@ test('installAgentHooks writes cursor hooks to ~/.cursor/hooks.json', () => {
   assert.equal(written.version, 1);
   assert.equal(written.hooks.sessionStart[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent cursor');
 });
+
+test('mergeAgentHooks legacy cleanup leaves a flat hand-written entry alone', () => {
+  const existing = { hooks: { PreCompact: [{ command: '/x/mine.sh' }] } };
+  const merged = mergeAgentHooks(existing, OPTS);
+  assert.equal(merged.hooks.PreCompact[0].command, '/x/mine.sh');
+  assert.equal(merged.hooks.PreCompact.length, 2);
+});

@@ -6,7 +6,7 @@ import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { SUPPORTED_AGENTS, registerAgents } from './mcp-register.js';
-import { HOOK_FILES, installAgentHooks } from './setup-hooks.js';
+import { HOOK_FILES, PUSH_AGENTS, installAgentHooks } from './setup-hooks.js';
 import { installJobs } from './setup-jobs.js';
 import { stableNodePath } from './runtime-node.js';
 
@@ -353,8 +353,8 @@ async function runInteractive(env) {
   outln();
   outln('  Select which AI agents will connect to the knowledge base.');
   outln('  Each gets a unique API key for authentication.');
-  const agentChoices = ['Claude Code', 'OpenAI Codex', 'Google Gemini', 'Cursor', 'Ollama'];
-  const agentKeys = ['claude', 'codex', 'gemini', 'cursor', 'ollama'];
+  const agentKeys = Object.keys(AGENT_LABELS);
+  const agentChoices = agentKeys.map(k => AGENT_LABELS[k]);
   const selected = await askMulti(rl, 'Select agents (comma-separated numbers, or A for all)', agentChoices);
   cfg.agents = selected.map(i => agentKeys[i]);
   cfg.apiKeys = {};
@@ -492,7 +492,7 @@ function applyConfig(cfg) {
     const label = AGENT_LABELS[agent] || agent;
     try {
       const r = installAgentHooks({ home: HOME, agent, nodeBin: stableNodePath(), kbJsPath: join(PROJECT_ROOT, 'bin', 'kb.js') });
-      results.steps.push({ action: `Installed ${label} hooks (briefing + hints)`, path: r.path });
+      results.steps.push({ action: `Installed ${label} hooks (${PUSH_AGENTS.includes(agent) ? 'briefing + hints' : 'briefing'})`, path: r.path });
       if (r.backup) results.steps.push({ action: `Backed up prior ${label} hook config`, path: r.backup });
     } catch (err) {
       results.steps.push({ action: `Failed to install ${label} hooks`, error: err.message });

@@ -147,8 +147,9 @@ function blocksToText(content) {
 }
 
 // Pull user/assistant text turns out of a session JSONL. Handles Claude Code
-// lines ({type:'user'|'assistant', message:{...}}, main thread only) and
-// Codex rollout lines ({payload:{type:'message', role, content}}); lines that
+// lines ({type:'user'|'assistant', message:{...}}, main thread only), Codex
+// rollout lines ({payload:{type:'message', role, content}}) and Cursor lines
+// ({role, message:{content}}); lines that
 // match neither shape are skipped, so new formats degrade to "nothing" not a crash.
 export function extractTranscriptText(raw) {
   const parts = [];

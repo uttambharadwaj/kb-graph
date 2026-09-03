@@ -7,8 +7,8 @@ import { AGENT, AGENT_FLAG, AGENTS } from '../process-ancestry.js';
 
 // Where each agent keeps its hook config, relative to home. Claude Code's
 // settings.json holds its whole configuration and Codex's hooks.json holds
-// only hooks, but both carry the same `hooks` block shape, which is the only
-// part anything here touches.
+// only hooks, but both carry the same `hooks` block shape. Cursor's differs;
+// see PUSH_AGENTS below.
 export const HOOK_FILES = {
   [AGENT.CLAUDE]: ['.claude', 'settings.json'],
   [AGENT.CODEX]: ['.codex', 'hooks.json'],
@@ -20,8 +20,7 @@ export const HOOK_FILES = {
 // and a top-level `version`. Only sessionStart is installed there —
 // beforeSubmitPrompt has no context field and preToolUse only relays
 // agent_message on deny, so hints and trigger warnings have no channel.
-const FLAT_HOOK_AGENTS = new Set([AGENT.CURSOR]);
-const PUSH_AGENTS = [AGENT.CLAUDE, AGENT.CODEX];
+export const PUSH_AGENTS = [AGENT.CLAUDE, AGENT.CODEX];
 
 function hookFilePath(agent, home = homedir()) {
   const parts = HOOK_FILES[agent];
@@ -49,9 +48,8 @@ const agentHookFiles = (home = homedir()) =>
 // double-install over it — only `commandFor`'s preference for `script` over
 // `subcommand` decides what a NEW install writes.
 //
-// `agents` is the allowlist for the spec: the PreToolUse trigger hook is
-// Claude-only until slice-1 telemetry shows Codex acts on what it is already
-// handed (brief §4 Q2). `matcher` is one string when every agent shares it,
+// `agents` is the allowlist for the spec (PUSH_AGENTS for the two hooks
+// Cursor has no channel for). `matcher` is one string when every agent shares it,
 // or a per-agent map: Codex's SessionStart sources are startup|resume|clear —
 // it has no `compact` source, since PreCompact/PostCompact are their own
 // events there.
@@ -69,6 +67,8 @@ const HOOK_SPECS = [
   },
   {
     event: 'SessionStart',
+    // Cursor's names are not a uniform transform (UserPromptSubmit is
+    // beforeSubmitPrompt there), so each spec spells its own.
     eventName: { [AGENT.CURSOR]: 'sessionStart' },
     matcher: { [AGENT.CLAUDE]: 'startup|resume|clear|compact', [AGENT.CODEX]: 'startup|resume|clear' },
     subcommand: 'wakeup-hook',
@@ -86,7 +86,7 @@ const matcherFor = (spec, agent) =>
 const eventFor = (spec, agent) => spec.eventName?.[agent] ?? spec.event;
 
 // Every command in a hook group, whichever shape the file uses.
-const groupCommands = (group) => (group.hooks ?? [group]).map(h => h.command);
+const groupCommands = (group) => (group.hooks ?? [group]).map(h => h.command ?? '');
 
 // Claude is the flag's default (every hook installed before the flag existed
 // passes nothing — see readAgentFlag), so its command carries no `--agent`.
@@ -126,7 +126,7 @@ const identifies = (spec, command, agent) => {
 export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLAUDE }) {
   const next = structuredClone(settings ?? {});
   next.hooks = next.hooks ?? {};
-  const flat = FLAT_HOOK_AGENTS.has(agent);
+  const flat = agent === AGENT.CURSOR;
   if (flat) next.version = next.version ?? 1;
   for (const spec of HOOK_SPECS) {
     if (!spec.agents.includes(agent)) continue;
@@ -134,8 +134,10 @@ export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLA
     const entries = (next.hooks[event] = next.hooks[event] ?? []);
     if (spec.legacy) {
       for (let i = entries.length - 1; i >= 0; i--) {
-        entries[i].hooks = (entries[i].hooks ?? []).filter(hook => !spec.legacy(hook.command ?? ''));
-        if (entries[i].hooks.length === 0) entries.splice(i, 1);
+        const group = entries[i];
+        if (!group.hooks) continue;
+        group.hooks = group.hooks.filter(hook => !spec.legacy(hook.command ?? ''));
+        if (group.hooks.length === 0) entries.splice(i, 1);
       }
     }
     const already = entries.some(e => groupCommands(e).some(c => identifies(spec, c, agent)));
@@ -204,7 +206,7 @@ export function unresolvableHookCommands(settings, { exists = existsSync, read =
 
   for (const [event, groups] of Object.entries(settings?.hooks ?? {})) {
     for (const group of groups ?? []) {
-      for (const command of groupCommands(group).map(c => c ?? '')) {
+      for (const command of groupCommands(group)) {
         const direct = absolutePathsIn(command);
         const indirect = direct.filter(exists).flatMap(scriptPaths);
         const all = [...new Set([...direct, ...indirect])];
