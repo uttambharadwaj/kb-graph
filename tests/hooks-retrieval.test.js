@@ -639,4 +639,10 @@ describe('the --agent flag is registered on both hook commands', () => {
       assert.match(stderr, /--agent needs a value/);
     });
   }
+
+  it('prompt-hint rejects Cursor because Cursor prompt hooks cannot inject context', () => {
+    const { status, stderr } = runCli('prompt-hint', ['--agent', 'cursor']);
+    assert.strictEqual(status, 2);
+    assert.match(stderr, /--agent must be one of: claude, codex/);
+  });
 });

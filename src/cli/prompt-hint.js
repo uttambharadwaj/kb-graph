@@ -11,6 +11,8 @@ import { recordSessionMap } from '../session-map.js';
 import { tierLabel, tiersDiscriminate } from '../tiers.js';
 import { HOOK_ERROR_LOG, callDaemonOp, hookDaemonTimeoutMs, hookOutput, noteHookTiming, readAgentFlag, recordHookFailure, deliver, watchHookTiming } from './hook-io.js';
 import { HOOK_OP } from '../daemon-paths.js';
+import { AGENT } from '../process-ancestry.js';
+import { UsageError } from './flags.js';
 
 const MAX_HINTS = 3;
 
@@ -105,6 +107,9 @@ export function commitPromptHintPlan(plan, { session, agent = null, fastWrite })
 
 export async function promptHint(args = []) {
   const agent = readAgentFlag(args, USAGE);
+  if (agent === AGENT.CURSOR) {
+    throw new UsageError('--agent must be one of: claude, codex', USAGE);
+  }
   watchHookTiming(HOOK_OP.PROMPT_HINT);
   // Our own model subprocesses are not user prompts. They cannot act on a hint
   // (no MCP tools) and logging them makes the read-path meter measure ourselves.

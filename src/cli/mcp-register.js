@@ -8,13 +8,23 @@ import { fileURLToPath } from 'url';
 export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini', 'cursor'];
 export const KB_MCP_SERVER_NAME = 'knowledge-base';
 export const KB_ENTRYPOINT_PATH = fileURLToPath(new URL('../../bin/kb.js', import.meta.url));
-export const KB_MCP_SERVER_CONFIG = {
-  command: stableNodePath(),
-  // mcp-shim connects to the resident `kb serve` daemon when one is running
-  // and falls back to a full in-process server when none is — so this default
-  // is correct whether or not the machine has the daemon set up.
-  args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
-};
+export function mcpServerConfig(agent = null) {
+  const args = [KB_ENTRYPOINT_PATH, 'mcp-shim'];
+  // Cursor launches stdio servers as bare node processes, so process ancestry
+  // cannot distinguish it from an ordinary shell. Carry the client identity
+  // in the registration instead; the shim sends it per connection to the
+  // resident daemon and preserves it through the in-process fallback.
+  if (agent === AGENT.CURSOR) args.push(`--agent=${AGENT.CURSOR}`);
+  return {
+    command: stableNodePath(),
+    // mcp-shim connects to the resident `kb serve` daemon when one is running
+    // and falls back to a full in-process server when none is — so this default
+    // is correct whether or not the machine has the daemon set up.
+    args,
+  };
+}
+
+export const KB_MCP_SERVER_CONFIG = mcpServerConfig();
 
 // Absent and unreadable are different answers. Treating both as "empty config"
 // means one bad parse rewrites the file as nothing but our own entry, and
@@ -116,7 +126,7 @@ export function registerAgents(agents, homeDir = homedir(), { force = false } = 
 
     mkdirSync(join(path, '..'), { recursive: true });
     if (!config.mcpServers) config.mcpServers = {};
-    config.mcpServers[KB_MCP_SERVER_NAME] = KB_MCP_SERVER_CONFIG;
+    config.mcpServers[KB_MCP_SERVER_NAME] = mcpServerConfig(agent);
     // The file holds every MCP server the agent has, often with API keys in
     // headers, and the agent itself rewrites it: write-then-rename so a crash
     // cannot truncate it, owner-only when we are the one creating it.

@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -37,7 +37,7 @@ writeFileSync(stub, [
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, findTranscripts, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
 const { getDb, getHealth } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -112,6 +112,23 @@ describe('harvest candidate selection', () => {
     writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n'));
     return path;
   };
+
+  it('discovers only Cursor agent-transcripts trees by default', () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'kb-cursor-home-'));
+    const transcriptDir = join(homeDir, '.cursor', 'projects', 'repo', 'agent-transcripts', 'session');
+    const unrelatedDir = join(homeDir, '.cursor', 'projects', 'repo', 'other-state');
+    mkdirSync(transcriptDir, { recursive: true });
+    mkdirSync(unrelatedDir, { recursive: true });
+    const transcript = join(transcriptDir, 'conversation.jsonl');
+    const unrelated = join(unrelatedDir, 'cache.jsonl');
+    writeFileSync(transcript, '{}\n');
+    writeFileSync(unrelated, '{}\n');
+
+    const found = findTranscripts({ sinceMs: 0, homeDir });
+
+    assert.deepStrictEqual(found.map(candidate => candidate.path), [transcript]);
+    rmSync(homeDir, { recursive: true, force: true });
+  });
 
   // Every claude -p this server runs leaves a transcript, so without this the
   // harvest reads its own prompts and each run manufactures the next run's input.

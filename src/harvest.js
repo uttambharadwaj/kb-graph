@@ -115,12 +115,24 @@ function* walkJsonl(dir) {
   }
 }
 
-export function findTranscripts({ sinceMs, searchRoots }) {
-  const roots = (searchRoots || [
-    join(homedir(), '.claude', 'projects'),
-    join(homedir(), '.codex', 'sessions'),
-    join(homedir(), '.cursor', 'projects'),
-  ]).filter(existsSync);
+function defaultTranscriptRoots(homeDir) {
+  const cursorProjects = join(homeDir, '.cursor', 'projects');
+  let cursorRoots = [];
+  try {
+    cursorRoots = readdirSync(cursorProjects, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(cursorProjects, entry.name, 'agent-transcripts'));
+  } catch { /* Cursor is not installed or has no projects yet */ }
+
+  return [
+    join(homeDir, '.claude', 'projects'),
+    join(homeDir, '.codex', 'sessions'),
+    ...cursorRoots,
+  ];
+}
+
+export function findTranscripts({ sinceMs, searchRoots, homeDir = homedir() }) {
+  const roots = (searchRoots || defaultTranscriptRoots(homeDir)).filter(existsSync);
 
   const out = [];
   for (const root of roots) {

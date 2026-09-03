@@ -45,7 +45,7 @@ describe('MCP registration', () => {
     const config = JSON.parse(readFileSync(r.path, 'utf-8'));
     assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
       command: stableNodePath(),
-      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
+      args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
     });
   });
 

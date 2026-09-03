@@ -17,7 +17,7 @@
 import { connect } from 'net';
 import { readFlagValue } from './flags.js';
 import { DAEMON_SOCKET_PATH } from '../daemon.js';
-import { resolveHarnessAncestry } from '../process-ancestry.js';
+import { AGENTS, resolveHarnessAncestry } from '../process-ancestry.js';
 import { encodeHello } from '../shim-hello.js';
 import { recordShimPath, recordShimRecovery } from '../shim-path-meter.js';
 
@@ -38,6 +38,15 @@ export const RECONNECT_MAX_DELAY_MS = Number(process.env.KB_SHIM_RECONNECT_MAX_D
 
 function socketPathFrom(args) {
   return readFlagValue(args, '--socket') || DAEMON_SOCKET_PATH;
+}
+
+function identityFrom(args) {
+  const explicitAgent = readFlagValue(args, '--agent');
+  if (explicitAgent !== undefined && !AGENTS.includes(explicitAgent)) {
+    throw new Error(`--agent must be one of: ${AGENTS.join(', ')}`);
+  }
+  const ancestry = resolveHarnessAncestry();
+  return explicitAgent === undefined ? ancestry : { ...ancestry, agent: explicitAgent };
 }
 
 // Hand-rolled rather than adding an SDK client dependency: the probe only
@@ -97,7 +106,7 @@ const FALLBACK_REASONS = {
   unresponsive: 'daemon unresponsive',
 };
 
-async function serveInProcess(reason, { startedAt, metricReason = reason, errorCode = null }) {
+async function serveInProcess(reason, identity, { startedAt, metricReason = reason, errorCode = null }) {
   recordShimPath({
     path: 'fallback',
     reason: metricReason,
@@ -108,7 +117,7 @@ async function serveInProcess(reason, { startedAt, metricReason = reason, errorC
   const { superviseMcpServer } = await import('../mcp-supervisor.js');
   // Owns process.stdin/stdout and its own exit handling from here on, same
   // as running `kb mcp` directly.
-  superviseMcpServer();
+  superviseMcpServer({ childArgs: identity.agent ? [`--agent=${identity.agent}`] : [] });
 }
 
 // Exits the process once anything queued on stdout has actually gone out —
@@ -405,10 +414,11 @@ function relayThroughDaemon(initialSocket, { socketPath, identity }) {
 export async function runMcpShimCli(args) {
   const startedAt = Date.now();
   const socketPath = socketPathFrom(args);
+  const identity = identityFrom(args);
 
   const liveness = await probeDaemonAlive(socketPath, PROBE_TIMEOUT_MS);
   if (liveness.state !== 'alive') {
-    return serveInProcess(liveness.state, { startedAt, errorCode: liveness.errorCode });
+    return serveInProcess(liveness.state, identity, { startedAt, errorCode: liveness.errorCode });
   }
 
   // The real connect is bounded too. The liveness probe and this connection
@@ -418,7 +428,7 @@ export async function runMcpShimCli(args) {
   if (!connection.socket) {
     // The probe just proved the daemon alive; a connect failing this soon
     // after means it died in the gap above.
-    return serveInProcess('unreachable', {
+    return serveInProcess('unreachable', identity, {
       startedAt,
       metricReason: 'connect_race',
       errorCode: connection.errorCode,
@@ -438,7 +448,6 @@ export async function runMcpShimCli(args) {
   // next message. Nothing is written back to the client and the connection
   // stays open — verified against @modelcontextprotocol/server 2.0.0 in
   // node_modules, pinned by tests/shim-hello.test.js.
-  const identity = resolveHarnessAncestry();
   recordShimPath({
     path: 'daemon',
     reason: 'probe_alive',

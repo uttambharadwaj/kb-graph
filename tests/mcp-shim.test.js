@@ -223,6 +223,23 @@ describe('kb mcp-shim', () => {
     }
   });
 
+  it('preserves an explicit Cursor agent tag through the in-process fallback', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    const child = spawnShim([`--socket=${socketPath}`, '--agent=cursor']);
+    const driver = jsonRpcDriver(child);
+    const query = 'cursor-explicit-agent-fallback';
+    try {
+      await initialize(driver);
+      const result = await driver.call('tools/call', { name: 'kb_search', arguments: { query } });
+      assert.ok(!result.result.isError, `kb_search failed: ${JSON.stringify(result.result.content)}`);
+      const rows = getDb().prepare('SELECT agent FROM retrievals WHERE query = ?').all(query);
+      assert.ok(rows.length > 0, 'the fallback search must log a retrieval row');
+      for (const row of rows) assert.strictEqual(row.agent, 'cursor');
+    } finally {
+      child.kill();
+    }
+  });
+
   it('falls back when the daemon accepts but never answers (wedged)', { timeout: CASE_TIMEOUT_MS }, async () => {
     const socketPath = freshSocketPath();
     const wedged = await startWedgedDaemon(socketPath);
@@ -346,6 +363,25 @@ describe('kb mcp-shim', () => {
         assert.strictEqual(row.session, 'sess-real-shim');
         assert.strictEqual(row.agent, agent);
       }
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('uses an explicit Cursor agent tag when process ancestry cannot name the harness', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
+    const child = spawnShim([`--socket=${daemon.socketPath}`, '--agent=cursor']);
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    const query = 'cursor-explicit-agent-daemon';
+    try {
+      await initialize(driver);
+      const result = await driver.call('tools/call', { name: 'kb_search', arguments: { query } });
+      assert.ok(!result.result.isError, `kb_search failed: ${JSON.stringify(result.result.content)}`);
+      assert.ok(!stderr().includes('serving in-process'), `the shim fell back instead of using the daemon: ${stderr()}`);
+      const rows = getDb().prepare('SELECT agent FROM retrievals WHERE query = ?').all(query);
+      assert.ok(rows.length > 0, 'the daemon search must log a retrieval row');
+      for (const row of rows) assert.strictEqual(row.agent, 'cursor');
     } finally {
       child.kill();
     }

@@ -33,7 +33,7 @@ const COMMANDS = {
   },
   'mcp-shim': {
     summary: 'Connect this session to the resident `kb serve` daemon over stdio, falling back to in-process MCP when it is unreachable',
-    valueEq: ['--socket'],
+    valueEq: ['--socket', '--agent'],
     run: a => import('../src/cli/mcp-shim.js').then(m => m.runMcpShimCli(a)),
   },
   tool: {
