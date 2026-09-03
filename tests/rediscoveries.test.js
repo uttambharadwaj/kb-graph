@@ -208,7 +208,7 @@ describe('rediscoveries per-agent breakdown', () => {
     const rows = [
       { agent: 'claude' }, { agent: 'claude' }, { agent: 'codex' }, { agent: null }, { agent: 'gemini' },
     ];
-    assert.deepStrictEqual(countByAgent(rows), { claude: 2, codex: 1, unknown: 2 });
+    assert.deepStrictEqual(countByAgent(rows), { claude: 2, codex: 1, cursor: 0, unknown: 2 });
   });
 
   it('carries the agent through the listing query and onto the CLI\'s JSON rows', () => {
@@ -243,7 +243,7 @@ describe('rediscoveries per-agent breakdown', () => {
     }
     const [totalLine, agentLine] = logs;
     assert.match(totalLine, /^Rediscoveries in the last 14 day\(s\): \d+$/);
-    assert.match(agentLine, /^ {2}by agent: claude \d+, codex \d+, unknown \d+$/);
+    assert.match(agentLine, /^ {2}by agent: claude \d+, codex \d+, cursor \d+, unknown \d+$/);
 
     // The parts must sum to the total printed above them, or the line lies.
     const total = Number(totalLine.match(/: (\d+)$/)[1]);

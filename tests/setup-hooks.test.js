@@ -383,3 +383,45 @@ test('staleHookWarnings caps how many paths one line names', () => {
 test('staleHookWarnings says nothing when there are no hook files at all', () => {
   assert.deepEqual(staleHookWarnings(mkdtempSync(join(tmpdir(), 'kbhooks-'))), []);
 });
+
+// --- Cursor --------------------------------------------------------------
+
+// Cursor's hooks.json: camelCase events, flat `{command}` entries (no
+// `hooks` array), a top-level `version`. Only sessionStart is installed:
+// beforeSubmitPrompt has no context field, so hints cannot be pushed, and
+// preToolUse only relays agent_message on deny.
+const CURSOR_OPTS = { ...OPTS, agent: AGENT.CURSOR };
+
+test('mergeAgentHooks installs only a flat sessionStart entry for cursor', () => {
+  const merged = mergeAgentHooks({}, CURSOR_OPTS);
+  assert.equal(merged.version, 1);
+  assert.deepEqual(Object.keys(merged.hooks), ['sessionStart']);
+  assert.deepEqual(merged.hooks.sessionStart, [
+    { command: '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent cursor' },
+  ]);
+});
+
+test('mergeAgentHooks is idempotent for cursor and keeps foreign entries', () => {
+  const existing = { version: 1, hooks: { sessionStart: [{ command: '/x/other.sh SessionStart' }], stop: [{ command: '/x/other.sh Stop' }] } };
+  const once = mergeAgentHooks(existing, CURSOR_OPTS);
+  assert.equal(once.hooks.sessionStart.length, 2);
+  assert.equal(once.hooks.sessionStart[0].command, '/x/other.sh SessionStart');
+  assert.deepEqual(once.hooks.stop, existing.hooks.stop);
+  assert.deepEqual(mergeAgentHooks(once, CURSOR_OPTS), once);
+});
+
+test('unresolvableHookCommands reads flat cursor entries', () => {
+  const settings = { version: 1, hooks: { sessionStart: [{ command: '/gone/node /gone/kb.js wakeup-hook --agent cursor' }] } };
+  const found = unresolvableHookCommands(settings, { exists: () => false });
+  assert.equal(found.length, 1);
+  assert.deepEqual(found[0].missing, ['/gone/node', '/gone/kb.js']);
+});
+
+test('installAgentHooks writes cursor hooks to ~/.cursor/hooks.json', () => {
+  const home = mkdtempSync(join(tmpdir(), 'kb-cursor-'));
+  const { path } = installAgentHooks({ home, ...CURSOR_OPTS });
+  assert.equal(path, join(home, '.cursor', 'hooks.json'));
+  const written = JSON.parse(readFileSync(path, 'utf8'));
+  assert.equal(written.version, 1);
+  assert.equal(written.hooks.sessionStart[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook --agent cursor');
+});

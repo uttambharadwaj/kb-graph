@@ -15,7 +15,7 @@ import { execFileSync } from 'child_process';
 // The two harnesses that hold real sessions. One spelling, imported by
 // everything that stamps or parses an agent tag (retrieval.js, the hooks,
 // the reports) so a third agent is added here and nowhere else.
-export const AGENT = { CLAUDE: 'claude', CODEX: 'codex' };
+export const AGENT = { CLAUDE: 'claude', CODEX: 'codex', CURSOR: 'cursor' };
 
 export const AGENTS = Object.values(AGENT);
 

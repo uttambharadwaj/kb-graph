@@ -55,7 +55,9 @@ export function hookJsonEnvelope(hookEventName, additionalContext) {
 // string.
 export function hookOutput(output, { agent, hookEventName }) {
   if (output == null || output === '') return null;
-  return agent === AGENT.CODEX ? hookJsonEnvelope(hookEventName, output) : output;
+  if (agent === AGENT.CODEX) return hookJsonEnvelope(hookEventName, output);
+  if (agent === AGENT.CURSOR) return JSON.stringify({ additional_context: output });
+  return output;
 }
 
 // Shared across every hook that reuses this module (prompt-hint.js and

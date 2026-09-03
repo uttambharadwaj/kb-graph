@@ -49,7 +49,7 @@ const ACTIVE_NOTE_CAP = 6000;
 // the 3 most-recent; the rest are one kb_search/kb_read away.
 const BRIEFING_STATE_LIMIT = 3;
 
-const USAGE = 'Usage: kb wakeup-hook [--agent <claude|codex>]';
+const USAGE = 'Usage: kb wakeup-hook [--agent <claude|codex|cursor>]';
 
 async function readStdin() {
   let data = '';

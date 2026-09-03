@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('MCP registration', () => {
   it('defaults to all supported agents', () => {
-    assert.deepStrictEqual(parseRegisterArgs([]), ['claude', 'codex', 'gemini']);
+    assert.deepStrictEqual(parseRegisterArgs([]), ['claude', 'codex', 'gemini', 'cursor']);
   });
 
   it('parses an explicit agent subset', () => {
@@ -35,6 +35,18 @@ describe('MCP registration', () => {
 
   it('rejects unsupported agents', () => {
     assert.throws(() => parseRegisterArgs(['--agents=claude,foo']), /Unsupported agent/);
+  });
+
+  it('registers cursor in ~/.cursor/mcp.json using the mcpServers shape', () => {
+    const homeDir = makeHome();
+    const [r] = registerAgents(['cursor'], homeDir);
+    assert.strictEqual(r.written, true);
+    assert.strictEqual(r.path, join(homeDir, '.cursor', 'mcp.json'));
+    const config = JSON.parse(readFileSync(r.path, 'utf-8'));
+    assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
+      command: stableNodePath(),
+      args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
+    });
   });
 
   it('writes config files for the agents whose configs it owns', () => {

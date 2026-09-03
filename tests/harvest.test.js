@@ -80,6 +80,17 @@ describe('harvest transcript parsing', () => {
     assert.match(extractTranscriptText(raw), /ASSISTANT: codex says hi/);
   });
 
+  it('extracts Cursor agent transcript turns (top-level role, no type)', () => {
+    const raw = [
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'why is the build red' }] } }),
+      JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'Missing dep.' }, { type: 'tool_use', name: 'Shell', input: { command: 'npm ci' } }] } }),
+    ].join('\n');
+    const text = extractTranscriptText(raw);
+    assert.match(text, /USER: why is the build red/);
+    assert.match(text, /ASSISTANT: Missing dep\./);
+    assert.doesNotMatch(text, /npm ci/);
+  });
+
   it('tolerates malformed lines', () => {
     assert.strictEqual(extractTranscriptText('not json\n{"broken":'), '');
   });

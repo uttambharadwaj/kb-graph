@@ -5,7 +5,7 @@ import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
 
-export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini'];
+export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini', 'cursor'];
 export const KB_MCP_SERVER_NAME = 'knowledge-base';
 export const KB_ENTRYPOINT_PATH = fileURLToPath(new URL('../../bin/kb.js', import.meta.url));
 export const KB_MCP_SERVER_CONFIG = {
@@ -35,6 +35,7 @@ export function getAgentConfigPath(agent, homeDir = homedir()) {
   // is dead config it never loads (verified against Codex CLI 0.148).
   if (agent === AGENT.CODEX) return join(homeDir, '.codex', 'config.toml');
   if (agent === 'gemini') return join(homeDir, '.gemini', 'mcp.json');
+  if (agent === AGENT.CURSOR) return join(homeDir, '.cursor', 'mcp.json');
   throw new Error(`Unsupported agent: ${agent}`);
 }
 

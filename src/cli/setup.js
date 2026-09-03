@@ -108,6 +108,7 @@ const AGENT_LABELS = {
   claude: 'Claude Code',
   codex: 'OpenAI Codex CLI',
   gemini: 'Google Gemini CLI',
+  cursor: 'Cursor',
   ollama: 'Ollama',
 };
 
@@ -352,8 +353,8 @@ async function runInteractive(env) {
   outln();
   outln('  Select which AI agents will connect to the knowledge base.');
   outln('  Each gets a unique API key for authentication.');
-  const agentChoices = ['Claude Code', 'OpenAI Codex', 'Google Gemini', 'Ollama'];
-  const agentKeys = ['claude', 'codex', 'gemini', 'ollama'];
+  const agentChoices = ['Claude Code', 'OpenAI Codex', 'Google Gemini', 'Cursor', 'Ollama'];
+  const agentKeys = ['claude', 'codex', 'gemini', 'cursor', 'ollama'];
   const selected = await askMulti(rl, 'Select agents (comma-separated numbers, or A for all)', agentChoices);
   cfg.agents = selected.map(i => agentKeys[i]);
   cfg.apiKeys = {};
