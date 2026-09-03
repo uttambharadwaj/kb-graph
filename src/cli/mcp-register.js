@@ -1,20 +1,30 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
 
-export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini'];
+export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini', 'cursor'];
 export const KB_MCP_SERVER_NAME = 'knowledge-base';
 export const KB_ENTRYPOINT_PATH = fileURLToPath(new URL('../../bin/kb.js', import.meta.url));
-export const KB_MCP_SERVER_CONFIG = {
-  command: stableNodePath(),
-  // mcp-shim connects to the resident `kb serve` daemon when one is running
-  // and falls back to a full in-process server when none is — so this default
-  // is correct whether or not the machine has the daemon set up.
-  args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
-};
+export function mcpServerConfig(agent = null) {
+  const args = [KB_ENTRYPOINT_PATH, 'mcp-shim'];
+  // Cursor launches stdio servers as bare node processes, so process ancestry
+  // cannot distinguish it from an ordinary shell. Carry the client identity
+  // in the registration instead; the shim sends it per connection to the
+  // resident daemon and preserves it through the in-process fallback.
+  if (agent === AGENT.CURSOR) args.push(`--agent=${AGENT.CURSOR}`);
+  return {
+    command: stableNodePath(),
+    // mcp-shim connects to the resident `kb serve` daemon when one is running
+    // and falls back to a full in-process server when none is — so this default
+    // is correct whether or not the machine has the daemon set up.
+    args,
+  };
+}
+
+export const KB_MCP_SERVER_CONFIG = mcpServerConfig();
 
 // Absent and unreadable are different answers. Treating both as "empty config"
 // means one bad parse rewrites the file as nothing but our own entry, and
@@ -35,6 +45,7 @@ export function getAgentConfigPath(agent, homeDir = homedir()) {
   // is dead config it never loads (verified against Codex CLI 0.148).
   if (agent === AGENT.CODEX) return join(homeDir, '.codex', 'config.toml');
   if (agent === 'gemini') return join(homeDir, '.gemini', 'mcp.json');
+  if (agent === AGENT.CURSOR) return join(homeDir, '.cursor', 'mcp.json');
   throw new Error(`Unsupported agent: ${agent}`);
 }
 
@@ -115,8 +126,13 @@ export function registerAgents(agents, homeDir = homedir(), { force = false } = 
 
     mkdirSync(join(path, '..'), { recursive: true });
     if (!config.mcpServers) config.mcpServers = {};
-    config.mcpServers[KB_MCP_SERVER_NAME] = KB_MCP_SERVER_CONFIG;
-    writeFileSync(path, JSON.stringify(config, null, 2));
+    config.mcpServers[KB_MCP_SERVER_NAME] = mcpServerConfig(agent);
+    // The file holds every MCP server the agent has, often with API keys in
+    // headers, and the agent itself rewrites it: write-then-rename so a crash
+    // cannot truncate it, owner-only when we are the one creating it.
+    const tmp = `${path}.kb-tmp`;
+    writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
+    renameSync(tmp, path);
     return { agent, path, written: true, from, to: KB_ENTRYPOINT_PATH };
   });
 }

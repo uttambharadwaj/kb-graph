@@ -453,9 +453,9 @@ describe('per-agent breakdown', () => {
     seedFire(db, { session: 's-only-claude', agent: 'claude', followed: false });
 
     const { hint, briefing } = followThroughReport(db);
-    assert.deepStrictEqual(Object.keys(hint.byAgent), ['claude', 'codex', 'unknown']);
+    assert.deepStrictEqual(Object.keys(hint.byAgent), ['claude', 'codex', 'cursor', 'unknown']);
     assert.strictEqual(hint.byAgent.codex.fires, 0);
     assert.strictEqual(hint.byAgent.codex.rate30, 'n/a');
-    assert.deepStrictEqual(Object.keys(briefing.byAgent), ['claude', 'codex', 'unknown']);
+    assert.deepStrictEqual(Object.keys(briefing.byAgent), ['claude', 'codex', 'cursor', 'unknown']);
   });
 });

@@ -1,13 +1,19 @@
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { createKbServer } from './mcp-factory.js';
 import { restartOnSourceChange } from './restart-on-change.js';
+import { readFlagValue } from './cli/flags.js';
+import { AGENTS, resolveHarnessAncestry } from './process-ancestry.js';
+import { callIdentity } from './retrieval.js';
 
-export async function start() {
+export async function start({ agent = null } = {}) {
   let inFlight = 0;
+  const explicitIdentity = agent ? { ...resolveHarnessAncestry(), agent } : null;
   const track = (handler) => async (...args) => {
     inFlight++;
     try {
-      return await handler(...args);
+      return explicitIdentity
+        ? await callIdentity.run(explicitIdentity, () => handler(...args))
+        : await handler(...args);
     } finally {
       inFlight--;
     }
@@ -32,7 +38,12 @@ export async function start() {
 // Allow direct execution
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^\//, ''));
 if (isMain || process.argv[1]?.endsWith('mcp.js')) {
-  start().catch((err) => {
+  const agent = readFlagValue(process.argv.slice(2), '--agent') ?? null;
+  if (agent && !AGENTS.includes(agent)) {
+    console.error(`MCP server failed to start: --agent must be one of: ${AGENTS.join(', ')}`);
+    process.exit(1);
+  }
+  start({ agent }).catch((err) => {
     console.error('MCP server failed to start:', err);
     process.exit(1);
   });

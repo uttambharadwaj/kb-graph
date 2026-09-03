@@ -12,10 +12,14 @@
 // child_process.
 import { execFileSync } from 'child_process';
 
-// The two harnesses that hold real sessions. One spelling, imported by
-// everything that stamps or parses an agent tag (retrieval.js, the hooks,
-// the reports) so a third agent is added here and nowhere else.
-export const AGENT = { CLAUDE: 'claude', CODEX: 'codex' };
+// The harnesses that hold real sessions. One spelling, imported by everything
+// that stamps or parses an agent tag (retrieval.js, the hooks, the reports).
+// Adding one also means: HOOK_FILES/PUSH_AGENTS (setup-hooks.js), hookOutput
+// (hook-io.js), SUPPORTED_AGENTS + getAgentConfigPath (mcp-register.js),
+// AGENT_LABELS (setup.js), findTranscripts roots + extractTranscriptText
+// (harvest.js), and HARNESS_BASENAMES below when its process is identifiable
+// (Cursor's is not: the CLI runs as a bare `node`, the IDE as `Cursor`).
+export const AGENT = { CLAUDE: 'claude', CODEX: 'codex', CURSOR: 'cursor' };
 
 export const AGENTS = Object.values(AGENT);
 

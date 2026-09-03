@@ -33,7 +33,7 @@ const COMMANDS = {
   },
   'mcp-shim': {
     summary: 'Connect this session to the resident `kb serve` daemon over stdio, falling back to in-process MCP when it is unreachable',
-    valueEq: ['--socket'],
+    valueEq: ['--socket', '--agent'],
     run: a => import('../src/cli/mcp-shim.js').then(m => m.runMcpShimCli(a)),
   },
   tool: {
@@ -141,7 +141,7 @@ const COMMANDS = {
     run: a => import('../src/cli/triggers-backfill.js').then(m => m.runTriggersBackfillCli(a)),
   },
   'wakeup-hook': {
-    summary: 'Print compact KB briefing (for SessionStart hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
+    summary: 'Print compact KB briefing (for SessionStart hooks); --agent codex|cursor emits that client\'s JSON envelope instead of plain text',
     value: ['--agent'],
     run: a => import('../src/cli/wakeup-hook.js').then(m => m.wakeupHook(a)),
   },

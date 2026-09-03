@@ -2,7 +2,7 @@
 
 **A memory that tends itself, for AI agents that forget.**
 
-kb-graph gives every AI agent you run — Claude Code, Codex, Gemini, anything speaking MCP — one shared brain that compounds. The difference from other memory systems is the loop: your agents' session transcripts are **harvested automatically every night** into lessons and decisions (and facts, if you turn that on); per-workstream **state notes** are folded so "where is X?" always has one current answer; a **weekly synthesis** surfaces themes and contradictions; and hooks **push the relevant slice back into every new session** before you type a word. You don't have to remember to save anything, and your agents don't have to remember to search.
+kb-graph gives every AI agent you run — Claude Code, Codex, Cursor, Gemini, anything speaking MCP — one shared brain that compounds. The difference from other memory systems is the loop: your agents' session transcripts are **harvested automatically every night** into lessons and decisions (and facts, if you turn that on); per-workstream **state notes** are folded so "where is X?" always has one current answer; a **weekly synthesis** surfaces themes and contradictions; and hooks **push the relevant slice back into every new session** before you type a word. You don't have to remember to save anything, and your agents don't have to remember to search.
 
 > kb-graph began as a fork of [knowledge-base-server](https://github.com/willynikes2/knowledge-base-server)
 > by Shawn Daniel — the engine behind [Memstalker](https://memstalker.com) — and has
@@ -20,7 +20,7 @@ node bin/kb.js setup
 
 Setup registers the MCP server with your agents, installs the agent hooks
 (a KB briefing at session start, knowledge hints on every prompt) for Claude
-Code and Codex, schedules
+Code and Codex, the briefing alone for Cursor, schedules
 the nightly harvest / reindex / weekly synthesis jobs, installs the bundled
 `/debrief` and `kb-workflow` skills, and creates a markdown vault at
 `~/kb-vault` if you don't have one. Obsidian is an optional viewer — the
@@ -42,8 +42,9 @@ Most memory systems fix this with discipline — *remember to save notes, rememb
 
 ### 1. Push, not pull
 
-Hooks installed by `kb setup` into Claude Code's `settings.json` and Codex's
-`hooks.json` mean your agent never starts cold:
+Hooks installed by `kb setup` into Claude Code's `settings.json`, Codex's
+`hooks.json`, and Cursor's `hooks.json` (briefing only there: Cursor's prompt
+and tool hooks cannot inject context) mean your agent never starts cold:
 
 - **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
 
@@ -288,7 +289,7 @@ kb tool <name>         End-of-session recovery path: invoke an allowlisted KB
                        handler with one JSON object on stdin (or --input FILE)
 kb migrate             Apply pending schema migrations (--dry-run to preview,
                        --check to exit 3 when a database is behind)
-kb register            Register MCP with Claude Code / Gemini; prints the
+kb register            Register MCP with Claude Code / Gemini / Cursor; prints the
                        config.toml block to paste for Codex
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
 kb consolidate-state   Fold session notes into workstream state notes
@@ -464,10 +465,10 @@ alone still reaches the real message bus.
 
 ## Multi-agent setup
 
-### Claude Code, Codex, Gemini (MCP)
+### Claude Code, Codex, Cursor, Gemini (MCP)
 
 ```bash
-kb register    # writes to ~/.claude.json and ~/.gemini/mcp.json
+kb register    # writes to ~/.claude.json, ~/.gemini/mcp.json and ~/.cursor/mcp.json
 ```
 
 Codex is the exception: it reads MCP servers from `[mcp_servers.*]` in

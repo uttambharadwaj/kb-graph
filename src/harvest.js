@@ -1,5 +1,5 @@
-// Nightly auto-debrief: sweep agent session transcripts (Claude Code, and
-// Codex where parseable) and write durable knowledge without anyone typing
+// Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor,
+// and Codex where parseable) and write durable knowledge without anyone typing
 // /debrief. Lessons go through writeNote (embedding dedup + related-links),
 // tagged auto-debrief with the session as provenance; facts, when enabled,
 // go through kb_extract's consolidation (dedup + retire-on-contradiction).
@@ -115,11 +115,24 @@ function* walkJsonl(dir) {
   }
 }
 
-export function findTranscripts({ sinceMs, searchRoots }) {
-  const roots = (searchRoots || [
-    join(homedir(), '.claude', 'projects'),
-    join(homedir(), '.codex', 'sessions'),
-  ]).filter(existsSync);
+function defaultTranscriptRoots(homeDir) {
+  const cursorProjects = join(homeDir, '.cursor', 'projects');
+  let cursorRoots = [];
+  try {
+    cursorRoots = readdirSync(cursorProjects, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => join(cursorProjects, entry.name, 'agent-transcripts'));
+  } catch { /* Cursor is not installed or has no projects yet */ }
+
+  return [
+    join(homeDir, '.claude', 'projects'),
+    join(homeDir, '.codex', 'sessions'),
+    ...cursorRoots,
+  ];
+}
+
+export function findTranscripts({ sinceMs, searchRoots, homeDir = homedir() }) {
+  const roots = (searchRoots || defaultTranscriptRoots(homeDir)).filter(existsSync);
 
   const out = [];
   for (const root of roots) {
@@ -146,8 +159,9 @@ function blocksToText(content) {
 }
 
 // Pull user/assistant text turns out of a session JSONL. Handles Claude Code
-// lines ({type:'user'|'assistant', message:{...}}, main thread only) and
-// Codex rollout lines ({payload:{type:'message', role, content}}); lines that
+// lines ({type:'user'|'assistant', message:{...}}, main thread only), Codex
+// rollout lines ({payload:{type:'message', role, content}}) and Cursor lines
+// ({role, message:{content}}); lines that
 // match neither shape are skipped, so new formats degrade to "nothing" not a crash.
 export function extractTranscriptText(raw) {
   const parts = [];
@@ -163,6 +177,10 @@ export function extractTranscriptText(raw) {
     } else if (obj.payload?.type === 'message' && obj.payload.role) {
       role = obj.payload.role;
       text = blocksToText(obj.payload.content);
+    } else if ((obj.role === 'user' || obj.role === 'assistant') && obj.message) {
+      // Cursor agent-transcripts: top-level role, no type.
+      role = obj.role;
+      text = blocksToText(obj.message.content);
     }
 
     if (role && text.trim() && !text.startsWith('<system-reminder>')) {

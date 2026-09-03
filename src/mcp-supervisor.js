@@ -90,6 +90,7 @@ export function superviseMcpServer({
   stdin = process.stdin,
   stdout = process.stdout,
   childCommand = [SERVER],
+  childArgs = [],
   watchDir,
   debounceMs,
   idlePollMs = IDLE_POLL_MS,
@@ -163,7 +164,7 @@ export function superviseMcpServer({
   };
 
   const spawnChild = () => {
-    const started = spawn(process.execPath, childCommand, {
+    const started = spawn(process.execPath, [...childCommand, ...childArgs], {
       stdio: ['pipe', 'pipe', 'inherit'],
       // Tells the child this process owns reloading, so it does not also watch
       // src/ and exit out from under the connection.

@@ -1,4 +1,4 @@
-// Shared plumbing for agent hooks (Claude Code and Codex): never let a hook
+// Shared plumbing for agent hooks (Claude Code, Codex, Cursor): never let a hook
 // problem block the tool call or prompt it's attached to, but leave a
 // marker — a hook that failed and a hook that had nothing to say are
 // identical from outside otherwise, which is why intermittent hook errors
@@ -21,7 +21,8 @@ import { UsageError, readFlagValue } from './flags.js';
 export { AGENT_FLAG };
 
 // Which client this hook was installed for. Claude Code takes a hook's plain
-// stdout as context; Codex takes the JSON envelope below. The flag is the
+// stdout as context; Codex and Cursor take JSON envelopes of different
+// shapes (see hookOutput). The flag is the
 // source, not ancestry: an installed hook knows which config file it was
 // written into, while a `ps` walk is a guess that can only fail at exactly
 // the moment the answer matters (a wrapper, a detached spawn). Defaults to
@@ -50,12 +51,15 @@ export function hookJsonEnvelope(hookEventName, additionalContext) {
 }
 
 // What a hook actually writes to stdout for `agent`: plain text for Claude
-// Code, the JSON envelope for Codex. Null in, null out — "nothing to say"
+// Code, hookSpecificOutput for Codex, {additional_context} for Cursor. Null
+// in, null out — "nothing to say"
 // must stay nothing on both clients, never an envelope wrapping an empty
 // string.
 export function hookOutput(output, { agent, hookEventName }) {
   if (output == null || output === '') return null;
-  return agent === AGENT.CODEX ? hookJsonEnvelope(hookEventName, output) : output;
+  if (agent === AGENT.CODEX) return hookJsonEnvelope(hookEventName, output);
+  if (agent === AGENT.CURSOR) return JSON.stringify({ additional_context: output });
+  return output;
 }
 
 // Shared across every hook that reuses this module (prompt-hint.js and

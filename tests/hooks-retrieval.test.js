@@ -508,6 +508,27 @@ describe('--agent codex emits the JSON envelope', () => {
     assert.strictEqual(row.agent, 'codex');
   });
 
+  it('wakeup-hook emits the flat additional_context envelope for cursor and tags the row cursor', () => {
+    insertStateNote(db(), { title: 'State: cursor-envelope', content: 'body', updatedAt: '2042-01-01T00:00:00Z' });
+
+    const stdout = runHook(
+      'wakeup-hook',
+      { session_id: 'sess-cursor-briefing', hook_event_name: 'sessionStart', is_background_agent: false },
+      {},
+      ['--agent', 'cursor'],
+    );
+
+    // Cursor parses the whole stdout as one JSON object: any extra line breaks it.
+    const parsed = JSON.parse(stdout);
+    assert.deepStrictEqual(Object.keys(parsed), ['additional_context']);
+    assert.match(parsed.additional_context, /^KB BRIEFING/);
+    assert.match(parsed.additional_context, /State: cursor-envelope/);
+
+    const row = db().prepare("SELECT agent FROM retrievals WHERE surface = 'briefing' AND session = 'sess-cursor-briefing'").get();
+    assert.ok(row, 'expected a briefing row for the cursor session');
+    assert.strictEqual(row.agent, 'cursor');
+  });
+
   it('wakeup-hook stamps the event name off the hook input when the client names its own', () => {
     const stdout = runHook(
       'wakeup-hook',
@@ -609,7 +630,7 @@ describe('the --agent flag is registered on both hook commands', () => {
     it(`${command} rejects an unknown agent as a usage error instead of running with a default`, () => {
       const { status, stderr } = runCli(command, ['--agent', 'gemini']);
       assert.strictEqual(status, 2, 'a typo in an installed hook command must be loud, not silently claude');
-      assert.match(stderr, /--agent must be one of: claude, codex/);
+      assert.match(stderr, /--agent must be one of: claude, codex, cursor/);
     });
 
     it(`${command} rejects a bare --agent rather than falling back to claude`, () => {
@@ -618,4 +639,10 @@ describe('the --agent flag is registered on both hook commands', () => {
       assert.match(stderr, /--agent needs a value/);
     });
   }
+
+  it('prompt-hint rejects Cursor because Cursor prompt hooks cannot inject context', () => {
+    const { status, stderr } = runCli('prompt-hint', ['--agent', 'cursor']);
+    assert.strictEqual(status, 2);
+    assert.match(stderr, /--agent must be one of: claude, codex/);
+  });
 });
