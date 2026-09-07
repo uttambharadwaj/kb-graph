@@ -197,6 +197,7 @@ export function callDaemonOp(op, payload, {
     let settled = false;
     let buffer = '';
     const socket = connect(socketPath);
+    socket.setEncoding('utf8');
 
     const finish = (result) => {
       if (settled) return;

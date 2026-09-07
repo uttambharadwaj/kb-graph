@@ -116,6 +116,8 @@ const ADMIN_ONLY_TOOLS = new Set([
   'kb_supersede_candidates',
   'bus_send',
   'bus_read',
+  'bus_agent_register',
+  'bus_agentd_once',
 ]);
 
 // Every tool, with its call metered. Wrapped here rather than at each call
@@ -757,25 +759,27 @@ function defineTools() {
         try {
           const t = canonicalTriple({ subject, predicate, object });
           if (!inVocabulary(t.predicate)) throw new PredicateNotInVocabularyError(t.predicate, predicate);
-          // Before the write, not after: retirement targets the row this fact
-          // is about to contradict, and that row is still current only up to
-          // this point.
-          const { retired, skipped } = retireContradicted(t.subject, t.predicate, t.object, { validFrom: valid_from });
-          if (skipped) {
-            // Never write beside a row this call could not retire — that is
-            // the exact dual-current bug this function exists to prevent.
-            const note = skipped.reason === 'stale_valid_from'
-              ? `not written: current ${t.predicate}=${skipped.existing} since ${skipped.existing_since} is newer than backdated valid_from ${valid_from}; use kb_fact_invalidate first if the newer fact is wrong`
-              : `not written: could not retire current ${t.predicate}=${skipped.existing.join(', ')} — try again, or use kb_fact_invalidate`;
-            const result = { subject: t.subject, predicate: t.predicate, object: t.object, written: false, skipped, note };
+          return getDb().transaction(() => {
+            // Before the write, not after: retirement targets the row this fact
+            // is about to contradict, and that row is still current only up to
+            // this point.
+            const { retired, skipped } = retireContradicted(t.subject, t.predicate, t.object, { validFrom: valid_from });
+            if (skipped) {
+              // Never write beside a row this call could not retire — that is
+              // the exact dual-current bug this function exists to prevent.
+              const note = skipped.reason === 'stale_valid_from'
+                ? `not written: current ${t.predicate}=${skipped.existing} since ${skipped.existing_since} is newer than backdated valid_from ${valid_from}; use kb_fact_invalidate first if the newer fact is wrong`
+                : `not written: could not retire current ${t.predicate}=${skipped.existing.join(', ')} — try again, or use kb_fact_invalidate`;
+              const result = { subject: t.subject, predicate: t.predicate, object: t.object, written: false, skipped, note };
+              return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+            }
+            const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
+            if (retired.length) {
+              result.retired = retired;
+              result.note = `retired prior ${retired.map(r => `${r.predicate}=${r.object} (valid_to ${r.valid_to})`).join(', ')}`;
+            }
             return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-          }
-          const result = addFact(t.subject, t.predicate, t.object, { validFrom: valid_from, source });
-          if (retired.length) {
-            result.retired = retired;
-            result.note = `retired prior ${retired.map(r => `${r.predicate}=${r.object} (valid_to ${r.valid_to})`).join(', ')}`;
-          }
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+          })();
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }

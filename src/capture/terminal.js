@@ -2,17 +2,18 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 const SECRET_PATTERNS = [
+  /\bauthorization:[ \t]*bearer[ \t]+[^\s'"]+/gi,
   /(?:api[_-]?key|apikey|token|secret|password|passwd|bearer)\s*[=:]\s*['"]?([^\s'"]{8,})/gi,
   /(?:sk-|pk-|rk-)[a-zA-Z0-9]{20,}/g,
   /(?:ghp_|gho_|ghu_|ghs_|ghr_)[a-zA-Z0-9]{36}/g,
   /eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}/g,
   /AKIA[0-9A-Z]{16}/g,
-  /-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----/g,
+  /-----BEGIN ((?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g,
   /(?:postgres|mysql|mongodb|redis):\/\/[^\s'"]+/gi,
   /(?:sk_live_|sk_test_|pk_live_|pk_test_)[a-zA-Z0-9]+/g,
 ];
 
-function redact(text) {
+export function redactSecrets(text) {
   if (!text) return text;
   let result = text;
   for (const pattern of SECRET_PATTERNS) {
@@ -45,11 +46,11 @@ export function captureSession({ goal, commands_failed, commands_worked, root_ca
 
   const sections = [`# ${goal}`];
 
-  if (commands_failed) sections.push(`\n## Commands That Failed\n${redact(commands_failed)}`);
-  if (commands_worked) sections.push(`\n## Commands That Worked\n${redact(commands_worked)}`);
-  if (root_causes) sections.push(`\n## Root Causes\n${redact(root_causes)}`);
-  if (fixes) sections.push(`\n## Fixes Applied\n${redact(fixes)}`);
-  if (lessons) sections.push(`\n## Lessons\n${redact(lessons)}`);
+  if (commands_failed) sections.push(`\n## Commands That Failed\n${redactSecrets(commands_failed)}`);
+  if (commands_worked) sections.push(`\n## Commands That Worked\n${redactSecrets(commands_worked)}`);
+  if (root_causes) sections.push(`\n## Root Causes\n${redactSecrets(root_causes)}`);
+  if (fixes) sections.push(`\n## Fixes Applied\n${redactSecrets(fixes)}`);
+  if (lessons) sections.push(`\n## Lessons\n${redactSecrets(lessons)}`);
 
   writeFileSync(join(sessDir, filename), `${fm}\n\n${sections.join('\n')}\n`);
   return { path: `builds/sessions/${filename}` };
@@ -78,10 +79,10 @@ export function captureFix({ title, symptom, cause, resolution, commands, projec
 
   const body = [
     `# Fix: ${title}`,
-    symptom ? `\n## Symptom\n${redact(symptom)}` : '',
-    cause ? `\n## Cause\n${redact(cause)}` : '',
-    resolution ? `\n## Resolution\n${redact(resolution)}` : '',
-    commands ? `\n## Commands\n\`\`\`bash\n${redact(commands)}\n\`\`\`` : '',
+    symptom ? `\n## Symptom\n${redactSecrets(symptom)}` : '',
+    cause ? `\n## Cause\n${redactSecrets(cause)}` : '',
+    resolution ? `\n## Resolution\n${redactSecrets(resolution)}` : '',
+    commands ? `\n## Commands\n\`\`\`bash\n${redactSecrets(commands)}\n\`\`\`` : '',
   ].filter(Boolean).join('\n');
 
   writeFileSync(join(fixDir, filename), `${fm}\n\n${body}\n`);

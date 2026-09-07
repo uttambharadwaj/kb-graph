@@ -191,12 +191,12 @@ export async function hybridSearch(query, { limit = 10, project, type, includeSu
   let ftsResults, semanticResults;
   try {
     [ftsResults, semanticResults] = await Promise.all([
-      Promise.resolve(searchDocuments(query, limit * 2, { includeSuperseded })),
+      Promise.resolve(searchDocuments(query, limit * 2, { project, type, includeSuperseded })),
       semanticSearch(query, { limit: limit * 2, project, type, includeSuperseded }),
     ]);
   } catch {
     // If semantic search fails (no embeddings, model error, etc.), fall back to FTS only
-    ftsResults = searchDocuments(query, limit * 2, { includeSuperseded });
+    ftsResults = searchDocuments(query, limit * 2, { project, type, includeSuperseded });
     semanticResults = [];
   }
 

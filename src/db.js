@@ -795,8 +795,8 @@ export function preferConfirmed(results) {
 // surface — MCP, REST, CLI — so a new caller cannot ship an unmetered read
 // path by forgetting to add a log line; the most it can get wrong is the
 // surface label. See logRetrievalResults for when to log here vs. yourself.
-export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false, surface = null } = {}) {
-  const results = ftsSearch(query, limit, { tags, includeSuperseded });
+export function searchDocuments(query, limit = 20, { tags, project, type, includeSuperseded = false, surface = null } = {}) {
+  const results = ftsSearch(query, limit, { tags, project, type, includeSuperseded });
   // One id per call, not per row: two calls landing in the same session in
   // the same second are otherwise indistinguishable to a report that has to
   // reconstruct events from (session, surface, timestamp).
@@ -842,9 +842,17 @@ export function identityBoost(doc, terms) {
   return boost;
 }
 
-function ftsSearch(query, limit, { tags, includeSuperseded }) {
-  const { clauses, params: tagParams } = tagFilterFor(tags ?? '', 'd.tags');
-  const tagFilter = clauses.map(c => `AND ${c}`).join(' ');
+function ftsSearch(query, limit, { tags, project, type, includeSuperseded }) {
+  const { clauses, params } = tagFilterFor(tags ?? '', 'd.tags');
+  if (project) {
+    clauses.push('EXISTS (SELECT 1 FROM vault_files vf WHERE vf.document_id = d.id AND vf.project = ?)');
+    params.push(project);
+  }
+  if (type) {
+    clauses.push('d.doc_type = ?');
+    params.push(type);
+  }
+  const filter = clauses.map(c => `AND ${c}`).join(' ');
   // Superseded notes drop out of current-state recall unless explicitly asked
   // for. No bound param — the clause is a literal, so param arrays are unchanged.
   const supersededFilter = includeSuperseded ? '' : 'AND d.superseded_at IS NULL';
@@ -870,12 +878,12 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
       FROM documents_fts f
       JOIN documents d ON d.id = f.rowid
       WHERE documents_fts MATCH ?
-      ${tagFilter}
+      ${filter}
       ${supersededFilter}
       ORDER BY rank
       LIMIT ?
     `);
-    return preferConfirmed(stmt.all(sanitized, ...tagParams, limit));
+    return preferConfirmed(stmt.all(sanitized, ...params, limit));
   }
 
   // Build FTS5 query: AND-first for precision, OR fallback for recall
@@ -891,16 +899,16 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
-    ${tagFilter}
+    ${filter}
     ${supersededFilter}
     ORDER BY rank
     LIMIT ?
   `);
 
   // Try AND first for precision; fall back to OR if no results
-  let results = stmt.all(andQuery, ...tagParams, limit);
+  let results = stmt.all(andQuery, ...params, limit);
   if (results.length === 0 && terms.length > 1) {
-    results = stmt.all(orQuery, ...tagParams, limit);
+    results = stmt.all(orQuery, ...params, limit);
   }
 
   // If OR gives too many low-quality results, re-rank: boost docs matching more terms

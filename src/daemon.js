@@ -285,6 +285,7 @@ export async function startDaemon({
   // the same user account. The filesystem permission is the whole gate.
   function serveControlConnection(socket) {
     socket.on('error', () => {});
+    socket.setEncoding('utf8');
     let buffer = '';
     let handled = false;
     socket.on('data', async (chunk) => {

@@ -169,4 +169,34 @@ describe('kb_fact_add retires a contradicted single-valued fact', () => {
     assert.strictEqual(res.retired.length, 1);
     assert.deepStrictEqual(current('tkt-6002', 'status'), ['in_review']);
   });
+
+  it('keeps the old fact current if the replacement insert fails', async () => {
+    const db = getDb();
+    await tool('kb_fact_add').handler({
+      subject: 'tkt-3892', predicate: 'status', object: 'open', valid_from: '2026-09-01',
+    });
+    db.exec(`
+      CREATE TEMP TRIGGER fail_atomic_direct_insert
+      BEFORE INSERT ON facts
+      WHEN NEW.subject = 'tkt_3892' AND NEW.object = 'closed'
+      BEGIN
+        SELECT RAISE(ABORT, 'atomic direct insert failure');
+      END;
+    `);
+
+    try {
+      const res = await tool('kb_fact_add').handler({
+        subject: 'tkt-3892', predicate: 'status', object: 'closed', valid_from: '2026-09-02',
+      });
+
+      assert.strictEqual(res.isError, true);
+      assert.match(res.content[0].text, /atomic direct insert failure/);
+      assert.deepStrictEqual(current('tkt-3892', 'status'), ['open']);
+      const rows = queryFact('tkt-3892', { direction: 'outgoing', exact: true });
+      assert.strictEqual(rows.find(r => r.object === 'open').valid_to, null);
+      assert.strictEqual(rows.find(r => r.object === 'closed'), undefined);
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_atomic_direct_insert');
+    }
+  });
 });

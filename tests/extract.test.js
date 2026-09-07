@@ -167,6 +167,42 @@ describe('kb_extract consolidation', () => {
     assert.match(res.invalidated[0].reason, /single_valued/);
   });
 
+  it('keeps the old fact current if the replacement insert fails', () => {
+    const db = getDb();
+    addFact('tkt-3893', 'status', 'open', { validFrom: '2026-09-01', source: 'seed' });
+    db.exec(`
+      CREATE TEMP TRIGGER fail_atomic_extract_insert
+      BEFORE INSERT ON facts
+      WHEN NEW.subject = 'tkt_3893' AND NEW.object = 'closed'
+      BEGIN
+        SELECT RAISE(ABORT, 'atomic extract insert failure');
+      END;
+    `);
+
+    try {
+      assert.throws(
+        () => consolidate(
+          [{ subject: 'tkt-3893', predicate: 'status', object: 'closed' }],
+          { source: 'test', observationDate: '2026-09-02' },
+        ),
+        /atomic extract insert failure/,
+      );
+      assert.deepStrictEqual(currentObject('tkt-3893', 'status'), ['open']);
+      assert.strictEqual(
+        queryFact('tkt-3893', { direction: 'outgoing', exact: true })
+          .find(r => r.object === 'open').valid_to,
+        null,
+      );
+      assert.strictEqual(
+        queryFact('tkt-3893', { direction: 'outgoing', exact: true })
+          .find(r => r.object === 'closed'),
+        undefined,
+      );
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_atomic_extract_insert');
+    }
+  });
+
   it('keeps both rows when a single-valued predicate lands on a project subject', () => {
     // A repo accumulates statuses; they are not successive values of one state
     // variable. "v1.1-complete" and a sync statement are both true, and the live
