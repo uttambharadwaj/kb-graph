@@ -81,6 +81,14 @@ function multipartBody(parts, boundary) {
 
 function postDocuments(socketPath, body, contentType = 'multipart/form-data; boundary=kbtest') {
   return new Promise((resolve, reject) => {
+    let responseResult;
+    let responseEnded = false;
+    let requestClosed = false;
+
+    const maybeResolve = () => {
+      if (responseResult && requestClosed) resolve(responseResult);
+    };
+
     const req = httpRequest({
       socketPath,
       method: 'POST',
@@ -95,16 +103,24 @@ function postDocuments(socketPath, body, contentType = 'multipart/form-data; bou
       res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => {
         const text = Buffer.concat(chunks).toString('utf8');
-        resolve({
+        responseEnded = true;
+        responseResult = {
           status: res.statusCode,
           async json() {
             return JSON.parse(text);
           },
           text,
-        });
+        };
+        maybeResolve();
       });
     });
-    req.once('error', reject);
+    req.once('error', (err) => {
+      if (!responseEnded || !['EPIPE', 'ECONNRESET'].includes(err.code)) reject(err);
+    });
+    req.once('close', () => {
+      requestClosed = true;
+      maybeResolve();
+    });
     req.end(body);
   });
 }
