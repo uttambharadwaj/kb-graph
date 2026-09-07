@@ -73,21 +73,20 @@ router.post('/api/documents', upload.array('files'), async (req, res) => {
     for (const file of req.files) {
       // basename() strips path components so a crafted originalname
       // (e.g. "../../etc/cron.d/x") can't escape tmpdir.
-      const tempName = `kb-upload-${randomBytes(8).toString('hex')}-${basename(file.originalname)}`;
+      const origName = basename(file.originalname);
+      const tempName = `kb-upload-${randomBytes(8).toString('hex')}-${origName}`;
       const tempPath = join(tmpdir(), tempName);
 
       try {
         writeFileSync(tempPath, file.buffer);
-        const ingested = await ingestFile(tempPath);
+        const ingested = await ingestFile(tempPath, { source: origName });
         if (ingested) {
           // The embed outcome is internal bookkeeping; the response is the row.
           const { embedded: _embedded, embedError: _embedError, ...doc } = ingested;
-          // Fix title and source to use original filename
-          const origName = file.originalname;
+          // Fix title to use original filename
           const title = origName.replace(/\.[^.]+$/, '');
           updateDocument(doc.id, { title, tags: tags || doc.tags });
           doc.title = title;
-          doc.source = origName;
           // Echo what updateDocument persisted, not the raw input
           if (tags) doc.tags = normalizeTagString(tags);
           documents.push(doc);

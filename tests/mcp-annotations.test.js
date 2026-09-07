@@ -46,10 +46,10 @@ describe('MCP tool annotations', () => {
   it('read tools advertise readOnlyHint; write tools stay unannotated', async () => {
     const tools = await listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
-    for (const name of ['kb_search', 'kb_read', 'kb_context', 'kb_fact_query', 'bus_read']) {
+    for (const name of ['kb_search', 'kb_read', 'kb_context', 'kb_fact_query', 'bus_status']) {
       assert.deepStrictEqual(byName[name].annotations, { readOnlyHint: true, destructiveHint: false }, name);
     }
-    for (const name of ['kb_write', 'kb_supersede', 'kb_fact_add', 'bus_send']) {
+    for (const name of ['kb_write', 'kb_supersede', 'kb_fact_add', 'bus_send', 'kb_classify', 'kb_extract', 'bus_read']) {
       assert.strictEqual(byName[name].annotations, undefined, name);
     }
   });

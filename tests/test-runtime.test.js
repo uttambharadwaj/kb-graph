@@ -26,4 +26,9 @@ describe('test runtime contract', () => {
     assert.match(workflow, /KB_EMBEDDING_CACHE_DIR:/);
     assert.match(workflow, /node: \[22, 24, 26\]/);
   });
+
+  it('keeps the Better Auth MCP plugin on the legacy plugins export path', async () => {
+    const { mcp } = await import('better-auth/plugins');
+    assert.strictEqual(typeof mcp, 'function');
+  });
 });

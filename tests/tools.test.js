@@ -64,6 +64,12 @@ describe('tools', () => {
     assert.ok(!names.includes('kb_capture_youtube'));
     assert.ok(!names.includes('bus_send'));
     assert.ok(!names.includes('bus_read'));
+    for (const name of ['bus_agent_register', 'bus_agentd_once']) {
+      assert.ok(!names.includes(name), `${name} must remain local-only`);
+      assert.ok(getToolDefinitions().some(tool => tool.name === name), `${name} remains available locally`);
+    }
+    assert.deepStrictEqual(names.filter(name => name.startsWith('bus_')).sort(),
+      ['bus_agents', 'bus_deliveries', 'bus_session_register', 'bus_sessions', 'bus_status']);
     // Should still include read + limited write tools
     assert.ok(names.includes('kb_search'));
     assert.ok(names.includes('kb_ingest'));

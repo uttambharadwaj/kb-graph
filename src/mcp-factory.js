@@ -14,8 +14,8 @@ const SERVER_VERSION = '1.0.0';
 const READ_ONLY_TOOLS = new Set([
   'kb_search', 'kb_search_smart', 'kb_context', 'kb_read', 'kb_list', 'kb_tunnels',
   'kb_fact_query', 'kb_fact_timeline', 'kb_check_duplicate', 'kb_supersede_candidates',
-  'kb_wakeup', 'kb_vault_status', 'kb_safety_check', 'kb_classify', 'kb_extract',
-  'bus_read', 'bus_status', 'bus_agents', 'bus_sessions', 'bus_deliveries',
+  'kb_vault_status', 'kb_safety_check',
+  'bus_status', 'bus_agents', 'bus_sessions', 'bus_deliveries',
 ]);
 
 function toolAnnotations(name) {

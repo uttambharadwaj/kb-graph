@@ -116,6 +116,8 @@ const ADMIN_ONLY_TOOLS = new Set([
   'kb_supersede_candidates',
   'bus_send',
   'bus_read',
+  'bus_agent_register',
+  'bus_agentd_once',
 ]);
 
 // Every tool, with its call metered. Wrapped here rather than at each call
