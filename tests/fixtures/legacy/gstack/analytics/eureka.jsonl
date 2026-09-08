@@ -1,0 +1,12 @@
+{
+  "ts": "2026-04-30T21:42:59Z",
+  "skill": "plan-eng-review",
+  "branch": "dev/feature-cutover",
+  "insight": "Search cutover needs a product-route adapter, not a generic proxy"
+}
+{
+  "ts": "2026-05-18T15:55:31Z",
+  "skill": "plan-ceo-review",
+  "branch": "main",
+  "insight": "Second insight"
+}
