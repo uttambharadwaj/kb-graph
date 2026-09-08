@@ -19,12 +19,16 @@ const MAX_ENTITY_TERMS = 200;
 // literally named status and return a confident-looking answer to an ambiguous
 // question.
 const GENERIC_ENTITIES = new Set([
-  'current', 'evidence', 'fact', 'facts', 'history', 'knowledge', 'project',
-  'application', 'component', 'repo', 'server', 'service', 'state', 'status',
-  'system', 'tool', 'workstream',
+  'agent', 'current', 'evidence', 'fact', 'facts', 'history', 'knowledge',
+  'project', 'application', 'component', 'repo', 'server', 'service',
+  'stale', 'state', 'status', 'system', 'tool', 'workstream',
 ]);
 
 const groupKey = (subject, predicate) => `${subject}\0${predicate}`;
+
+function entityTermAllowed(id, queryId) {
+  return id && (!GENERIC_ENTITIES.has(id) || id === queryId);
+}
 
 function entityTerms(queryId) {
   if (!queryId) return [];
@@ -166,10 +170,9 @@ function matchedEntities(db, query) {
   const placeholders = terms.map(() => '?').join(', ');
   const directlyMatched = db.prepare(
     `SELECT id, name FROM entities WHERE id IN (${placeholders})`
-  ).all(...terms);
+  ).all(...terms).filter(row => entityTermAllowed(row.id, queryId));
   const aliasCanonicals = [...aliases].flatMap(([canonical, values]) =>
-    values.some(alias => alias && !GENERIC_ENTITIES.has(alias)
-      && termSet.has(alias)) ? [canonical] : []);
+    values.some(alias => termSet.has(alias) && entityTermAllowed(alias, queryId)) ? [canonical] : []);
   let aliasMatched = [];
   if (aliasCanonicals.length) {
     const aliasPlaceholders = aliasCanonicals.map(() => '?').join(', ');
@@ -183,10 +186,7 @@ function matchedEntities(db, query) {
   ).values()]
     .flatMap(row => {
       const ids = [row.id, ...(aliases.get(row.id) || [])];
-      const matchedBy = ids.find(id => {
-        if (!id || GENERIC_ENTITIES.has(id)) return false;
-        return termSet.has(id);
-      });
+      const matchedBy = ids.find(id => termSet.has(id) && entityTermAllowed(id, queryId));
       if (!matchedBy) return [];
       const parts = matchedBy.split('_').filter(Boolean).length;
       return [{
