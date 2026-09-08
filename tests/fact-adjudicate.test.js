@@ -47,7 +47,7 @@ describe('migration 24 — append-only fact reviews', () => {
   it('adds the two tables and all immutability/validation triggers to an existing database', () => {
     const fixture = new Database(':memory:');
     applyMigrations(fixture, MIGRATIONS.filter(migration => migration.version < 24));
-    assert.deepStrictEqual(pendingMigrations(fixture, MIGRATIONS).map(migration => migration.version), [24]);
+    assert.deepStrictEqual(pendingMigrations(fixture, MIGRATIONS).map(migration => migration.version), [24, 25]);
 
     applyMigrations(fixture, MIGRATIONS);
 
