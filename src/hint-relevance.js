@@ -11,6 +11,7 @@
 // the prompt cover, and how distinctive is it? That denominator is short and
 // uniform across notes, which a prompt's is not.
 import { getDb, STOP_WORDS } from './db.js';
+import { HINT_OUTCOME_TIE_BUCKET, compareByOutcomeSignal, outcomeAdjustmentForDoc } from './outcome-ranking.js';
 
 // One shared word is a coincidence — a prompt naming a person matched a meeting
 // note on the name alone, "style of speaking" matched a code-style note.
@@ -260,8 +261,10 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
     const familyMass = families.map(family => Math.max(...family.map(entry => idf(entry.term))));
     const mass = familyMass.reduce((sum, value) => sum + value, 0);
     if (mass < minMass) return;
+    const adjustment = outcomeAdjustmentForDoc(db, doc);
     const hit = { id: doc.id, title: doc.title, doc_type: doc.doc_type, tier: doc.tier, mass };
     if (explain) {
+      hit.outcome_adjustment = adjustment;
       hit.evidence = {
         min_mass: minMass,
         total_mass: mass,
@@ -275,6 +278,12 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
     hits.push(hit);
   });
 
-  hits.sort((a, b) => b.mass - a.mass);
+  hits.sort((a, b) => {
+    const bucket = Math.round((b.mass || 0) / HINT_OUTCOME_TIE_BUCKET)
+      - Math.round((a.mass || 0) / HINT_OUTCOME_TIE_BUCKET);
+    if (bucket) return bucket;
+    return compareByOutcomeSignal(db, a, b)
+      || ((b.mass || 0) - (a.mass || 0));
+  });
   return hits.slice(0, limit);
 }

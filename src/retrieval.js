@@ -5,7 +5,9 @@
 // derivation can't drift between call sites.
 import { AsyncLocalStorage } from 'async_hooks';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from './db.js';
+import { snapshotDocumentVersion } from './doc-version.js';
 import { resolveHarnessAncestry } from './process-ancestry.js';
+import { hasColumn } from './schema.js';
 import { resolveMapEntry } from './session-map.js';
 
 // A cold-booted hook process's connection carries the same 5s busy_timeout as
@@ -184,9 +186,16 @@ export function logRetrieval({ docId = null, surface, query = null, session = nu
     // can interleave between the lowered pragma and its restore below.
     if (fastWrite) database.pragma(`busy_timeout = ${FAST_WRITE_BUSY_TIMEOUT_MS}`);
     try {
-      database.prepare(
-        'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test, agent) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0, agent ?? resolveAgent());
+      const resolvedAgent = agent ?? resolveAgent();
+      if (hasColumn(database, 'retrievals', 'doc_version')) {
+        database.prepare(
+          'INSERT INTO retrievals (doc_id, doc_version, surface, query, session, event_id, is_test, agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(docId, snapshotDocumentVersion(database, docId), surface, query, session, eventId, isTestSession(session) ? 1 : 0, resolvedAgent);
+      } else {
+        database.prepare(
+          'INSERT INTO retrievals (doc_id, surface, query, session, event_id, is_test, agent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(docId, surface, query, session, eventId, isTestSession(session) ? 1 : 0, resolvedAgent);
+      }
     } finally {
       if (fastWrite) database.pragma(`busy_timeout = ${DEFAULT_BUSY_TIMEOUT_MS}`);
     }

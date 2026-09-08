@@ -470,12 +470,11 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
         db.prepare(
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
         ).run(path, mtime, factsAdded, notesAdded);
-        if (recordOutcomes) {
-          try {
-            await recordOutcomes({ sessionId: candidateSessionId, transcriptPath: path, transcriptMtime: mtime });
-          } catch (err) {
-            console.error(`retrieval outcome feedback failed: ${err.message}`);
-          }
+        try {
+          const outcomeRecorder = recordOutcomes || (await import('./retrieval-outcomes.js')).recordRetrievalOutcomesForSession;
+          await outcomeRecorder({ sessionId: candidateSessionId, transcriptPath: path, transcriptMtime: mtime });
+        } catch (err) {
+          if (err.code !== 'ERR_MODULE_NOT_FOUND') console.error(`retrieval outcome feedback failed: ${err.message}`);
         }
       }
       const gaps = [
