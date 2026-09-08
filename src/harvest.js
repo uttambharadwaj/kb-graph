@@ -3,6 +3,7 @@
 // /debrief. Lessons go through writeNote (embedding dedup + related-links),
 // tagged auto-debrief with the session as provenance; facts, when enabled,
 // go through kb_extract's consolidation (dedup + retire-on-contradiction).
+import { createHash } from 'crypto';
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
@@ -17,11 +18,13 @@ import { HARVEST_SOURCE_PREFIX } from './tiers.js';
 // truncated there, and this caller reads only added/candidates so the
 // truncation report would go nowhere.
 const CHUNK_CHARS = MAX_EXTRACT_CHARS;
-const HEAD_CHUNKS = 4;              // long sessions: keep the setup...
-const MAX_CHUNKS = 20;              // ...and the last 16 chunks (conclusions live at the end)
+const MAX_CHUNKS = 20;              // bounded per run; later runs resume at the next checkpoint
 const MIN_TEXT_CHARS = 4000;        // below this a session taught us nothing durable
 const LESSONS_HEAD_CHARS = 6000;    // the opening frames the goal...
 const LESSONS_TAIL_CHARS = 20000;   // ...and the conclusions land at the end
+const LESSON_CHARS = LESSONS_HEAD_CHARS + LESSONS_TAIL_CHARS;
+const MAX_LESSON_CHUNKS_PER_RUN = 2;
+const MAX_LEGACY_BACKFILL_CANDIDATES = 1000;
 export const MAX_SESSIONS_PER_RUN = 30;
 
 // A transcript still being appended to belongs to a session that is still
@@ -194,14 +197,121 @@ export function chunkText(text) {
   const chunks = [];
   for (let i = 0; i < text.length; i += CHUNK_CHARS) chunks.push(text.slice(i, i + CHUNK_CHARS));
   if (chunks.length <= MAX_CHUNKS) return chunks;
-  return [...chunks.slice(0, HEAD_CHUNKS), ...chunks.slice(-(MAX_CHUNKS - HEAD_CHUNKS))];
+  return chunks.slice(0, MAX_CHUNKS);
+}
+
+function hashText(text) {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+export function chunkTextWithIdentity(text, { size, maxChunks = Infinity } = {}) {
+  const chunks = [];
+  for (let start = 0, index = 0; start < text.length && chunks.length < maxChunks; start += size, index++) {
+    const end = Math.min(text.length, start + size);
+    const chunk = text.slice(start, end);
+    chunks.push({ index, start, end, text: chunk, hash: hashText(chunk) });
+  }
+  return chunks;
+}
+
+function completedChunkKeys(db, transcriptPath, pass) {
+  try {
+    const rows = db.prepare(`
+      SELECT chunk_index, start_char, end_char, input_hash
+      FROM harvest_chunk_log
+      WHERE transcript_path = ? AND pass = ? AND error_count = 0
+    `).all(transcriptPath, pass);
+    return new Set(rows.map(row => `${row.chunk_index}:${row.start_char}:${row.end_char}:${row.input_hash}`));
+  } catch (err) {
+    if (err.message?.includes('no such table')) return new Set();
+    throw err;
+  }
+}
+
+function chunkKey(chunk) {
+  return `${chunk.index}:${chunk.start}:${chunk.end}:${chunk.hash}`;
+}
+
+function pendingChunks(db, transcriptPath, pass, chunks) {
+  const done = completedChunkKeys(db, transcriptPath, pass);
+  return chunks.filter(chunk => !done.has(chunkKey(chunk)));
+}
+
+function recordChunkComplete(db, { transcriptPath, pass, chunk, notes = null, facts = null }) {
+  db.prepare(`
+    INSERT OR IGNORE INTO harvest_chunk_log
+      (transcript_path, pass, chunk_index, start_char, end_char, input_hash, notes_added, facts_added)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(transcriptPath, pass, chunk.index, chunk.start, chunk.end, chunk.hash, notes, facts);
+}
+
+function completedChunkTotal(db, transcriptPath, pass, column) {
+  return db.prepare(`
+    SELECT COALESCE(SUM(${column}), 0) AS n
+    FROM harvest_chunk_log
+    WHERE transcript_path = ? AND pass = ? AND error_count = 0
+  `).get(transcriptPath, pass).n;
+}
+
+function coverageFor(db, transcriptPath, pass, chunks) {
+  return {
+    total: chunks.length,
+    pending: pendingChunks(db, transcriptPath, pass, chunks).length,
+  };
+}
+
+function hasCompleteCoverage(db, transcriptPath, text, wantFacts) {
+  if (text.length < MIN_TEXT_CHARS) return true;
+  const lessons = coverageFor(db, transcriptPath, 'lessons', chunkTextWithIdentity(text, { size: LESSON_CHARS }));
+  if (lessons.pending) return false;
+  if (!wantFacts) return true;
+  const facts = coverageFor(db, transcriptPath, 'facts', chunkTextWithIdentity(text, { size: CHUNK_CHARS }));
+  return facts.pending === 0;
+}
+
+function isHistoricalBackfillCandidate(db, transcriptPath, wantFacts) {
+  if (!existsSync(transcriptPath)) return false;
+  if (!harvestsPrintModeSessions() && isPrintModeTranscript(transcriptPath)) return false;
+  const text = extractTranscriptText(readFileSync(transcriptPath, 'utf-8'));
+  if (text.length < MIN_TEXT_CHARS) return false;
+  const lessonChunks = chunkTextWithIdentity(text, { size: LESSON_CHARS });
+  const factChunks = chunkTextWithIdentity(text, { size: CHUNK_CHARS });
+  if (lessonChunks.length <= 1 && (!wantFacts || factChunks.length <= 1)) return false;
+  return !hasCompleteCoverage(db, transcriptPath, text, wantFacts);
+}
+
+function findHistoricalBackfillCandidates(db, seenPaths, wantFacts) {
+  let rows;
+  try {
+    rows = db.prepare(`
+      SELECT transcript_path, mtime
+      FROM harvest_log
+      ORDER BY harvested_at, transcript_path
+      LIMIT ?
+    `).all(MAX_LEGACY_BACKFILL_CANDIDATES);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const row of rows) {
+    if (seenPaths.has(row.transcript_path)) continue;
+    if (!isHistoricalBackfillCandidate(db, row.transcript_path, wantFacts)) continue;
+    try {
+      out.push({ path: row.transcript_path, mtime: statSync(row.transcript_path).mtimeMs, historicalBackfill: true });
+    } catch { /* raced deletion */ }
+  }
+  return out;
 }
 
 // --- per-session harvest ----------------------------------------------------
 
-async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts }) {
+async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts, db = getDb() }) {
   const text = extractTranscriptText(readFileSync(path, 'utf-8'));
-  if (text.length < MIN_TEXT_CHARS) return { skipped: 'too_short', facts: 0, notes: 0 };
+  if (text.length < MIN_TEXT_CHARS) {
+    return {
+      skipped: 'too_short', facts: 0, notes: 0, coverageComplete: true, coveragePending: 0, partialProgress: false,
+    };
+  }
 
   // The prefix is what caps every note this pass writes at the lowest tier —
   // see src/tiers.js, which owns it.
@@ -214,68 +324,79 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
     // overwrite a fact a session recorded this afternoon.
     const observedAt = sqlTimestamp(new Date(mtime));
 
-    const chunks = chunkText(text);
-    // chunkText keeps the head and the tail of a very long session. What falls
-    // between is never sent, and a fact count cannot show that.
-    factsUnread = text.length - chunks.reduce((n, c) => n + c.length, 0);
+    const factChunks = chunkTextWithIdentity(text, { size: CHUNK_CHARS });
+    const chunks = pendingChunks(db, path, 'facts', factChunks).slice(0, MAX_CHUNKS);
 
     for (const chunk of chunks) {
       try {
-        const res = await kbExtract(chunk, { source, observationDate, observedAt, dryRun });
+        const res = await kbExtract(chunk.text, { source, observationDate, observedAt, dryRun });
         facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
         // A pair the chunk gave two values for is left unretired for a human to
         // settle. This runs unattended, so the count is the only place it
         // surfaces at all.
         contested += res.conflicts?.length || 0;
+        if (!dryRun) recordChunkComplete(db, { transcriptPath: path, pass: 'facts', chunk, facts: dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0) });
       } catch {
         chunkErrors++; // one bad chunk shouldn't sink the transcript
       }
     }
+    factsUnread = pendingChunks(db, path, 'facts', factChunks).reduce((n, chunk) => n + (chunk.end - chunk.start), 0);
   }
 
-  // One lessons pass per session: the opening frames the goal, the tail holds
-  // the conclusions — that's where debrief-worthy material lives. The middle is
-  // dropped, and a long session is exactly the one whose middle holds the work,
-  // so the run has to say how much rather than let a note count imply the whole
-  // transcript was read.
-  const middleDropped = Math.max(0, text.length - LESSONS_HEAD_CHARS - LESSONS_TAIL_CHARS);
-  const lessonsInput = middleDropped
-    ? `${text.slice(0, LESSONS_HEAD_CHARS)}\n[...]\n${text.slice(-LESSONS_TAIL_CHARS)}`
-    : text;
-  // Restate the task AFTER the transcript — long USER:/ASSISTANT: dialogue
-  // otherwise lures the model into continuing the conversation instead of extracting.
-  const lessonsPrompt = buildLessonsPrompt(lessonsInput);
-  let notes = [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      ({ notes = [] } = await runClaudeJSON(lessonsPrompt, { timeout: 120000, caller: 'harvest' }));
-      break;
-    } catch (err) {
-      console.error(`  lessons pass attempt ${attempt} failed: ${err.message}`); // transient CLI exits happen unattended
+  let written = 0, lessonErrors = 0;
+  const lessonChunks = chunkTextWithIdentity(text, { size: LESSON_CHARS });
+  const lessonsToRead = pendingChunks(db, path, 'lessons', lessonChunks).slice(0, MAX_LESSON_CHUNKS_PER_RUN);
+  for (const chunk of lessonsToRead) {
+    const lessonsPrompt = buildLessonsPrompt(chunk.text);
+    let notes = [];
+    let ok = false;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        ({ notes = [] } = await runClaudeJSON(lessonsPrompt, { timeout: 120000, caller: 'harvest' }));
+        ok = true;
+        break;
+      } catch (err) {
+        console.error(`  lessons pass attempt ${attempt} failed: ${err.message}`); // transient CLI exits happen unattended
+      }
     }
+    if (!ok) {
+      lessonErrors++;
+      continue;
+    }
+
+    let chunkWritten = 0;
+    for (const n of notes.slice(0, 3)) {
+      if (!n?.title || !n?.content) continue;
+      if (dryRun) { chunkWritten++; continue; }
+      const tags = [n.tags, 'auto-debrief'].filter(Boolean).join(',');
+      const res = await writeNote(vaultPath, {
+        title: n.title,
+        content: n.content,
+        type: ['lesson', 'decision', 'workflow', 'idea', 'fix'].includes(n.type) ? n.type : 'lesson',
+        tags,
+        project: n.project || undefined,
+        source,
+      });
+      if (!res.skipped) chunkWritten++;
+    }
+    written += chunkWritten;
+    if (!dryRun) recordChunkComplete(db, { transcriptPath: path, pass: 'lessons', chunk, notes: chunkWritten });
   }
 
-  let written = 0;
-  for (const n of notes.slice(0, 3)) {
-    if (!n?.title || !n?.content) continue;
-    if (dryRun) { written++; continue; }
-    const tags = [n.tags, 'auto-debrief'].filter(Boolean).join(',');
-    const res = await writeNote(vaultPath, {
-      title: n.title,
-      content: n.content,
-      type: ['lesson', 'decision', 'workflow', 'idea', 'fix'].includes(n.type) ? n.type : 'lesson',
-      tags,
-      project: n.project || undefined,
-      source,
-    });
-    if (!res.skipped) written++;
-  }
-
-  // Per pass, because they read different spans and one number cannot mean
-  // both: the fact pass keeps a strict superset of what the lessons pass keeps,
-  // so a session can be fully covered for facts and still have had no lesson
-  // drawn from its middle.
-  return { facts, notes: written, chunkErrors, contested, unreadByLessons: middleDropped, unreadByFacts: factsUnread };
+  const lessonsUnread = pendingChunks(db, path, 'lessons', lessonChunks).reduce((n, chunk) => n + (chunk.end - chunk.start), 0);
+  const coveragePending = lessonsUnread + factsUnread;
+  return {
+    facts,
+    notes: written,
+    chunkErrors,
+    lessonErrors,
+    contested,
+    unreadByLessons: lessonsUnread,
+    unreadByFacts: factsUnread,
+    coverageComplete: coveragePending === 0,
+    coveragePending,
+    partialProgress: (lessonsToRead.length > 0 || (wantFacts && factsUnread > 0)) && coveragePending > 0,
+  };
 }
 
 // --- orchestrator -----------------------------------------------------------
@@ -300,7 +421,7 @@ export function stillPending(db, candidates, wantFacts) {
 export const selectWork = candidates =>
   [...candidates].sort((a, b) => a.mtime - b.mtime).slice(0, MAX_SESSIONS_PER_RUN);
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, maintenance = true, runMaintenance = null } = {}) {
+export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, recordOutcomes = null, maintenance = true, runMaintenance = null } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
@@ -317,16 +438,19 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
     const quiet = sessions.filter(t => !isInFlight(t.mtime));
     inFlight = sessions.length - quiet.length;
     candidates = stillPending(db, quiet, wantFacts);
+    const seenPaths = new Set([...found.map(t => t.path), ...candidates.map(t => t.path)]);
+    candidates.push(...findHistoricalBackfillCandidates(db, seenPaths, wantFacts));
   }
 
   const pending = candidates.length;
   const work = selectWork(candidates);
 
   const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0, contested: 0,
-    unreadByLessons: 0, unreadByFacts: 0, notReached: pending - work.length, printModeCalls, inFlight };
-  for (const { path, mtime } of work) {
+    unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false,
+    notReached: pending - work.length, printModeCalls, inFlight };
+  for (const { path, mtime, sessionId: candidateSessionId = null } of work) {
     try {
-      const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts });
+      const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts, db });
       if (r.skipped) {
         summary.tooShort++;
         // Watermark short sessions too — no point re-reading them nightly.
@@ -336,13 +460,23 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       summary.sessions++;
       summary.facts += r.facts;
       summary.notes += r.notes;
-      if (!dryRun) {
+      summary.errors += (r.chunkErrors || 0) + (r.lessonErrors || 0);
+      if (!dryRun && r.coverageComplete && !r.chunkErrors && !r.lessonErrors) {
         // NULL facts_added means extraction did not run, which is what lets a
         // later --facts pass pick this transcript up again. 0 means it ran and
         // found none, and is final.
+        const notesAdded = completedChunkTotal(db, path, 'lessons', 'notes_added');
+        const factsAdded = wantFacts ? completedChunkTotal(db, path, 'facts', 'facts_added') : null;
         db.prepare(
           'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
-        ).run(path, mtime, wantFacts ? r.facts : null, r.notes);
+        ).run(path, mtime, factsAdded, notesAdded);
+        if (recordOutcomes) {
+          try {
+            await recordOutcomes({ sessionId: candidateSessionId, transcriptPath: path, transcriptMtime: mtime });
+          } catch (err) {
+            console.error(`retrieval outcome feedback failed: ${err.message}`);
+          }
+        }
       }
       const gaps = [
         r.unreadByLessons && `${r.unreadByLessons.toLocaleString('en-US')} chars unread by the lessons pass`,
@@ -351,12 +485,15 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       if (gaps.length) summary.partial++;
       summary.unreadByLessons += r.unreadByLessons;
       summary.unreadByFacts += r.unreadByFacts;
+      summary.coverageComplete &&= !!r.coverageComplete;
+      summary.coveragePending += r.coveragePending || 0;
+      summary.partialProgress ||= !!r.partialProgress;
 
       // Say "facts" only when they were asked for, so a run with the extraction
       // off cannot read as one that looked and found nothing.
       const factPart = wantFacts ? `${r.facts} facts, ` : '';
       summary.contested += r.contested;
-      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.contested ? `, ${r.contested} contested pairs` : ''}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${dryRun ? ' (dry run)' : ''}`);
+      console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.contested ? `, ${r.contested} contested pairs` : ''}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${r.lessonErrors ? ', lessons extraction failed' : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);

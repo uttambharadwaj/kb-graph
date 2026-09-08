@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -21,23 +21,29 @@ delete process.env.KB_HARVEST_FACTS;    // a host that opted in must not fail th
 const stub = join(tmp, 'claude-stub');
 const counter = join(tmp, 'calls');
 writeFileSync(stub, [
-  '#!/bin/sh',
-  'cat > /dev/null',
-  `n=$(cat ${counter} 2>/dev/null || echo 0); n=$((n+1)); echo $n > ${counter}`,
+  '#!/usr/bin/env node',
+  "import { readFileSync, writeFileSync } from 'node:fs';",
+  "let prompt = '';",
+  "process.stdin.setEncoding('utf8');",
+  "for await (const chunk of process.stdin) prompt += chunk;",
+  `const counterPath = ${JSON.stringify(counter)};`,
+  "let prior = '0';",
+  "try { prior = readFileSync(counterPath, 'utf8'); } catch {}",
+  "const n = Number.parseInt(prior || '0', 10) + 1;",
+  "writeFileSync(counterPath, `${n}`);",
   // Long enough that no two harvest runs in this file reuse one: 8 chunks a run
   // (MAX_CONCURRENT_CALLS) plus a lessons call, three runs. A repeat would land
   // as a duplicate and the fact count would stop moving for the wrong reason.
-  'set -- owns uses contains provides includes supports tracks documents calls'
-    + ' talks_to runs_on stored_in depends_on gates gated_by defaults_to bypasses'
-    + ' excludes enables prevents causes breaks returns indicates drops lacks'
-    + ' replaces reverts proposes chose rejects addresses',
-  'shift $(( (n - 1) % 32 )); p=$1',
-  `printf '{"result":"{\\\\"notes\\\\":[],\\\\"facts\\\\":[{\\\\"subject\\\\":\\\\"billing service\\\\",\\\\"predicate\\\\":\\\\"%s\\\\",\\\\"object\\\\":\\\\"payments team\\\\",\\\\"category\\\\":\\\\"status\\\\"}],\\\\"skipped\\\\":[]}"}' "$p"`,
+  'const predicates = "owns uses contains provides includes supports tracks documents calls talks_to runs_on stored_in depends_on gates gated_by defaults_to bypasses excludes enables prevents causes breaks returns indicates drops lacks replaces reverts proposes chose rejects addresses".split(" ");',
+  'const predicate = predicates[(n - 1) % predicates.length];',
+  'const notes = prompt.includes("MIDDLE_SENTINEL") ? [{ title: "Middle sentinel", type: "lesson", content: "MIDDLE_SENTINEL was covered.", tags: "test", project: "knowledge-base-server" }] : [];',
+  'const inner = { notes, facts: [{ subject: "billing service", predicate, object: "payments team", category: "status" }], skipped: [] };',
+  'process.stdout.write(JSON.stringify({ result: JSON.stringify(inner) }));',
 ].join('\n') + '\n');
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
-const { extractTranscriptText, chunkText, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, findTranscripts, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
+const { extractTranscriptText, chunkText, chunkTextWithIdentity, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, findTranscripts, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
 const { getDb, getHealth } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -231,9 +237,8 @@ describe('harvest candidate selection', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  // The lessons pass keeps the head and the tail of a long session and drops
-  // what is between — which on a long session is the work itself. A note count
-  // cannot show that, so the run has to.
+  // The lessons pass now advances through content-stable chunks. A note count
+  // still cannot show coverage, so the run has to report pending spans.
   // A session of `chars` characters of assistant text, in its own discovery root.
   const sessionOf = (name, chars) => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
@@ -244,45 +249,230 @@ describe('harvest candidate selection', () => {
     return root;
   };
 
-  it('reports the middle of a long session as unread', async () => {
+  it('reports pending lesson coverage without marking the transcript complete', async () => {
     // 'ASSISTANT: ' is prepended, so the extracted text is 11 chars longer.
     const chars = 100000;
     const root = sessionOf('long.jsonl', chars);
+    const path = join(root, 'long.jsonl');
 
     const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
 
     assert.strictEqual(summary.sessions, 1);
-    assert.strictEqual(summary.partial, 1, 'a session whose middle was never sent is not fully read');
-    // 6,000 head + 20,000 tail is all the lessons pass sees.
-    assert.strictEqual(summary.unreadByLessons, chars + 11 - 26000);
+    assert.strictEqual(summary.partial, 1, 'a session with unprocessed chunks is not fully read');
+    assert.strictEqual(summary.coverageComplete, false);
+    assert.strictEqual(summary.partialProgress, true);
+    assert.strictEqual(summary.unreadByLessons, chars + 11 - (26000 * 2));
+    assert.strictEqual(
+      getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path),
+      undefined,
+      'a partial coverage pass must not receive a complete watermark',
+    );
     rmSync(root, { recursive: true, force: true });
   });
 
-  // The two passes read different spans, and the fact pass keeps a strict
-  // superset. Reporting one number for both claimed the lessons gap as unread
-  // even when the fact pass had read every character of it.
-  it('reports the two passes separately, because they read different spans', async () => {
-    const chars = 100000;
-    const root = sessionOf('both-passes.jsonl', chars);
+  it('learns from a middle lesson chunk on a later pass', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'middle.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `${'x'.repeat(53000)} MIDDLE_SENTINEL ${'z'.repeat(10000)}` }] },
+      }),
+    ].join('\n'));
 
-    // dryRun: the fact pass still chunks and still calls, it just does not write
-    // — otherwise these rows would leak into the fact-extraction tests below.
-    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true, dryRun: true });
+    const first = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+    assert.strictEqual(first.notes, 0);
+    assert.strictEqual(first.coverageComplete, false);
 
-    assert.strictEqual(summary.unreadByLessons, chars + 11 - 26000, 'the lessons pass still missed the middle');
-    assert.strictEqual(summary.unreadByFacts, 0, 'but the fact pass read all of it — 9 chunks, under the cap');
+    const second = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+    assert.strictEqual(second.coverageComplete, true);
+    assert.strictEqual(second.notes, 1);
+    assert.ok(getDb().prepare("SELECT 1 FROM documents WHERE title = 'Middle sentinel'").get());
+    assert.strictEqual(getDb().prepare('SELECT notes_added FROM harvest_log WHERE transcript_path = ?').get(path).notes_added, 1);
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('reports the fact pass gap once a session outruns the chunk cap', async () => {
-    // 20 chunks of 12,000 is the ceiling. 300,011 chars is 26 chunks, so the 6
-    // in the middle are dropped — 72,000 characters, not 60,011, because the
-    // last chunk is a short remainder.
+  it('resumes stable prefix chunks after append instead of replaying them', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'append.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(70000) }] } }),
+    ].join('\n'));
+
+    const first = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+    assert.strictEqual(first.coverageComplete, false);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 2);
+
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `${'x'.repeat(70000)}${'y'.repeat(30000)}` }] } }),
+    ].join('\n'));
+    const second = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(second.coverageComplete, true);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 4);
+    assert.ok(getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('resumes fact extraction after the per-run chunk cap', async () => {
     const root = sessionOf('enormous.jsonl', 300000);
+    const path = join(root, 'enormous.jsonl');
 
-    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true, dryRun: true });
+    const first = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true });
+    assert.strictEqual(first.coverageComplete, false);
+    assert.strictEqual(first.unreadByFacts, 60011);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'facts'").get(path).n, 20);
 
-    assert.strictEqual(summary.unreadByFacts, 6 * 12000, 'a session past the chunk cap loses its middle to the fact pass too');
+    const second = await runHarvest({ searchRoots: [root], sinceHours: 24, facts: true });
+    assert.strictEqual(second.unreadByFacts, 0);
+    assert.strictEqual(second.unreadByLessons > 0, true, 'lesson coverage still advances on its own smaller per-run budget');
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'facts'").get(path).n, 26);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('records retrieval outcomes only after an eligible transcript reaches complete coverage', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const partialPath = join(root, 'partial.jsonl');
+    const completePath = join(root, 'complete.jsonl');
+    const sdkPath = join(root, 'sdk.jsonl');
+    const calls = [];
+    const recordOutcomes = async (args) => { calls.push(args); return { recorded: 0 }; };
+
+    writeTranscript(partialPath, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ session_id: 'sess-partial', type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(70000) }] } }),
+    ].join('\n'));
+    writeTranscript(completePath, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ session_id: 'sess-complete', type: 'assistant', message: { content: [{ type: 'text', text: 'a complete session. '.repeat(400) }] } }),
+    ].join('\n'));
+    writeTranscript(sdkPath, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }),
+      JSON.stringify({ session_id: 'sess-sdk', type: 'assistant', message: { content: [{ type: 'text', text: 'sdk transcript. '.repeat(400) }] } }),
+    ].join('\n'));
+    const completeMtime = statSync(completePath).mtimeMs;
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24, recordOutcomes });
+
+    assert.strictEqual(summary.sessions, 2, 'the sdk-cli transcript must be excluded before harvest and feedback');
+    assert.strictEqual(summary.printModeCalls, 1);
+    assert.strictEqual(calls.length, 1, 'only the fully covered eligible transcript records retrieval feedback');
+    assert.deepStrictEqual(calls[0], {
+      sessionId: null,
+      transcriptPath: completePath,
+      transcriptMtime: completeMtime,
+    });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('skips nightly maintenance when called for capture-only harvesting', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'capture-maintenance.jsonl');
+    let maintenanceCalls = 0;
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a complete capture-only session. '.repeat(400) }] } }),
+    ].join('\n'));
+
+    await runHarvest({ onlyPath: path, maintenance: false, runMaintenance: async () => { maintenanceCalls++; } });
+
+    assert.strictEqual(maintenanceCalls, 0);
+    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest'").get(), 'the run heartbeat still records capture harvest activity');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('keeps nightly maintenance on by default', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'nightly-maintenance.jsonl');
+    const calls = [];
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a complete nightly session. '.repeat(400) }] } }),
+    ].join('\n'));
+
+    await runHarvest({ onlyPath: path, runMaintenance: async args => calls.push(args) });
+
+    assert.deepStrictEqual(calls, [{ vaultPath: process.env.OBSIDIAN_VAULT_PATH }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('passes explicit capture session ids to retrieval outcome recording', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'capture.jsonl');
+    const calls = [];
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ session_id: 'parser-session', type: 'assistant', message: { content: [{ type: 'text', text: 'a complete capture session. '.repeat(400) }] } }),
+    ].join('\n'));
+    const mtime = statSync(path).mtimeMs;
+
+    await runHarvest({ onlyPath: path, sessionId: 'hook-session', recordOutcomes: async args => calls.push(args) });
+
+    assert.deepStrictEqual(calls, [{ sessionId: 'hook-session', transcriptPath: path, transcriptMtime: mtime }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('rereads rewritten or truncated content at the same path instead of trusting stale checkpoints', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'rotated.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(70000) }] } }),
+    ].join('\n'));
+
+    await runHarvest({ searchRoots: [root], sinceHours: 24 });
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 2);
+
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'y'.repeat(40000) }] } }),
+    ].join('\n'));
+    const second = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+
+    assert.strictEqual(second.coverageComplete, true);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 4);
+    assert.ok(getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('deduplicates a replay after a note write succeeds but the chunk checkpoint is missing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'crash-replay.jsonl');
+    getDb().prepare("DELETE FROM documents WHERE title = 'Middle sentinel'").run();
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `${'x'.repeat(5000)} MIDDLE_SENTINEL ${'z'.repeat(5000)}` }] } }),
+    ].join('\n'));
+
+    const first = await runHarvest({ onlyPath: path });
+    assert.strictEqual(first.notes, 1);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM documents WHERE title = 'Middle sentinel'").get().n, 1);
+
+    getDb().prepare('DELETE FROM harvest_log WHERE transcript_path = ?').run(path);
+    getDb().prepare('DELETE FROM harvest_chunk_log WHERE transcript_path = ?').run(path);
+    const replay = await runHarvest({ onlyPath: path });
+
+    assert.strictEqual(replay.coverageComplete, true);
+    assert.strictEqual(replay.notes, 0, 'the existing note is deduped on replay');
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM documents WHERE title = 'Middle sentinel'").get().n, 1);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('revisits legacy long harvest rows until their chunks are covered', async () => {
+    const root = sessionOf('legacy.jsonl', 60000);
+    const path = join(root, 'legacy.jsonl');
+    getDb().prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, NULL, 0)')
+      .run(path, 1);
+
+    const summary = await runHarvest({ searchRoots: [], sinceHours: 24 });
+
+    assert.strictEqual(summary.pending, 1);
+    assert.strictEqual(summary.partialProgress, true);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 2);
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -327,10 +517,19 @@ describe('harvest chunking', () => {
     assert.strictEqual(chunks[0].length, 12000);
   });
 
-  it('caps long texts to head + tail chunks', () => {
+  it('caps fact chunks per run from the front of the remaining coverage', () => {
     const text = 'a'.repeat(12000 * 30);
     const chunks = chunkText(text);
     assert.strictEqual(chunks.length, 20);
+  });
+
+  it('gives chunks stable offset and content identities', () => {
+    const chunks = chunkTextWithIdentity('abc'.repeat(10000), { size: 12000 });
+    assert.strictEqual(chunks[0].index, 0);
+    assert.strictEqual(chunks[0].start, 0);
+    assert.strictEqual(chunks[0].end, 12000);
+    assert.match(chunks[0].hash, /^[a-f0-9]{64}$/);
+    assert.strictEqual(chunks[1].start, 12000);
   });
 });
 
@@ -367,26 +566,6 @@ describe('harvest fact extraction', () => {
 
     assert.ok(summary.facts > 1, `expected the chunks to add up, got ${summary.facts}`);
     assert.strictEqual(summary.facts, factCount(), 'the reported count must be the total written, not the last chunk');
-  });
-
-
-  it('skips nightly maintenance when called for capture-only harvesting', async () => {
-    const path = write('capture-maintenance.jsonl');
-    let maintenanceCalls = 0;
-
-    await runHarvest({ onlyPath: path, maintenance: false, runMaintenance: async () => { maintenanceCalls++; } });
-
-    assert.strictEqual(maintenanceCalls, 0);
-    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest'").get(), 'the run heartbeat still records capture harvest activity');
-  });
-
-  it('keeps nightly maintenance on by default', async () => {
-    const path = write('nightly-maintenance.jsonl');
-    const calls = [];
-
-    await runHarvest({ onlyPath: path, runMaintenance: async args => calls.push(args) });
-
-    assert.deepStrictEqual(calls, [{ vaultPath: process.env.OBSIDIAN_VAULT_PATH }]);
   });
 
   it('takes the last fact flag on the command line', async () => {

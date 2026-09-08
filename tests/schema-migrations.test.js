@@ -67,7 +67,7 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24, 25],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
@@ -312,6 +312,18 @@ describe('migrating forward from an older schema', () => {
     applyMigrations(db, KB_MIGRATIONS);
     assert.ok(hasIndex(db, 'uq_embeddings_doc_chunk'));
     assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM embeddings').get().c, 1);
+  });
+
+
+  it('adds transcript harvest chunk checkpoints', () => {
+    const db = current(KB_MIGRATIONS);
+    db.exec('DROP TABLE harvest_chunk_log');
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [25]);
+
+    applyMigrations(db, KB_MIGRATIONS);
+
+    assert.ok(hasTable(db, 'harvest_chunk_log'));
+    assert.ok(hasIndex(db, 'uq_harvest_chunk_log_content'));
   });
 
   it('rebuilds bus readers while carrying their cursors forward', () => {
