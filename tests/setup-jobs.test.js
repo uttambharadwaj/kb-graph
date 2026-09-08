@@ -33,6 +33,7 @@ test('renderPlist mirrors the reference install', () => {
   assert.match(harvest, /<key>Hour<\/key><integer>3<\/integer><key>Minute<\/key><integer>30<\/integer>/);
   assert.match(harvest, /<key>OBSIDIAN_VAULT_PATH<\/key>\s*<string>\/home\/u\/kb-vault<\/string>/);
   assert.match(harvest, /<key>CLAUDE_PATH<\/key>\s*<string>\/usr\/local\/bin\/claude<\/string>/);
+  assert.match(harvest, /<key>PATH<\/key>\s*<string>\/usr\/local\/bin:\/opt\/homebrew\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin<\/string>/);
 
   const reindex = renderPlist(JOBS[1], OPTS);
   assert.match(reindex, /<key>StartInterval<\/key>\s*<integer>300<\/integer>/);
@@ -60,6 +61,7 @@ test('renderSystemdUnits produces service+timer with matching cadences', () => {
   const { service, timer } = renderSystemdUnits(JOBS[0], OPTS);
   assert.match(service, /ExecStart=\/usr\/local\/bin\/node \/opt\/kb\/bin\/kb\.js harvest/);
   assert.match(service, /Environment="OBSIDIAN_VAULT_PATH=\/home\/u\/kb-vault"/);
+  assert.match(service, /Environment="PATH=\/usr\/local\/bin:\/opt\/homebrew\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin"/);
   assert.match(timer, /OnCalendar=\*-\*-\* 03:30:00/);
   const reindexTimer = renderSystemdUnits(JOBS[1], OPTS).timer;
   assert.match(reindexTimer, /OnUnitActiveSec=300/);

@@ -369,6 +369,26 @@ describe('harvest fact extraction', () => {
     assert.strictEqual(summary.facts, factCount(), 'the reported count must be the total written, not the last chunk');
   });
 
+
+  it('skips nightly maintenance when called for capture-only harvesting', async () => {
+    const path = write('capture-maintenance.jsonl');
+    let maintenanceCalls = 0;
+
+    await runHarvest({ onlyPath: path, maintenance: false, runMaintenance: async () => { maintenanceCalls++; } });
+
+    assert.strictEqual(maintenanceCalls, 0);
+    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest'").get(), 'the run heartbeat still records capture harvest activity');
+  });
+
+  it('keeps nightly maintenance on by default', async () => {
+    const path = write('nightly-maintenance.jsonl');
+    const calls = [];
+
+    await runHarvest({ onlyPath: path, runMaintenance: async args => calls.push(args) });
+
+    assert.deepStrictEqual(calls, [{ vaultPath: process.env.OBSIDIAN_VAULT_PATH }]);
+  });
+
   it('takes the last fact flag on the command line', async () => {
     await runHarvestCli(['--no-facts', `--path=${write('cli-off.jsonl')}`]);
     const before = factCount();

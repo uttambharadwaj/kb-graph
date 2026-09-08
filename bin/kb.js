@@ -161,6 +161,12 @@ const COMMANDS = {
     summary: 'Capture a silent continuity snapshot before Claude Code compacts the session',
     run: () => import('../src/cli/precompact-hook.js').then(m => m.precompactHook()),
   },
+  'session-capture-hook': {
+    summary: 'Queue a lifecycle transcript checkpoint for asynchronous daemon harvest',
+    value: ['--agent'],
+    valueEq: ['--reason'],
+    run: a => import('../src/cli/session-capture-hook.js').then(m => m.sessionCaptureHook(a)),
+  },
   'prompt-hint': {
     summary: 'Read hook JSON on stdin, print KB hint for the prompt (for UserPromptSubmit hooks); --agent codex emits the JSON hookSpecificOutput envelope instead of plain text',
     value: ['--agent'],

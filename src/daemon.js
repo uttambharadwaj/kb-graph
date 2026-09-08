@@ -22,6 +22,7 @@ import { HOOK_OPS } from './daemon-hook-ops.js';
 import { createKbServer } from './mcp-factory.js';
 import { callIdentity } from './retrieval.js';
 import { MAX_HELLO_LINE_BYTES, parseHelloLine } from './shim-hello.js';
+import { processSessionCaptureQueue } from './session-capture.js';
 
 // Re-exported for existing importers (serve.js, mcp-shim.js) — the constants
 // themselves live in daemon-paths.js so trigger-hook.js's cold path can
@@ -215,12 +216,16 @@ export async function startDaemon({
   serverFactory,
   onError = (err) => console.error(`[kb serve] ${err.message}`),
   drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS,
+  capturePollMs = 1000,
+  captureProcessor = () => processSessionCaptureQueue(),
 } = {}) {
   // Validated for both before binding either — a daemon must not half-start.
   await claimSocket(socketPath);
   await claimSocket(controlSocketPath);
 
   let inFlight = 0;
+  let closed = false;
+  let captureDrain = null;
   const track = (handler) => async (...args) => {
     inFlight++;
     try {
@@ -228,6 +233,13 @@ export async function startDaemon({
     } finally {
       inFlight--;
     }
+  };
+  const kickCaptureDrain = () => {
+    if (closed || captureDrain) return captureDrain;
+    captureDrain = track(captureProcessor)()
+      .catch(onError)
+      .finally(() => { captureDrain = null; });
+    return captureDrain;
   };
   // Runs the handler under this connection's identity, so resolveSessionId /
   // resolveAgent inside it answer for the harness that dialed rather than for
@@ -311,6 +323,7 @@ export async function startDaemon({
         // knows it is safe to write.
         const result = await track(() => handler(payload))();
         response = { ok: true, output: result?.output ?? null, plan: result?.plan ?? null };
+        if (op === 'session-capture') setImmediate(kickCaptureDrain);
       } catch (err) {
         onError(err);
         response = { ok: false, error: err.message };
@@ -340,10 +353,14 @@ export async function startDaemon({
   }
   controlServer.on('error', onError);
 
-  let closed = false;
+  const captureTimer = setInterval(kickCaptureDrain, capturePollMs);
+  captureTimer.unref();
+  setImmediate(kickCaptureDrain);
+
   const close = async () => {
     if (closed) return;
     closed = true;
+    clearInterval(captureTimer);
     const stopped = new Promise((resolve) => server.close(resolve));
     const controlStopped = new Promise((resolve) => controlServer.close(resolve));
     if (!await drain(() => inFlight > 0, drainTimeoutMs)) {

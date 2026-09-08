@@ -1,6 +1,6 @@
 // src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd user jobs
 import { writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { execFileSync } from 'child_process';
 import { LOGS_DIR } from '../paths.js';
 import { JOBS } from '../jobs.js';
@@ -27,6 +27,14 @@ const sdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
 const jobEnv = (job, opts) => ({
   OBSIDIAN_VAULT_PATH: opts.vaultPath,
   CLAUDE_PATH: opts.claudePath ?? '',
+  // Scheduled jobs inherit little or no shell profile. Preserve the
+  // interpreter and Claude CLI directories explicitly, then retain a portable
+  // platform baseline for child hooks and subprocesses.
+  PATH: [...new Set([
+    dirname(opts.nodeBin),
+    ...(opts.claudePath ? [dirname(opts.claudePath)] : []),
+    '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin',
+  ])].join(':'),
   // Only the harvest reads it, and only when the installing environment set it.
   ...(job.name === 'harvest' && opts.harvestFacts ? { KB_HARVEST_FACTS: opts.harvestFacts } : {}),
 });

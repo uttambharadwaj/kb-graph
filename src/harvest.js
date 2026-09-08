@@ -300,7 +300,7 @@ export function stillPending(db, candidates, wantFacts) {
 export const selectWork = candidates =>
   [...candidates].sort((a, b) => a.mtime - b.mtime).slice(0, MAX_SESSIONS_PER_RUN);
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots } = {}) {
+export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, maintenance = true, runMaintenance = null } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
@@ -309,7 +309,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   // watermark says, and whatever wrote it.
   let candidates, printModeCalls = 0, inFlight = 0;
   if (onlyPath) {
-    candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs }];
+    candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs, sessionId }];
   } else {
     const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000, searchRoots });
     const sessions = harvestsPrintModeSessions() ? found : found.filter(t => !isPrintModeTranscript(t.path));
@@ -375,23 +375,29 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   if (summary.inFlight) console.log(`Left ${summary.inFlight} sessions still in progress for the next run`);
 
   // Fold any fresh session notes into their workstream state notes so state
-  // stays current nightly without a separate job. No-ops when nothing is fresh.
-  if (!dryRun) {
-    setMeta('last_harvest', String(summary.sessions));
-    try {
-      const { runConsolidateState } = await import('./state.js');
-      await runConsolidateState({ vaultPath });
-    } catch (err) {
-      console.error(`state consolidation failed: ${err.message}`);
-    }
-    // Summaries have no other scheduled writer — sweep the stragglers nightly
-    // so kb_context briefings never regress to raw snippets again.
-    try {
-      const { summarizeUnsummarized } = await import('./classify/summarizer.js');
-      const s = await summarizeUnsummarized(vaultPath, { limit: 60 });
-      if (s.total) console.log(`summaries: ${s.summarized}/${s.total} backfilled`);
-    } catch (err) {
-      console.error(`summary sweep failed: ${err.message}`);
+  // stays current nightly without a separate job. Capture-only lifecycle calls
+  // pass maintenance=false because their caller only needs this transcript's
+  // coverage result and receipt state.
+  if (!dryRun) setMeta('last_harvest', String(summary.sessions));
+  if (!dryRun && maintenance) {
+    if (runMaintenance) {
+      await runMaintenance({ vaultPath });
+    } else {
+      try {
+        const { runConsolidateState } = await import('./state.js');
+        await runConsolidateState({ vaultPath });
+      } catch (err) {
+        console.error(`state consolidation failed: ${err.message}`);
+      }
+      // Summaries have no other scheduled writer — sweep the stragglers nightly
+      // so kb_context briefings never regress to raw snippets again.
+      try {
+        const { summarizeUnsummarized } = await import('./classify/summarizer.js');
+        const s = await summarizeUnsummarized(vaultPath, { limit: 60 });
+        if (s.total) console.log(`summaries: ${s.summarized}/${s.total} backfilled`);
+      } catch (err) {
+        console.error(`summary sweep failed: ${err.message}`);
+      }
     }
   }
   return summary;
