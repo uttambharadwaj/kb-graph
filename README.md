@@ -80,7 +80,7 @@ and tool hooks cannot inject context) mean your agent never starts cold:
   notes, model-proposed triggers, advisory caps, and prior warnings cannot gain
   or consume blocking authority.
 
-Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (token-efficient briefing) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
+Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (a bounded truth packet that separates live note summaries, reviewed current state, raw evidence, superseded history, and unresolved claims) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
 
 ### 2. Capture that doesn't rely on discipline
 
@@ -92,7 +92,7 @@ Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + sem
   validated handlers from JSON on stdin. `/debrief` uses that automatically;
   it does not leave a pending markdown file for a later human to ingest.
 
-- **Entity facts.** Alongside prose notes, a lightweight fact store tracks `(subject, predicate, object)` triples with validity windows: `kb_fact_add`, `kb_fact_query`, `kb_fact_timeline` ("how did our auth approach evolve?"), `kb_fact_invalidate` (supersede without deleting history).
+- **Entity facts.** Alongside prose notes, a fact ledger tracks provenance-bearing `(subject, predicate, object)` assertions and validity windows. `kb_fact_query` returns that raw history separately from append-only reviewed projections. Only a fresh, complete, non-abstained review supplies current state; a missing, stale, or abstained projection is unresolved rather than latest-wins. `kb_fact_invalidate` is reserved for erroneous evidence, not duplication, synonymy, contest, or semantic supersession. Use `kb fact-adjudicate` to record a complete per-fact review without rewriting raw facts or earlier reviews.
 
 ### 3. State notes, not stale sessions
 
@@ -231,7 +231,7 @@ each one, because an agent picks a tool from that line and nothing else:
 |------|-------------|
 | `kb_search` | Full-text search, BM25 ranking, highlighted snippets |
 | `kb_search_smart` | Hybrid keyword + semantic search for conceptual queries |
-| `kb_context` | Token-efficient briefing — summaries only; use before `kb_read` |
+| `kb_context` | Provenance-aware truth packet — live summaries, reviewed current state, raw evidence, history, and unresolved claims; use before `kb_read` |
 | `kb_read` | Read a document by ID (returns a `related:` neighborhood) |
 | `kb_list` | List documents by type or tag |
 | `kb_tunnels` | Cross-domain bridges: neighboring domains for one tag, or the shared notes + entities between two |
@@ -245,9 +245,9 @@ each one, because an agent picks a tool from that line and nothing else:
 | `kb_promote` | Raise a note's tier when a later session confirms it, recording what did the confirming |
 | `kb_synthesize` | A review brief over recent notes — for the "what have we learned lately" pass, not a lookup |
 | `kb_fact_add` | Add an entity fact (subject/predicate/object + validity) |
-| `kb_fact_query` | Query facts about an entity |
+| `kb_fact_query` | Query raw fact history plus any reviewed current-state projection |
 | `kb_fact_timeline` | How an entity's facts evolved over time |
-| `kb_fact_invalidate` | Supersede a fact, preserving history |
+| `kb_fact_invalidate` | End erroneous evidence by exact fact ID, preserving the raw row and provenance; not a current-state selection tool |
 | `kb_capture_session` | Record a coding/debugging session (redacts secrets from pasted output; `kb_write` does not) |
 | `kb_capture_fix` | Record a bug fix: symptom, cause, resolution — searching the symptom later finds the cause |
 | `kb_capture_web` | File a page you fetched, with its URL as provenance |
@@ -307,6 +307,8 @@ kb summarize           Generate summaries for unsummarized notes (one model call
                        the graph picks it up on the next reindex. Try
                        --limit=N --dry-run first)
 kb entity-merge        Merge two entity aliases in the fact store
+kb fact-conflicts      List current multi-object groups and their review state
+kb fact-adjudicate     Append a complete per-fact current-state review
 kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
