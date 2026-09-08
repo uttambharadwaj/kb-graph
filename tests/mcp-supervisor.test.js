@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -90,10 +90,13 @@ function watched({ marker = 'one' } = {}) {
   const markerPath = join(dir, 'marker.js');
   const setMarker = (value) => writeFileSync(markerPath, `export const MARKER = ${JSON.stringify(value)};\n`);
   setMarker(marker);
-  return { dir, markerPath, setMarker, flagPath: join(dir, 'flag') };
+  const childStartedDir = join(dir, 'started');
+  mkdirSync(childStartedDir);
+  const readyBlockPath = join(dir, 'ready-block-release');
+  return { dir, markerPath, setMarker, flagPath: join(dir, 'flag'), childStartedDir, readyBlockPath };
 }
 
-function supervisorEnv({ dir, markerPath, flagPath }, kb, recheckMs) {
+function supervisorEnv({ dir, markerPath, flagPath, childStartedDir, readyBlockPath }, kb, recheckMs, blockMarkers = []) {
   return {
     ...process.env,
     ...kb.env,
@@ -101,11 +104,14 @@ function supervisorEnv({ dir, markerPath, flagPath }, kb, recheckMs) {
     KB_TEST_WATCH_DIR: dir,
     KB_TEST_MARKER: markerPath,
     KB_TEST_FLAG: flagPath,
+    KB_TEST_CHILD_STARTED_DIR: childStartedDir,
+    KB_TEST_READY_BLOCK: readyBlockPath,
+    KB_TEST_READY_BLOCK_MARKERS: blockMarkers.join(','),
     ...(recheckMs ? { KB_TEST_RECHECK_MS: String(recheckMs) } : {}),
   };
 }
 
-async function harness({ marker = 'one', behind = false, recheckMs } = {}) {
+async function harness({ marker = 'one', behind = false, recheckMs, blockMarkers = [] } = {}) {
   const tree = watched({ marker });
   const kb = install({ behind });
 
@@ -114,7 +120,7 @@ async function harness({ marker = 'one', behind = false, recheckMs } = {}) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [FIXTURE],
-    env: supervisorEnv(tree, kb, recheckMs),
+    env: supervisorEnv(tree, kb, recheckMs, blockMarkers),
     // Collected rather than ignored: the swap gate reports itself here, and the
     // park test spawns children that are meant to die, whose stack traces are
     // not test failures and should not reach the runner's output either.
@@ -140,6 +146,8 @@ async function harness({ marker = 'one', behind = false, recheckMs } = {}) {
     setMarker: tree.setMarker,
     stderr: () => noise,
     raiseFlag: () => writeFileSync(tree.flagPath, ''),
+    childStarted: (marker) => existsSync(join(tree.childStartedDir, `${marker}.started`)),
+    releaseReady: () => writeFileSync(tree.readyBlockPath, ''),
   };
 }
 
@@ -183,42 +191,31 @@ describe('mcp supervisor', () => {
   // ready has no process to go to. Queued, it is answered late; dropped, the
   // client waits out its own 60s timeout for a reply that never comes.
   it('answers every call that arrives during a swap', async () => {
-    const { call, setMarker } = await harness();
-    setMarker('three');
-    // A burst rather than one call: spread across the debounce, the kill and
-    // the handshake replay, some of these are certain to land while there is no
-    // process to send them to, which one well-timed call cannot guarantee.
-    //
-    // Kept up until the new child has answered something, because the window
-    // opens on an fs event rather than on a clock this test controls: measured
-    // at 33ms after the write typically, and 275ms under load, against a burst
-    // that stops issuing at 200ms. A single fixed-length burst misses it
-    // outright about one run in eight on a loaded machine, and then fails for
-    // having nothing to measure rather than for anything the supervisor did.
-    // Deliberately not `until`: its poll gap between attempts is a hole the
-    // one-and-only swap can fall into, which is a fresh race, not this one.
-    const marker = (answer) => answer.split(':')[1];
-    const seen = [];
-    const deadline = Date.now() + DEADLINE_MS;
-    while (!seen.some(a => marker(a) === 'three')) {
-      assert.ok(Date.now() < deadline, `timed out after ${DEADLINE_MS}ms waiting for the swap`);
-      const burst = [];
-      for (let i = 0; i < 20; i += 1) {
-        burst.push(call('whoami'));
-        await settle(10);
-      }
-      seen.push(...await Promise.all(burst));
-    }
+    const { call, setMarker, childStarted, releaseReady } = await harness({ blockMarkers: ['three'] });
+    const original = await call('whoami');
+    assert.match(original, /^\d+:one:supervisor-test:ready$/, 'the original child must serve before the swap');
 
-    // The first calls go out before the swap can have started, so both children
-    // are represented and the collection genuinely spans the blackout.
-    assert.ok(seen.some(a => marker(a) === 'one'), `nothing was served by the original child: ${seen}`);
-    // `ready` on every one is the queue doing its job: nothing reaches a new
+    setMarker('three');
+    await until(() => childStarted('three'), 'the replacement child to start before readiness');
+
+    const seen = [];
+    const burst = Array.from({ length: 20 }, () => call('whoami').then(answer => {
+      seen.push(answer);
+      return answer;
+    }));
+    await settle(QUIET_MS);
+    assert.deepStrictEqual(seen, [], 'calls sent while the replacement is uninitialized must stay queued');
+
+    releaseReady();
+    const answered = await Promise.all(burst);
+
+    // `ready` on every one is the queue doing its job: nothing reaches the new
     // child until its replayed handshake has completed, so no call is ever
-    // served by a half-initialized process.
+    // served by a half-initialized process. The original-child path is asserted
+    // above; this burst is only the blackout window.
     assert.ok(
-      seen.every((a) => /^\d+:(one|three):supervisor-test:ready$/.test(a)),
-      `unanswered or malformed: ${seen}`,
+      answered.every((a) => /^\d+:three:supervisor-test:ready$/.test(a)),
+      `unanswered or malformed: ${answered}`,
     );
   });
 
