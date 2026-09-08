@@ -106,7 +106,7 @@ function sameDecisions(left, right) {
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
 }
 
-function normalizeReviewItems(items, facts) {
+export function normalizeReviewItems(items, facts) {
   if (!Array.isArray(items) || items.length === 0) {
     throw new FactReviewError('items must be a non-empty JSON array');
   }
