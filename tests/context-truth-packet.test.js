@@ -96,6 +96,33 @@ describe('kb_context truth packet', () => {
       'maybe ready': { disposition: 'abstain', reason: 'evidence remains ambiguous' },
     });
 
+    for (const predicate of [
+      'status', 'state', 'review state', 'ci state', 'version',
+      'uses', 'depends on', 'calls', 'runs on', 'stored in', 'contains',
+    ]) {
+      addFact('grouplimit-service', predicate, `value for ${predicate}`, {
+        source: `linear:grouplimit-${predicate.replaceAll(' ', '-')}`,
+      });
+    }
+    for (const predicate of [
+      'status', 'state', 'review state', 'ci state', 'version',
+      'uses', 'depends on', 'calls', 'runs on', 'stored in',
+    ]) {
+      addFact('exactgroup-service', predicate, `value for ${predicate}`, {
+        source: `linear:exactgroup-${predicate.replaceAll(' ', '-')}`,
+      });
+    }
+    for (let index = 0; index < 73; index++) {
+      addFact('rowlimit-service', 'contains', `component ${index}`, {
+        source: `linear:rowlimit-${index}`,
+      });
+    }
+    for (let index = 0; index < 72; index++) {
+      addFact('exactrow-service', 'contains', `component ${index}`, {
+        source: `linear:exactrow-${index}`,
+      });
+    }
+
     const old = insertDocument({
       title: 'Kite migration approach',
       content: 'Kite migration uses the original queue approach.',
@@ -166,5 +193,32 @@ describe('kb_context truth packet', () => {
     assert.strictEqual(packet.history.superseded_notes.length, 1);
     assert.match(packet.history.superseded_notes[0].superseded_reason, /replaced the queue design/);
     assert.ok(Number.isInteger(packet.history.superseded_notes[0].superseded_by));
+  });
+
+  it('marks possible fact row omissions without counting unmeasured rows', async () => {
+    const packet = await context('rowlimit service');
+
+    assert.deepStrictEqual(packet.partial.fact_rows, {
+      limit: 72,
+      more_may_exist: true,
+      note: 'fact rows exceeded the packet cap; narrow the query to inspect omitted fact evidence and review state',
+    });
+    assert.ok(!('omitted' in packet.partial.fact_rows));
+  });
+
+  it('marks possible fact group omissions and stays quiet at the exact limit', async () => {
+    const overflow = await context('grouplimit service');
+    assert.deepStrictEqual(overflow.partial.fact_groups, {
+      limit: 10,
+      more_may_exist: true,
+      note: 'fact groups exceeded the packet cap; narrow the query to inspect omitted reviewed or unresolved groups',
+    });
+    assert.ok(!('omitted' in overflow.partial.fact_groups));
+
+    const exactGroup = await context('exactgroup service');
+    assert.strictEqual(exactGroup.partial, undefined);
+
+    const exactRows = await context('exactrow service');
+    assert.strictEqual(exactRows.partial, undefined);
   });
 });

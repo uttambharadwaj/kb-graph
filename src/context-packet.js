@@ -240,10 +240,10 @@ function evidenceResolver(db) {
 }
 
 function factRows(db, entities) {
-  if (!entities.length) return [];
+  if (!entities.length) return { rows: [], partial: null };
   const ids = entities.map(entity => entity.id);
   const placeholders = ids.map(() => '?').join(', ');
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT
       f.id AS fact_id, f.subject AS subject_id, s.name AS subject,
       f.predicate, f.object AS object_id, o.name AS object,
@@ -256,7 +256,15 @@ function factRows(db, entities) {
       (f.valid_to IS NULL) DESC,
       COALESCE(f.valid_from, '') DESC, f.created_at DESC, f.id DESC
     LIMIT ?
-  `).all(...ids, ...ids, ...ids, FACT_ROW_LIMIT);
+  `).all(...ids, ...ids, ...ids, FACT_ROW_LIMIT + 1);
+  return {
+    rows: rows.slice(0, FACT_ROW_LIMIT),
+    partial: rows.length > FACT_ROW_LIMIT ? {
+      limit: FACT_ROW_LIMIT,
+      more_may_exist: true,
+      note: 'fact rows exceeded the packet cap; narrow the query to inspect omitted fact evidence and review state',
+    } : null,
+  };
 }
 
 function displayedFact(row, entityId, resolveEvidence) {
@@ -276,8 +284,35 @@ function displayedFact(row, entityId, resolveEvidence) {
   };
 }
 
+function outgoingFactGroups(db, entities) {
+  if (!entities.length) return { groups: [], partial: null };
+  const ids = entities.map(entity => entity.id);
+  const placeholders = ids.map(() => '?').join(', ');
+  const groups = db.prepare(`
+    SELECT
+      f.subject, f.predicate,
+      MAX(f.valid_to IS NULL) AS has_current,
+      MAX(COALESCE(f.valid_from, '')) AS latest_valid_from,
+      MAX(f.created_at) AS latest_created_at,
+      MAX(f.id) AS latest_fact_id
+    FROM facts f
+    WHERE f.subject IN (${placeholders})
+    GROUP BY f.subject, f.predicate
+    ORDER BY has_current DESC, latest_valid_from DESC, latest_created_at DESC, latest_fact_id DESC
+    LIMIT ?
+  `).all(...ids, FACT_GROUP_LIMIT + 1);
+  return {
+    groups: groups.slice(0, FACT_GROUP_LIMIT),
+    partial: groups.length > FACT_GROUP_LIMIT ? {
+      limit: FACT_GROUP_LIMIT,
+      more_may_exist: true,
+      note: 'fact groups exceeded the packet cap; narrow the query to inspect omitted reviewed or unresolved groups',
+    } : null,
+  };
+}
+
 function factLayers(db, entities) {
-  const rows = factRows(db, entities);
+  const { rows, partial: factRowPartial } = factRows(db, entities);
   const resolveEvidence = evidenceResolver(db);
   const entityIds = new Set(entities.map(entity => entity.id));
   const byEntity = new Map(entities.map(entity => [entity.id, []]));
@@ -286,26 +321,10 @@ function factLayers(db, entities) {
     if (row.object_id !== row.subject_id && byEntity.has(row.object_id)) byEntity.get(row.object_id).push(row);
   }
 
-  const allOutgoingGroups = [...new Map(rows.filter(row => entityIds.has(row.subject_id)).map(row => [
-    groupKey(row.subject_id, row.predicate),
-    { subject: row.subject_id, predicate: row.predicate },
-  ])).values()];
-  const allReviews = reviewedFactGroupStates(db, { groups: allOutgoingGroups });
-  const allReviewsByGroup = new Map(allReviews.map(review => [
-    groupKey(review.subject, review.predicate), review,
-  ]));
-  const outgoingGroups = allOutgoingGroups.map((group, index) => {
-    const review = allReviewsByGroup.get(groupKey(group.subject, group.predicate));
-    const priority = review?.state === 'adjudicated' && review.projection === 'available'
-      ? 0
-      : review ? 1 : 2;
-    return { ...group, index, priority };
-  }).sort((left, right) => left.priority - right.priority || left.index - right.index)
-    .slice(0, FACT_GROUP_LIMIT)
-    .map(({ index, priority, ...group }) => group);
-  const outgoingGroupKeys = new Set(outgoingGroups.map(group => groupKey(group.subject, group.predicate)));
-  const reviews = allReviews.filter(review => outgoingGroupKeys.has(groupKey(review.subject, review.predicate)));
+  const { groups: outgoingGroups, partial: factGroupPartial } = outgoingFactGroups(db, entities);
+  const reviews = reviewedFactGroupStates(db, { groups: outgoingGroups });
   const reviewsByGroup = new Map(reviews.map(review => [groupKey(review.subject, review.predicate), review]));
+  const outgoingGroupKeys = new Set(outgoingGroups.map(group => groupKey(group.subject, group.predicate)));
 
   const currentState = [];
   for (const review of reviews) {
@@ -385,7 +404,17 @@ function factLayers(db, entities) {
       else retiredHistory.push(fact);
     }
   }
-  return { currentState, liveEvidence, retiredHistory, unresolved };
+  const partial = {
+    ...(factRowPartial ? { fact_rows: factRowPartial } : {}),
+    ...(factGroupPartial ? { fact_groups: factGroupPartial } : {}),
+  };
+  return {
+    currentState,
+    liveEvidence,
+    retiredHistory,
+    unresolved,
+    partial: Object.keys(partial).length ? partial : null,
+  };
 }
 
 /**
@@ -430,5 +459,6 @@ export function buildContextPacket(db, { query, limit, project, type }) {
     unresolved: {
       fact_groups: facts.unresolved,
     },
+    ...(facts.partial ? { partial: facts.partial } : {}),
   };
 }
