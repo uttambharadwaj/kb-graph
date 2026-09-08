@@ -29,18 +29,22 @@ export function retrievalOutcomesReady(db = getDb()) {
 
 function normalizeTime(value) {
   if (value == null) return null;
-  if (typeof value === 'number') return value < 100000000000 ? value * 1000 : value;
-  const parsed = Date.parse(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? (value < 100000000000 ? value * 1000 : value) : null;
+  // SQLite CURRENT_TIMESTAMP is UTC despite omitting a timezone marker.
+  const normalized = typeof value === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+    ? `${value.replace(' ', 'T')}Z`
+    : value;
+  const parsed = Date.parse(normalized);
   return Number.isNaN(parsed) ? null : parsed;
 }
 
 function eventTime(obj, fallback) {
-  return normalizeTime(obj?.timestamp)
-    ?? normalizeTime(obj?.created_at)
-    ?? normalizeTime(obj?.time)
-    ?? normalizeTime(obj?.payload?.timestamp)
-    ?? normalizeTime(obj?.payload?.created_at)
-    ?? fallback;
+  const value = [obj?.timestamp, obj?.created_at, obj?.time, obj?.payload?.timestamp, obj?.payload?.created_at]
+    .find(candidate => candidate != null);
+  // Missing timestamps retain line-order fallback; explicit invalid ones do not.
+  return value === undefined
+    ? { at: fallback, hasTimestamp: false }
+    : { at: normalizeTime(value), hasTimestamp: true };
 }
 
 function collectStrings(value, out = []) {
@@ -116,7 +120,7 @@ function resultFailed(value) {
 
 function eventFrom({ parsed, fallback, index, kind = 'text', callId = null, value, failed = false }) {
   const text = textFrom(value);
-  return text ? { at: eventTime(parsed, fallback), text, index, kind, callId, failed } : null;
+  return text ? { ...eventTime(parsed, fallback), text, index, kind, callId, failed } : null;
 }
 
 function pushEvent(out, event) {
@@ -205,18 +209,18 @@ export function parseTranscriptEvents(raw) {
     }
     const text = textFrom(parsed);
     if (!text) return;
-    events.push({ at: eventTime(parsed, index), text, index, kind: 'text', callId: null });
+    events.push({ ...eventTime(parsed, index), text, index, kind: 'text', callId: null });
   });
   return events;
 }
 
 function sameOrAfter(event, retrieval) {
+  const retrievalTime = normalizeTime(retrieval.created_at);
+  if (event.at == null || retrievalTime == null) return false;
   // Plain-text or reduced JSONL fixtures have only line order. They can prove
   // attribution after the row is selected by session, but their synthetic index
   // should not be compared to a wall-clock SQLite timestamp.
-  if (event.at === event.index) return true;
-  const retrievalTime = normalizeTime(retrieval.created_at);
-  if (retrievalTime == null) return true;
+  if (!event.hasTimestamp) return true;
   return event.at >= retrievalTime;
 }
 
@@ -271,6 +275,7 @@ function tokensOverlap(left, right) {
 
 function toolResultMatchesCall(event, call) {
   return event.kind === 'tool_result'
+    && event.at != null
     && event.callId
     && event.callId === call.callId
     && !event.failed
@@ -346,7 +351,7 @@ function recordCorrectedRows(db, retrievals) {
     if (!row.doc_version || !row.superseded_at) continue;
     const retrievalTime = normalizeTime(row.created_at);
     const supersededTime = normalizeTime(row.superseded_at);
-    if (retrievalTime != null && supersededTime != null && supersededTime < retrievalTime) continue;
+    if (retrievalTime == null || supersededTime == null || supersededTime < retrievalTime) continue;
     recorded += insertOutcome(db, {
       retrieval_id: row.id,
       doc_id: row.doc_id,
@@ -376,6 +381,7 @@ function recordHelpedRows(db, retrievals, events, transcriptPath) {
     // has to succeed for that same command/test/tool target.
     const matchingCall = events.find(event => event.index > attribution.event.index
       && event.kind === 'tool_call'
+      && event.at != null
       && event.callId
       && tokensOverlap(attribution.action.tokens, actionTokens(event.text)));
     if (!matchingCall) continue;
