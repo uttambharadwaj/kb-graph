@@ -9,8 +9,8 @@ import { JOBS, renderPlist, renderSystemdUnits, installJobs } from '../src/cli/s
 
 const OPTS = { nodeBin: '/usr/local/bin/node', kbRoot: '/opt/kb', vaultPath: '/home/u/kb-vault', claudePath: '/usr/local/bin/claude', logsDir: '/home/u/.knowledge-base/logs' };
 
-test('JOBS defines harvest, reindex, synthesis', () => {
-  assert.deepEqual(JOBS.map(j => j.name), ['harvest', 'reindex', 'synthesis']);
+test('JOBS defines harvest, reindex, synthesis, reconcile', () => {
+  assert.deepEqual(JOBS.map(j => j.name), ['harvest', 'reindex', 'synthesis', 'reconcile']);
 });
 
 // A scheduled job inherits no shell environment, so an opt-in that only lives
@@ -42,6 +42,10 @@ test('renderPlist mirrors the reference install', () => {
   const synthesis = renderPlist(JOBS[2], OPTS);
   assert.match(synthesis, /<key>Weekday<\/key><integer>0<\/integer>/);
   assert.match(synthesis, /<string>\/opt\/kb\/bin\/weekly-synthesis\.js<\/string>/);
+
+  const reconcile = renderPlist(JOBS[3], OPTS);
+  assert.match(reconcile, /<key>Hour<\/key><integer>4<\/integer><key>Minute<\/key><integer>15<\/integer>/);
+  assert.match(reconcile, /<string>\/opt\/kb\/bin\/kb\.js<\/string>\s*<string>reconcile<\/string>/);
 });
 
 // /tmp is reaped once a file has gone untouched for a few days. A weekly job's
@@ -93,7 +97,7 @@ test('installJobs with load:false writes files and never shells out', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbjobs-'));
   const logsDir = join(home, '.knowledge-base', 'logs');
   const result = installJobs({ home, ...OPTS, logsDir, load: false });
-  assert.equal(result.steps.filter(s => !s.error).length, 3);
+  assert.equal(result.steps.filter(s => !s.error).length, 4);
   // launchd will not create the directory it redirects into, so install must.
   assert.ok(existsSync(logsDir), 'the log directory must exist before the job first runs');
   if (process.platform === 'darwin') {
