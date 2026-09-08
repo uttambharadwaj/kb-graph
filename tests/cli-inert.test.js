@@ -14,7 +14,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // print usage and write nothing — the whole point of the command.
 const KB_COMMANDS = [
   'start', 'stop', 'mcp', 'mcp-shim', 'tool', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
-  'retrieval-report', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
+  'retrieval-report', 'fact-conflicts', 'fact-adjudicate', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
   'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
   'bus-send', 'bus-read', 'bus-status', 'bus-session', 'bus-agent', 'bus-agentd',
@@ -54,7 +54,7 @@ function run(args) {
 function rowCounts() {
   const counts = {};
   for (const [name, file, tables] of [
-    ['kb', join(home, 'kb', 'kb.db'), ['documents', 'harvest_log', 'vault_files', 'facts', 'meta', 'retrievals', 'embeddings', 'extractions']],
+    ['kb', join(home, 'kb', 'kb.db'), ['documents', 'harvest_log', 'vault_files', 'facts', 'fact_reviews', 'fact_review_items', 'meta', 'retrievals', 'embeddings', 'extractions']],
     ['bus', join(home, 'bus', 'bus.db'), ['bus_messages', 'bus_readers', 'bus_sessions', 'bus_deliveries']],
   ]) {
     const db = new Database(file, { readonly: true });

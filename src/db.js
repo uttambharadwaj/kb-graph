@@ -640,6 +640,120 @@ export const MIGRATIONS = [{
     addColumn(db, 'extractions', 'model_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
     addColumn(db, 'extractions', 'consolidation_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
   },
+}, {
+  version: 24,
+  // Reviews are a derived, append-only judgment over the raw fact ledger. The
+  // fact/entity ids intentionally are not foreign keys: entity merges and fact
+  // dedupes must be able to proceed and make an old review visibly stale,
+  // rather than either failing or cascading away the review's provenance.
+  name: 'append-only per-fact adjudication reviews',
+  applied: db => {
+    const required = [
+      ['table', 'fact_reviews'],
+      ['table', 'fact_review_items'],
+      ['trigger', 'fact_reviews_no_update'],
+      ['trigger', 'fact_reviews_no_delete'],
+      ['trigger', 'fact_review_items_no_update'],
+      ['trigger', 'fact_review_items_no_delete'],
+      ['trigger', 'fact_review_items_require_live_member'],
+      ['trigger', 'fact_review_items_require_current_target'],
+      ['trigger', 'fact_review_items_capacity'],
+    ];
+    const hasObject = db.prepare('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?');
+    return required.every(([type, name]) => hasObject.get(type, name));
+  },
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS fact_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      reviewer TEXT NOT NULL CHECK (length(trim(reviewer)) BETWEEN 1 AND 200),
+      policy TEXT NOT NULL DEFAULT 'manual-review-v1',
+      fact_count INTEGER NOT NULL CHECK (fact_count > 0),
+      note TEXT CHECK (note IS NULL OR length(note) <= 4000),
+      reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_fact_reviews_group
+      ON fact_reviews(subject, predicate, id DESC);
+
+    CREATE TABLE IF NOT EXISTS fact_review_items (
+      review_id INTEGER NOT NULL,
+      fact_id TEXT NOT NULL,
+      disposition TEXT NOT NULL CHECK (
+        disposition IN ('current', 'superseded', 'synonym', 'rejected', 'abstain')
+      ),
+      target_fact_id TEXT,
+      evidence_ref TEXT,
+      reason TEXT CHECK (reason IS NULL OR length(reason) <= 1000),
+      PRIMARY KEY (review_id, fact_id),
+      CHECK (
+        (disposition IN ('superseded', 'synonym') AND target_fact_id IS NOT NULL)
+        OR (disposition NOT IN ('superseded', 'synonym') AND target_fact_id IS NULL)
+      ),
+      CHECK (target_fact_id IS NULL OR target_fact_id <> fact_id),
+      CHECK (evidence_ref IS NOT NULL OR disposition = 'abstain'),
+      CHECK (
+        disposition NOT IN ('rejected', 'abstain')
+        OR (reason IS NOT NULL AND length(trim(reason)) > 0)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_fact_review_items_fact ON fact_review_items(fact_id);
+
+    CREATE TRIGGER IF NOT EXISTS fact_reviews_no_update
+    BEFORE UPDATE ON fact_reviews BEGIN
+      SELECT RAISE(ABORT, 'fact_reviews is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_reviews_no_delete
+    BEFORE DELETE ON fact_reviews BEGIN
+      SELECT RAISE(ABORT, 'fact_reviews is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_no_update
+    BEFORE UPDATE ON fact_review_items BEGIN
+      SELECT RAISE(ABORT, 'fact_review_items is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_no_delete
+    BEFORE DELETE ON fact_review_items BEGIN
+      SELECT RAISE(ABORT, 'fact_review_items is append-only');
+    END;
+
+    -- Application validation gives precise errors. These triggers are the
+    -- lower boundary: direct SQL still cannot invent ids, cross groups, point
+    -- at a non-current target, or append items after the declared snapshot is
+    -- complete. Targets are inserted first by the writer.
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_require_live_member
+    BEFORE INSERT ON fact_review_items
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM fact_reviews r
+      JOIN facts f
+        ON f.id = NEW.fact_id
+       AND f.subject = r.subject
+       AND f.predicate = r.predicate
+       AND f.valid_to IS NULL
+      WHERE r.id = NEW.review_id
+    ) BEGIN
+      SELECT RAISE(ABORT, 'review item must be a live fact in the reviewed group');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_require_current_target
+    BEFORE INSERT ON fact_review_items
+    WHEN NEW.target_fact_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM fact_review_items
+      WHERE review_id = NEW.review_id
+        AND fact_id = NEW.target_fact_id
+        AND disposition = 'current'
+    ) BEGIN
+      SELECT RAISE(ABORT, 'review target must be a current item in the same review');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_capacity
+    BEFORE INSERT ON fact_review_items
+    WHEN (
+      SELECT COUNT(*) FROM fact_review_items WHERE review_id = NEW.review_id
+    ) >= COALESCE((
+      SELECT fact_count FROM fact_reviews WHERE id = NEW.review_id
+    ), 0) BEGIN
+      SELECT RAISE(ABORT, 'review already contains its declared fact snapshot');
+    END;
+  `),
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no

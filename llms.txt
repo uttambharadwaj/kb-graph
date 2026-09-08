@@ -21,7 +21,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 |------|---------|
 | kb_search | FTS5 keyword search. You know roughly what you are looking for. |
 | kb_search_smart | Hybrid keyword + semantic search. Conceptual or fuzzy queries. |
-| kb_context | Token-efficient briefing — summaries only, ~98% fewer tokens. Use BEFORE kb_read. |
+| kb_context | Bounded truth packet — live summaries, reviewed current state, raw evidence, superseded history, and unresolved claims. Use BEFORE kb_read. |
 | kb_read | Full document by ID. After kb_context says which ones are worth it. |
 | kb_list | Enumerate documents by type or tag when you are browsing, not searching. |
 | kb_tunnels | Which domains a tag connects to, or the bridge between two — cross-domain exploration. |
@@ -35,9 +35,9 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 | kb_promote | A later session confirmed a note — raise its tier, recording what did the confirming. |
 | kb_synthesize | A review brief over recent notes, for the "what have we learned lately" pass. |
 | kb_fact_add | One durable subject-predicate-object fact, with validity dates. |
-| kb_fact_query | How an entity relates to everything else, optionally as of a date. |
+| kb_fact_query | Raw fact history plus any reviewed current-state projection for an entity. Historical as_of queries do not project reviewed live state. |
 | kb_fact_timeline | The order things happened to an entity. |
-| kb_fact_invalidate | A decision was reversed or a state expired — end the fact, keep the history. |
+| kb_fact_invalidate | End erroneous evidence by exact fact ID while preserving the raw row and provenance. |
 | kb_capture_session | End of a debugging or implementation session. Redacts secrets from pasted output; kb_write does not. |
 | kb_capture_fix | A bug you verified fixed. Symptom and cause are separate fields, so searching the symptom finds the cause. |
 | kb_capture_web | A page you fetched and will want to cite. Keeps the URL as provenance. |

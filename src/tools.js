@@ -11,7 +11,7 @@ import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search
 import { metered } from './tool-meter.js';
 import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
-import { addFact, queryFact, invalidateFact, invalidateFactById, factTimeline, factStats, nearbyEntities } from './facts.js';
+import { addFact, queryFact, invalidateFact, invalidateFactById, factTimeline, factStats, nearbyEntities, canonicalEntityId } from './facts.js';
 import { kbExtract, canonicalTriple, retireContradicted } from './extract.js';
 import { inVocabulary, PredicateNotInVocabularyError } from './predicates.js';
 import { getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest, getNearDupPairs } from './synthesis/weekly-review.js';
@@ -21,6 +21,8 @@ import { getBusToolDefinitions } from './bus/tools.js';
 import { tunnel, tagNeighbors, strongestTunnels } from './tunnels.js';
 import { canonicalTag, getTagAliasMap } from './tags.js';
 import { SURFACE, logRetrievalResults } from './retrieval.js';
+import { reviewedFactGroupStates } from './fact-reviews.js';
+import { buildContextPacket } from './context-packet.js';
 
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
@@ -105,6 +107,8 @@ function compareFactsForDisplay(a, b) {
   if (a.current !== b.current) return a.current ? -1 : 1;
   return String(b.valid_from ?? '').localeCompare(String(a.valid_from ?? ''));
 }
+
+const factGroupKey = fact => `${canonicalEntityId(fact.subject)}\0${fact.predicate}`;
 
 const ADMIN_ONLY_TOOLS = new Set([
   'kb_classify',
@@ -602,55 +606,25 @@ function defineTools() {
 
     {
       name: 'kb_context',
-      description: 'Get a token-efficient briefing on a topic. Returns summaries and metadata for matching docs WITHOUT full content. Use this BEFORE kb_read to decide which docs are worth reading in full. Saves 90%+ tokens vs reading everything.',
+      description: 'Get a provenance-aware truth packet for a topic before exploring from scratch. One bounded response separates live note summaries, reviewed fact-level current state, raw evidence, superseded history, and unresolved or stale fact groups. Only a fresh complete non-abstained review appears as fact-level current state; use kb_read for the full content of a returned note.',
       schema: {
         query: z.string().describe('Topic or question to get context on'),
-        limit: z.number().optional().default(15).describe('Max docs to include'),
+        limit: z.number().int().positive().max(50).optional().default(15).describe('Max docs to include (1-50)'),
         project: z.string().optional().describe('Filter by project'),
         type: z.string().optional().describe('Filter by note type'),
       },
       handler: async ({ query, limit, project, type }) => {
         try {
           const db = getDb();
-          const ftsResults = searchDocuments(query, limit);
-
-          const briefings = ftsResults.map(r => {
-            const vf = db.prepare('SELECT vault_path, note_type, tags, project, summary, key_topics FROM vault_files WHERE document_id = ?').get(r.id);
-            return {
-              id: r.id,
-              title: r.title,
-              type: vf?.note_type || r.doc_type,
-              tier: r.tier,
-              tags: vf?.tags || r.tags,
-              project: vf?.project || null,
-              summary: vf?.summary || r.snippet?.replace(/<\/?mark>/g, '').slice(0, 200),
-              key_topics: vf?.key_topics || null,
-            };
-          });
-
-          if (project || type) {
-            let sql = 'SELECT vf.document_id as id, vf.title, vf.note_type, d.tier, vf.tags, vf.project, vf.summary, vf.key_topics FROM vault_files vf JOIN documents d ON d.id = vf.document_id WHERE 1=1';
-            const params = [];
-            if (project) { sql += ' AND vf.project = ?'; params.push(project); }
-            if (type) { sql += ' AND vf.note_type = ?'; params.push(type); }
-            sql += ' LIMIT ?';
-            params.push(limit);
-            const filtered = db.prepare(sql).all(...params);
-            const seenIds = new Set(briefings.map(b => b.id));
-            for (const f of filtered) {
-              if (!seenIds.has(f.id)) {
-                briefings.push({ id: f.id, title: f.title, type: f.note_type, tier: f.tier, tags: f.tags, project: f.project, summary: f.summary, key_topics: f.key_topics });
-              }
-            }
-          }
+          const packet = buildContextPacket(db, { query, limit, project, type });
 
           // Logged here rather than by threading a surface into the search:
           // the project/type pass appends docs the search never returned, and
           // the briefing set is what the caller actually gets.
-          logRetrievalResults({ results: briefings, surface: SURFACE.CONTEXT, query, eventId: randomUUID() });
+          logRetrievalResults({ results: packet.documents, surface: SURFACE.CONTEXT, query, eventId: randomUUID() });
 
-          const header = `Found ${briefings.length} relevant docs. Use kb_read(id) for full content on any that look useful. tier "${DEFAULT_TIER}" means ${TIER_MEANING[DEFAULT_TIER]}.`;
-          return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(briefings, null, 2) }] };
+          const header = `Found ${packet.documents.length} relevant docs. The packet keeps reviewed current state, raw evidence, superseded history, and unresolved claims separate. Use kb_read(id) for full note content. tier "${DEFAULT_TIER}" means ${TIER_MEANING[DEFAULT_TIER]}.`;
+          return { content: [{ type: 'text', text: header + '\n\n' + JSON.stringify(packet, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
@@ -808,7 +782,7 @@ function defineTools() {
 
     {
       name: 'kb_fact_query',
-      description: 'Query the knowledge graph for an entity\'s relationships. Returns typed facts with temporal validity. Optionally filter by date to see what was true at a point in time. The entity name is canonicalized before lookup — case and separators (space, hyphen, underscore, dot, slash) are interchangeable, so "auth service" and "auth-service" are one node. Spellings a separator fold cannot reach come back in "other_spellings" with their fact counts: the answer is partial whenever that field is present, and those ids have to be queried separately or merged with "kb entity-merge".',
+      description: 'Query the knowledge graph for an entity\'s relationships. Returns the immutable raw fact ledger with temporal validity. Live outgoing groups that have an append-only manual review also return a separate adjudications block: only a complete, fresh, non-abstained review yields current_fact_ids/current_facts, while stale or abstained reviews explicitly return null. Historical as_of queries never project a reviewed current state. The entity name is canonicalized before lookup — case and separators (space, hyphen, underscore, dot, slash) are interchangeable, so "auth service" and "auth-service" are one node. Spellings a separator fold cannot reach come back in "other_spellings" with their fact counts: the answer is partial whenever that field is present, and those ids have to be queried separately or merged with "kb entity-merge".',
       schema: {
         entity: z.string().describe('Entity to query (e.g. "my-app", "auth-service", "browser profiles")'),
         as_of: z.string().optional().describe('Date filter — only facts valid at this date (YYYY-MM-DD)'),
@@ -822,6 +796,18 @@ function defineTools() {
           // calls that too, and a truncated view there would silently miss a
           // held fact and write a duplicate instead of matching it.
           const all = queryFact(entity, { asOf: as_of, direction }).sort(compareFactsForDisplay);
+          // Historical rows still name a group whose reviewed live membership
+          // may now be empty. Keep them in discovery so a fully removed review
+          // reports stale instead of disappearing as if it never existed.
+          const outgoingGroups = as_of ? [] : [...new Map(all
+            .filter(fact => fact.direction === 'outgoing')
+            .map(fact => [factGroupKey(fact), { subject: fact.subject, predicate: fact.predicate }])).values()];
+          const reviewedGroups = reviewedFactGroupStates(getDb(), { groups: outgoingGroups });
+          const allLiveCounts = new Map();
+          for (const fact of all.filter(fact => fact.direction === 'outgoing' && fact.current)) {
+            const key = factGroupKey(fact);
+            allLiveCounts.set(key, (allLiveCounts.get(key) ?? 0) + 1);
+          }
           // Canonicalisation folds separator and case variants, but not every
           // spelling of one concept is a separator apart. What is left is a
           // complete-looking answer holding a fraction of what is stored, which
@@ -839,12 +825,46 @@ function defineTools() {
             return `${v.slice(0, FACT_FIELD_MAX_CHARS)}… [clipped ${v.length - FACT_FIELD_MAX_CHARS} chars]`;
           };
 
-          const render = (facts) => {
+          const render = (facts, { projectionDetails = true } = {}) => {
             clipped = 0;
+            const visibleGroups = new Set();
+            const visibleLiveCounts = new Map();
+            for (const fact of facts.filter(fact => fact.direction === 'outgoing')) {
+              const key = factGroupKey(fact);
+              visibleGroups.add(key);
+              if (fact.current) visibleLiveCounts.set(key, (visibleLiveCounts.get(key) ?? 0) + 1);
+            }
             facts = facts.map(f => ({
               ...f, subject: clip(f.subject), object: clip(f.object), source: clip(f.source),
             }));
             const body = { entity, as_of, facts, count: facts.length, total: all.length };
+            const adjudications = reviewedGroups.flatMap(review => {
+              const key = `${review.subject}\0${review.predicate}`;
+              if (!visibleGroups.has(key)) return [];
+              const projected = review.state === 'adjudicated' && review.projection === 'available';
+              const items = new Map(review.items.map(item => [item.fact_id, item]));
+              return [{
+                subject: review.subject,
+                predicate: review.predicate,
+                state: review.state,
+                projection: review.projection,
+                review_id: review.review_id,
+                policy: review.policy,
+                reviewed_at: review.reviewed_at,
+                reviewer: clip(review.reviewer),
+                current_fact_ids: projected && projectionDetails ? review.current.map(fact => fact.id) : null,
+                current_facts: projected && projectionDetails ? review.current.map(fact => ({
+                  fact_id: fact.id,
+                  object: clip(fact.object_name),
+                  evidence_ref: clip(items.get(fact.id)?.evidence_ref),
+                })) : null,
+                ...(projected && !projectionDetails && {
+                  projection_omitted: 'projection details exceeded the response-size cap; query a narrower entity',
+                }),
+                ...((visibleLiveCounts.get(key) ?? 0) < (allLiveCounts.get(key) ?? 0) && { partial: true }),
+              }];
+            });
+            if (adjudications.length) body.adjudications = adjudications;
             if (clipped) body.clipped = `${clipped} field(s) exceeded ${FACT_FIELD_MAX_CHARS} chars and were shortened`;
             if (near.length) {
               const shownNear = near.slice(0, FACT_NEAR_MAX).map(n => `${n.id} (${n.facts})`).join(', ');
@@ -867,6 +887,7 @@ function defineTools() {
             shown = shown.slice(0, Math.max(1, Math.floor(shown.length * 0.8)));
             text = render(shown);
           }
+          if (text.length > FACT_RESULT_MAX_CHARS) text = render(shown, { projectionDetails: false });
           return { content: [{ type: 'text', text }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -876,7 +897,7 @@ function defineTools() {
 
     {
       name: 'kb_fact_invalidate',
-      description: 'Mark a fact as no longer true (set end date). Address the exact row with the id returned by kb_extract/kb_fact_add, or use the legacy subject + predicate + object triple. Provide one addressing form, not both. Refuses with "refused": "ended_before_valid_from" if the end date precedes the fact\'s valid_from — an interval cannot end before it begins.',
+      description: 'End an erroneous fact assertion while preserving its raw row, provenance, and validity interval. This is not a current-state selection tool: do not use it merely because evidence is older, duplicated, synonymous, contested, or superseded in meaning; use kb_fact_query and a complete append-only `kb fact-adjudicate` review for that. Address the exact row with the id returned by kb_extract/kb_fact_add, or use the legacy subject + predicate + object triple. Provide one addressing form, not both. Refuses with "refused": "ended_before_valid_from" if the end date precedes the fact\'s valid_from — an interval cannot end before it begins.',
       schema: {
         id: z.string().min(1).optional().describe('Exact fact id returned by kb_extract or kb_fact_add (preferred)'),
         subject: z.string().optional().describe('Entity (legacy triple form; requires predicate and object)'),

@@ -87,6 +87,18 @@ const COMMANDS = {
     summary: 'Read-path coverage: how much of the KB has ever been retrieved',
     run: () => import('../src/cli/retrieval-report.js').then(m => m.runRetrievalReportCli()),
   },
+  'fact-conflicts': {
+    summary: 'List subjects with multiple current objects and resolve their retained evidence',
+    value: ['--predicate', '--subject', '--limit'],
+    boolean: ['--json', '--evidence'],
+    run: a => import('../src/cli/fact-conflicts.js').then(m => m.runFactConflictsCli(a)),
+  },
+  'fact-adjudicate': {
+    summary: 'Append one complete per-fact review without changing the raw fact ledger',
+    value: ['--subject', '--predicate', '--reviewer', '--items', '--note'],
+    boolean: ['--json'],
+    run: a => import('../src/cli/fact-adjudicate.js').then(m => m.runFactAdjudicateCli(a)),
+  },
   rediscoveries: {
     summary: 'List rediscoveries — duplicate-detection hits where an agent re-derived a note the KB already had (--days <N>, default 14; --json for machine-readable)',
     value: ['--days'],
