@@ -66,6 +66,27 @@ const HOOK_SPECS = [
       && command.includes('Git state at compaction:'),
   },
   {
+    event: 'PreCompact',
+    matcher: { [AGENT.CLAUDE]: 'manual|auto', [AGENT.CODEX]: null },
+    subcommand: 'session-capture-hook',
+    extraArgs: ['--reason=precompact'],
+    agents: PUSH_AGENTS,
+  },
+  {
+    event: 'SessionEnd',
+    matcher: null,
+    subcommand: 'session-capture-hook',
+    extraArgs: ['--reason=session_end'],
+    agents: [AGENT.CLAUDE],
+  },
+  {
+    event: 'Stop',
+    matcher: null,
+    subcommand: 'session-capture-hook',
+    extraArgs: ['--reason=activity'],
+    agents: [AGENT.CODEX],
+  },
+  {
     event: 'SessionStart',
     // Cursor's names are not a uniform transform (UserPromptSubmit is
     // beforeSubmitPrompt there), so each spec spells its own.
@@ -92,9 +113,9 @@ const groupCommands = (group) => (group.hooks ?? [group]).map(h => h.command ?? 
 // passes nothing — see readAgentFlag), so its command carries no `--agent`.
 const agentSuffix = (agent) => agent === AGENT.CLAUDE ? '' : ` ${AGENT_FLAG} ${agent}`;
 
-const commandFor = (spec, { nodeBin, kbJsPath, agent }) => (spec.script
+const commandFor = (spec, { nodeBin, kbJsPath, agent }) => ((spec.script
   ? `${nodeBin} ${join(dirname(kbJsPath), spec.script)}`
-  : `${nodeBin} ${kbJsPath} ${spec.subcommand}`) + agentSuffix(agent);
+  : `${nodeBin} ${kbJsPath} ${spec.subcommand}`) + (spec.extraArgs?.length ? ` ${spec.extraArgs.join(' ')}` : '')) + agentSuffix(agent);
 
 // The agent a command was installed for, read the same way readAgentFlag
 // reads it at runtime: the flag when present, claude otherwise.
@@ -117,8 +138,8 @@ const identifies = (spec, command, agent) => {
   const cmd = command ?? '';
   if (agentOf(cmd) !== agent) return false;
   const base = cmd.replace(AGENT_IN_COMMAND, '').trimEnd();
-  if (spec.script && base.endsWith(spec.script)) return true;
-  if (spec.subcommand && base.endsWith(` ${spec.subcommand}`)) return true;
+  if (spec.script && new RegExp(`(?:^|/)${spec.script.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)) return true;
+  if (spec.subcommand && new RegExp(`\\s${spec.subcommand.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)) return true;
   return false;
 };
 

@@ -159,6 +159,7 @@ const DEFAULT_DAEMON_TIMEOUT_MS = {
   [HOOK_OP.PROMPT_HINT]: 1500,
   [HOOK_OP.TRIGGER_HOOK]: 800,
   [HOOK_OP.WAKEUP_HOOK]: 3000,
+  [HOOK_OP.SESSION_CAPTURE]: 500,
 };
 
 export function hookDaemonTimeoutMs(op) {

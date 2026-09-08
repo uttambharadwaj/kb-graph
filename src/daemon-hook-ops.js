@@ -8,6 +8,7 @@ import { computePromptHint } from './cli/prompt-hint.js';
 import { computeTriggerHook } from './cli/trigger-hook.js';
 import { computeWakeupHook } from './cli/wakeup-hook.js';
 import { HOOK_OP } from './daemon-paths.js';
+import { enqueueSessionCapture } from './session-capture.js';
 
 // Daemon-side calls always pass commit: false. The daemon never knows
 // whether the client it is answering is still waiting — a slow response
@@ -29,4 +30,7 @@ export const HOOK_OPS = {
   [HOOK_OP.PROMPT_HINT]: ({ prompt, session, agent = null }) => computePromptHint({ prompt, session, agent, commit: false }),
   [HOOK_OP.TRIGGER_HOOK]: ({ hookInput }) => computeTriggerHook(hookInput, { commit: false }),
   [HOOK_OP.WAKEUP_HOOK]: ({ hookInput, session, agent = null }) => computeWakeupHook({ hookInput, session, agent, commit: false }),
+  // Unlike hint plans, this write is safe on both sides of a timeout: the
+  // filesystem upsert is the durable handoff and is idempotent by session.
+  [HOOK_OP.SESSION_CAPTURE]: payload => enqueueSessionCapture(payload),
 };

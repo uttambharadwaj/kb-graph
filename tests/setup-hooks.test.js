@@ -10,7 +10,7 @@ import { AGENT } from '../src/process-ancestry.js';
 const OPTS = { nodeBin: '/usr/local/bin/node', kbJsPath: '/opt/kb/bin/kb.js' };
 const CODEX_OPTS = { ...OPTS, agent: AGENT.CODEX };
 
-test('mergeAgentHooks adds SessionStart, UserPromptSubmit, PreToolUse and PreCompact entries', () => {
+test('mergeAgentHooks adds retrieval, continuity, and asynchronous capture hooks', () => {
   const merged = mergeAgentHooks({}, OPTS);
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
@@ -28,9 +28,12 @@ test('mergeAgentHooks adds SessionStart, UserPromptSubmit, PreToolUse and PreCom
   // bin/kb.js, not `kb.js trigger-hook` — see setup-hooks.js's HOOK_SPECS
   // comment for why this one hook skips bin/kb.js's dispatch machinery.
   assert.equal(ptu[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
-  assert.equal(pc.length, 1);
+  assert.equal(pc.length, 2);
   assert.equal(pc[0].matcher, 'manual|auto');
   assert.equal(pc[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js precompact-hook');
+  assert.equal(pc[1].matcher, 'manual|auto');
+  assert.equal(pc[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=precompact');
+  assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=session_end');
 });
 
 test('mergeAgentHooks replaces the legacy inline preservation command instead of leaving an invalid second hook', () => {
@@ -39,9 +42,10 @@ test('mergeAgentHooks replaces the legacy inline preservation command instead of
 
   const merged = mergeAgentHooks(existing, OPTS);
 
-  assert.equal(merged.hooks.PreCompact.length, 1);
+  assert.equal(merged.hooks.PreCompact.length, 2);
   assert.equal(merged.hooks.PreCompact[0].hooks.length, 1);
   assert.equal(merged.hooks.PreCompact[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js precompact-hook');
+  assert.equal(merged.hooks.PreCompact[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=precompact');
 });
 
 test('mergeAgentHooks is idempotent', () => {
@@ -222,6 +226,8 @@ test('mergeAgentHooks installs the codex hooks with the agent flag, trigger hook
   assert.equal(merged.hooks.PreToolUse.length, 1);
   assert.equal(merged.hooks.PreToolUse[0].matcher, 'Bash');
   assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js --agent codex');
+  assert.equal(merged.hooks.PreCompact[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=precompact --agent codex');
+  assert.equal(merged.hooks.Stop[0].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=activity --agent codex');
 });
 
 test('mergeAgentHooks is idempotent for codex', () => {
@@ -272,7 +278,8 @@ test('mergeAgentHooks leaves unrelated codex hook entries exactly as they were',
   const merged = mergeAgentHooks(CODEX_HOOKS_FIXTURE, CODEX_OPTS);
   assert.deepEqual(merged.hooks.SessionStart.slice(0, 2), CODEX_HOOKS_FIXTURE.hooks.SessionStart);
   assert.deepEqual(merged.hooks.UserPromptSubmit.slice(0, 1), CODEX_HOOKS_FIXTURE.hooks.UserPromptSubmit);
-  assert.deepEqual(merged.hooks.Stop, CODEX_HOOKS_FIXTURE.hooks.Stop);
+  assert.deepEqual(merged.hooks.Stop.slice(0, 1), CODEX_HOOKS_FIXTURE.hooks.Stop);
+  assert.equal(merged.hooks.Stop[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=activity --agent codex');
   assert.equal(merged.hooks.SessionStart.length, 3);
   assert.equal(merged.hooks.UserPromptSubmit.length, 2);
   // A bus hook carrying `--agent codex` is not a KB briefing hook: dedup keys
@@ -303,7 +310,8 @@ test('installAgentHooks preserves pre-existing codex hooks it does not own', () 
   installAgentHooks({ home, ...CODEX_OPTS });
   const after = JSON.parse(readFileSync(path, 'utf8'));
   assert.deepEqual(after.hooks.SessionStart.slice(0, 2), CODEX_HOOKS_FIXTURE.hooks.SessionStart);
-  assert.deepEqual(after.hooks.Stop, CODEX_HOOKS_FIXTURE.hooks.Stop);
+  assert.deepEqual(after.hooks.Stop.slice(0, 1), CODEX_HOOKS_FIXTURE.hooks.Stop);
+  assert.equal(after.hooks.Stop[1].hooks[0].command, '/usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=activity --agent codex');
   // The backup is the file as it was, byte for byte.
   assert.equal(readFileSync(`${path}.kb-backup`, 'utf8'), JSON.stringify(CODEX_HOOKS_FIXTURE, null, 2));
 });
@@ -366,8 +374,8 @@ test('staleHookWarnings names the file each warning came from', () => {
   installAgentHooks({ home, ...CODEX_OPTS });
   const warnings = staleHookWarnings(home, { exists: nothingExists });
   assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /^4 hooks in ~\/\.claude\/settings\.json cannot run: /);
-  assert.match(warnings[1], /^3 hooks in ~\/\.codex\/hooks\.json cannot run: /);
+  assert.match(warnings[0], /^6 hooks in ~\/\.claude\/settings\.json cannot run: /);
+  assert.match(warnings[1], /^5 hooks in ~\/\.codex\/hooks\.json cannot run: /);
 });
 
 test('staleHookWarnings caps how many paths one line names', () => {
@@ -430,5 +438,5 @@ test('mergeAgentHooks legacy cleanup leaves a flat hand-written entry alone', ()
   const existing = { hooks: { PreCompact: [{ command: '/x/mine.sh' }] } };
   const merged = mergeAgentHooks(existing, OPTS);
   assert.equal(merged.hooks.PreCompact[0].command, '/x/mine.sh');
-  assert.equal(merged.hooks.PreCompact.length, 2);
+  assert.equal(merged.hooks.PreCompact.length, 3);
 });
