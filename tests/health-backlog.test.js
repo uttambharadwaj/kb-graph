@@ -4,8 +4,13 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getDb, getHealth, getMeta } from '../src/db.js';
+import { addFact } from '../src/facts.js';
 import { JOBS, staleAfterHours } from '../src/jobs.js';
+import { runReconciliation } from '../src/reconciliation.js';
 
 const summaryWarning = (health) => health.warnings.find(w => w.includes('summaries'));
 
@@ -69,7 +74,7 @@ describe('staleness tolerance is derived from the period', () => {
   // a warning nobody reads — which is how the useful ones stop being read too.
   it('leaves one skipped run reportable for every loop slower than an hour', () => {
     const reportable = JOBS.filter(job => job.periodHours >= 1);
-    assert.deepStrictEqual(reportable.map(j => j.name), ['harvest', 'synthesis'],
+    assert.deepStrictEqual(reportable.map(j => j.name), ['harvest', 'synthesis', 'reconcile'],
       'a new slow loop must be considered here rather than inherit a default');
     for (const job of reportable) {
       const tolerance = staleAfterHours(job.periodHours);
@@ -91,5 +96,67 @@ describe('staleness tolerance is derived from the period', () => {
     assert.strictEqual(staleAfterHours(24), 30);
     assert.strictEqual(staleAfterHours(24 * 7), 174);
     assert.ok(Math.abs(staleAfterHours(5 / 60) - 1.083) < 0.01);
+  });
+});
+
+
+describe('reconciliation heartbeat', () => {
+  function clearReconciliationState() {
+    getDb().exec(`
+      DELETE FROM facts;
+      DELETE FROM entity_aliases;
+      DELETE FROM entities;
+      DELETE FROM harvest_log;
+      DELETE FROM meta WHERE key IN ('last_reconcile', 'last_reconcile_error');
+    `);
+  }
+
+  function source(name, text) {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-health-reconcile-'));
+    const path = join(dir, `${name}.jsonl`);
+    writeFileSync(path, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }) + '\n');
+    getDb().prepare('INSERT INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)')
+      .run(path, Date.now(), 1, 0);
+    return `harvest:${name}`;
+  }
+
+  it('records a fresh heartbeat when scheduled reconciliation has nothing to do', async () => {
+    clearReconciliationState();
+
+    const result = await runReconciliation({ db: getDb(), limit: 1 });
+
+    assert.strictEqual(result.candidates, 0);
+    assert.ok(getMeta('last_reconcile'), 'no-op success still proves the scheduler ran');
+    assert.strictEqual(getMeta('last_reconcile_error').value, '');
+    assert.strictEqual(
+      getHealth().warnings.find(w => w.includes('reconcile')),
+      undefined,
+      'fresh successful reconciliation should not stay health-stale'
+    );
+  });
+
+  it('keeps the last reconciliation model failure visible in health', async () => {
+    clearReconciliationState();
+    addFact('Healthbot', 'status', 'green', {
+      source: source('healthbot-green', 'Healthbot status is green after the first launch.'),
+    });
+    addFact('Healthbot', 'status', 'red', {
+      source: source('healthbot-red', 'Healthbot status is red after the rollback.'),
+    });
+
+    await assert.rejects(
+      () => runReconciliation({
+        db: getDb(),
+        limit: 1,
+        decideFactGroup: async () => { throw new Error('model exploded for health'); },
+      }),
+      /model exploded for health/
+    );
+
+    assert.match(getMeta('last_reconcile_error').value, /model exploded for health/);
+    assert.ok(
+      getHealth().warnings.some(w => w.includes('reconcile last failed') && w.includes('model exploded for health')),
+      'health should surface the reconciliation failure instead of only reporting stale age'
+    );
   });
 });

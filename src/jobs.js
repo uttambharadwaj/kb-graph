@@ -11,6 +11,8 @@ export const JOBS = [
     schedule: { interval: 300 } },
   { name: 'synthesis', args: ['bin/weekly-synthesis.js'], periodHours: 24 * 7,
     schedule: { calendar: { Weekday: 0, Hour: 4, Minute: 0 } }, onCalendar: 'Sun *-*-* 04:00:00' },
+  { name: 'reconcile', args: ['bin/kb.js', 'reconcile'], periodHours: 24,
+    schedule: { calendar: { Hour: 4, Minute: 15 } }, onCalendar: '*-*-* 04:15:00' },
 ];
 
 // Slack on top of one period, to absorb a scheduler that fires late — launchd

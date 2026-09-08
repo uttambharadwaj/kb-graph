@@ -116,6 +116,12 @@ const COMMANDS = {
     boolean: ['--json', '--dry-run'],
     run: a => import('../src/cli/promotions.js').then(m => m.runPromotionsCli(a)),
   },
+  reconcile: {
+    summary: 'Autonomously reconcile source-backed fact conflicts and stale notes; abstain when evidence is incomplete',
+    value: ['--limit', '--predicate', '--subject', '--since'],
+    boolean: ['--json', '--dry-run', '--queue'],
+    run: a => import('../src/cli/reconcile.js').then(m => m.runReconcileCli(a)),
+  },
   'surface-report': {
     summary: 'Per-tool and per-model-caller demand, failures and latency, plus where the duplicate threshold really sits',
     run: () => import('../src/cli/surface-report.js').then(m => m.runSurfaceReportCli()),

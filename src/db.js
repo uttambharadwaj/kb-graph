@@ -1499,6 +1499,8 @@ export function getHealth({ recordBacklog = false } = {}) {
   const lastHarvest = harvest?.updated_at || harvestLogged;
   const harvestAge = lastHarvest ? (Date.now() - new Date(lastHarvest + 'Z').getTime()) / 3600000 : null;
   const synthesis = getMeta('last_synthesis');
+  const reconcile = getMeta('last_reconcile');
+  const reconcileError = getMeta('last_reconcile_error');
 
   const warnings = [];
   // Both remedies are long-running and neither is free, so each says what it
@@ -1523,6 +1525,9 @@ export function getHealth({ recordBacklog = false } = {}) {
   if (harvestAge === null || harvestAge > STALE_AFTER.harvest) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);
   const synthAge = ageHours(synthesis);
   if (synthAge === null || synthAge > STALE_AFTER.synthesis) warnings.push(`synthesis ${synthAge === null ? 'never recorded' : Math.round(synthAge / 24) + 'd ago'} — check com.kb.synthesis launchd job`);
+  const reconcileAge = ageHours(reconcile);
+  if (reconcileAge === null || reconcileAge > STALE_AFTER.reconcile) warnings.push(`reconcile heartbeat ${reconcileAge === null ? 'never recorded' : Math.round(reconcileAge) + 'h old'} — check com.kb.reconcile launchd job`);
+  if (reconcileError?.value) warnings.push(`reconcile last failed: ${reconcileError.value}`);
 
   return {
     embeddings: `${embedded}/${docs}`,
@@ -1530,6 +1535,7 @@ export function getHealth({ recordBacklog = false } = {}) {
     last_reindex: reindex?.updated_at || null,
     last_harvest: lastHarvest,
     last_synthesis: synthesis?.updated_at || null,
+    last_reconcile: reconcile?.updated_at || null,
     ok: warnings.length === 0,
     warnings,
   };
