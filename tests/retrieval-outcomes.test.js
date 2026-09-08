@@ -4,6 +4,7 @@ import assert from 'node:assert';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { spawnSync } from 'child_process';
 import Database from 'better-sqlite3';
 import { getDb, searchDocuments } from '../src/db.js';
 import { SURFACE, logRetrieval } from '../src/retrieval.js';
@@ -44,6 +45,81 @@ function transcript(name, lines) {
   return path;
 }
 
+describe('timestamp ordering', () => {
+  const retrievalAt = '2026-09-08 07:00:00';
+  const afterRead = '2026-09-08T07:01:00Z';
+  for (const [name, createdAt, timestamp, expected, invalidEvent] of [
+    ['SQLite after read', retrievalAt, afterRead, 1],
+    ['SQLite before read', retrievalAt, '2026-09-08T06:59:00Z', 0],
+    ['SQLite fractional seconds', `${retrievalAt}.500`, '2026-09-08T07:00:00.400Z', 0],
+    ['ISO negative offset after read', '2026-09-08T02:00:00-05:00', afterRead, 1],
+    ['ISO positive offset before read', '2026-09-08T12:30:00+05:30', '2026-09-08T06:59:00Z', 0],
+    ['numeric seconds after read', retrievalAt, Date.parse(afterRead) / 1000, 1],
+    ['numeric milliseconds after read', retrievalAt, Date.parse(afterRead), 1],
+    ['numeric epoch before read', retrievalAt, 0, 0],
+    ['missing event timestamp', retrievalAt, undefined, 1],
+    ['invalid event timestamp', retrievalAt, 'not-a-date', 0],
+    ['invalid retrieval timestamp', 'not-a-date', afterRead, 0],
+    ['invalid call timestamp', retrievalAt, afterRead, 0, 'call'],
+    ['invalid result timestamp', retrievalAt, afterRead, 0, 'result'],
+  ]) {
+    it(`records helped correctly for ${name}`, async () => {
+      const db = getDb();
+      ensureOutcomeSchema(db);
+      const session = `sess-time-${name}`;
+      const docId = insertDoc(db, `Timestamp ${name}`, 'timestamp-version');
+      logRetrieval({ docId, surface: SURFACE.READ, session });
+      db.prepare('UPDATE retrievals SET created_at = ? WHERE session = ?').run(createdAt, session);
+      const path = transcript('timestamp', [
+        { timestamp, payload: timestamp === 'not-a-date' ? { timestamp: afterRead } : undefined,
+          message: { content: `I used KB #${docId} to run the retrieval outcomes parser test.` } },
+        { type: 'function_call', timestamp: invalidEvent === 'call' ? 'not-a-date' : undefined,
+          call_id: 'timestamp-call', name: 'shell', arguments: JSON.stringify({ cmd: 'node --test tests/retrieval-outcomes.test.js' }) },
+        { type: 'function_call_output', payload: invalidEvent === 'result' ? { timestamp: 'not-a-date' } : undefined,
+          call_id: 'timestamp-call', output: '3 passing' },
+      ]);
+
+      const result = await recordRetrievalOutcomesForSession({ sessionId: session, transcriptPath: path });
+
+      assert.strictEqual(result.recorded, expected);
+      const rows = db.prepare('SELECT outcome, doc_version FROM retrieval_outcomes WHERE doc_id = ?').all(docId);
+      assert.deepStrictEqual(rows, expected ? [{ outcome: OUTCOME.HELPED, doc_version: 'timestamp-version' }] : []);
+    });
+  }
+
+  for (const [name, createdAt, supersededAt, expected] of [
+    ['after read', retrievalAt, afterRead, 1],
+    ['before read', retrievalAt, '2026-09-08T06:59:00Z', 0],
+    ['invalid supersession', retrievalAt, 'not-a-date', 0],
+    ['invalid retrieval', 'not-a-date', afterRead, 0],
+  ]) {
+    it(`records corrected correctly for ${name}`, async () => {
+      const db = getDb();
+      ensureOutcomeSchema(db);
+      const session = `sess-correction-time-${name}`;
+      const docId = insertDoc(db, `Correction timestamp ${name}`, 'correction-version');
+      logRetrieval({ docId, surface: SURFACE.READ, session });
+      db.prepare('UPDATE retrievals SET created_at = ? WHERE session = ?').run(createdAt, session);
+      db.prepare('UPDATE documents SET superseded_at = ? WHERE id = ?').run(supersededAt, docId);
+      const path = transcript('correction-timestamp', [{ text: 'No attributed use.' }]);
+
+      const result = await recordRetrievalOutcomesForSession({ sessionId: session, transcriptPath: path });
+
+      assert.strictEqual(result.recorded, expected);
+    });
+  }
+});
+
+it('keeps timestamp ordering independent of the host timezone', () => {
+  for (const timezone of ['UTC', 'America/Chicago', 'Asia/Kolkata']) {
+    const result = spawnSync(process.execPath, ['--test', '--test-name-pattern=^timestamp ordering', import.meta.filename], {
+      env: { ...process.env, TZ: timezone }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.ifError(result.error);
+    assert.strictEqual(result.status, 0, `${timezone}: ${result.stdout}\n${result.stderr}`);
+  }
+});
+
 describe('recordRetrievalOutcomesForSession', () => {
   it('records helped only for explicit same-session doc use plus independent success', async () => {
     const db = getDb();
@@ -59,7 +135,7 @@ describe('recordRetrievalOutcomesForSession', () => {
     const result = await recordRetrievalOutcomesForSession({ transcriptPath: path });
 
     assert.strictEqual(result.recorded, 1);
-    const row = db.prepare('SELECT outcome, doc_id, doc_version, evidence_kind FROM retrieval_outcomes').get();
+    const row = db.prepare('SELECT outcome, doc_id, doc_version, evidence_kind FROM retrieval_outcomes WHERE doc_id = ?').get(docId);
     assert.deepStrictEqual(row, {
       outcome: OUTCOME.HELPED,
       doc_id: docId,
