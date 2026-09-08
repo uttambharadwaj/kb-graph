@@ -67,7 +67,7 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24, 25],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24, 25, 26],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
@@ -160,7 +160,7 @@ describe('purging meter rows the system logged for itself', () => {
     db.exec('DROP TABLE retrievals');
     // 17 and 20 add columns to the same table 6 creates, so dropping it
     // leaves all three pending — 6 to rebuild the table, then the columns.
-    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6, 17, 20]);
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [6, 17, 20, 26]);
   });
 });
 
@@ -182,7 +182,7 @@ describe('event identity and test-session flag on retrievals (migration 17)', ()
 
     // 20 rides along for the same reason: the hand-built table above predates
     // its column too.
-    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [17, 20]);
+    assert.deepStrictEqual(applyMigrations(db, KB_MIGRATIONS).map(m => m.version), [17, 20, 26]);
 
     assert.ok(hasColumn(db, 'retrievals', 'event_id'));
     assert.ok(hasColumn(db, 'retrievals', 'is_test'));
@@ -314,7 +314,6 @@ describe('migrating forward from an older schema', () => {
     assert.strictEqual(db.prepare('SELECT COUNT(*) c FROM embeddings').get().c, 1);
   });
 
-
   it('adds transcript harvest chunk checkpoints', () => {
     const db = current(KB_MIGRATIONS);
     db.exec('DROP TABLE harvest_chunk_log');
@@ -324,6 +323,21 @@ describe('migrating forward from an older schema', () => {
 
     assert.ok(hasTable(db, 'harvest_chunk_log'));
     assert.ok(hasIndex(db, 'uq_harvest_chunk_log_content'));
+  });
+
+  it('adds retrieval outcome feedback by document version', () => {
+    const db = current(KB_MIGRATIONS);
+    db.exec('DROP TABLE retrieval_outcomes');
+    db.exec('DROP INDEX IF EXISTS uq_retrieval_outcomes_evidence');
+    db.exec('ALTER TABLE retrievals DROP COLUMN doc_version');
+    assert.deepStrictEqual(pendingMigrations(db, KB_MIGRATIONS).map(m => m.version), [26]);
+
+    applyMigrations(db, KB_MIGRATIONS);
+
+    assert.ok(hasColumn(db, 'retrievals', 'doc_version'));
+    assert.ok(hasTable(db, 'retrieval_outcomes'));
+    assert.ok(hasIndex(db, 'uq_retrieval_outcomes_evidence'));
+    assert.ok(hasIndex(db, 'idx_retrieval_outcomes_doc_version'));
   });
 
   it('rebuilds bus readers while carrying their cursors forward', () => {

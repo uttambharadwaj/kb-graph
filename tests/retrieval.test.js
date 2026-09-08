@@ -135,6 +135,21 @@ describe('logRetrieval', () => {
     assert.strictEqual(db.prepare("SELECT is_test FROM retrievals WHERE query = 'is-test-null-session'").get().is_test, 0);
   });
 
+  it('snapshots the document version when the retrieval schema has the column', () => {
+    const db = getDb();
+    const columns = db.prepare('PRAGMA table_info(retrievals)').all().map(c => c.name);
+    if (!columns.includes('doc_version')) db.exec('ALTER TABLE retrievals ADD COLUMN doc_version TEXT');
+    const docId = db.prepare(`INSERT INTO documents (title, content, doc_type) VALUES ('versioned', 'x', 'note')`).run().lastInsertRowid;
+    db.prepare("INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type) VALUES ('versioned.md', 'hash-v1', ?, 'versioned', 'note')")
+      .run(docId);
+
+    logRetrieval({ docId, surface: 'kb_read', query: 'version snapshot', session: 'sess-version' });
+    db.prepare('UPDATE vault_files SET content_hash = ? WHERE document_id = ?').run('hash-v2', docId);
+
+    const row = db.prepare("SELECT doc_version FROM retrievals WHERE query = 'version snapshot'").get();
+    assert.strictEqual(row.doc_version, 'hash-v1');
+  });
+
   it('writes a miss row (doc_id NULL) when passed no docId', () => {
     const db = getDb();
     logRetrieval({ surface: 'kb_search', query: 'nothing matches this' });

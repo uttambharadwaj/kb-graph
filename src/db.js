@@ -11,6 +11,7 @@ import {
 import { logRetrievalResults } from './retrieval.js';
 import { canonicalPredicate } from './predicates.js';
 import { authoredBody } from './embeddings/embed.js';
+import { FTS_OUTCOME_TIE_BUCKET, compareByOutcomeSignal } from './outcome-ranking.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 
 let db = null;
@@ -782,6 +783,41 @@ export const MIGRATIONS = [{
     CREATE INDEX IF NOT EXISTS idx_harvest_chunk_log_transcript_pass
       ON harvest_chunk_log(transcript_path, pass);
   `),
+}, {
+  version: 26,
+  // Outcome feedback is tied to the exact note version the agent saw. A later
+  // edit can make an old success irrelevant, so retrieval rows store the version
+  // at read time and outcome rows keep that same version beside the evidence.
+  // This table is advisory ranking data only: it never writes document tiers.
+  name: 'retrieval outcome feedback by document version',
+  applied: db => hasColumn(db, 'retrievals', 'doc_version')
+    && hasTable(db, 'retrieval_outcomes')
+    && hasIndex(db, 'uq_retrieval_outcomes_evidence'),
+  up: db => {
+    addColumn(db, 'retrievals', 'doc_version', 'TEXT');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS retrieval_outcomes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        retrieval_id INTEGER REFERENCES retrievals(id) ON DELETE SET NULL,
+        doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        doc_version TEXT NOT NULL,
+        session TEXT,
+        event_id TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('helped', 'corrected', 'stale')),
+        evidence_kind TEXT NOT NULL,
+        evidence_ref TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(session, doc_id, doc_version, outcome, evidence_ref)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_retrieval_outcomes_evidence
+        ON retrieval_outcomes(session, doc_id, doc_version, outcome, evidence_ref);
+      CREATE INDEX IF NOT EXISTS idx_retrieval_outcomes_doc_version
+        ON retrieval_outcomes(doc_id, doc_version, outcome);
+      CREATE INDEX IF NOT EXISTS idx_retrieval_outcomes_retrieval
+        ON retrieval_outcomes(retrieval_id);
+    `);
+  },
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
@@ -984,6 +1020,18 @@ export function identityBoost(doc, terms) {
   return boost;
 }
 
+function preferOutcomeWithinRankBucket(results) {
+  const database = getDb();
+  return results.sort((a, b) => {
+    const bucket = Math.round((a.rank || 0) / FTS_OUTCOME_TIE_BUCKET)
+      - Math.round((b.rank || 0) / FTS_OUTCOME_TIE_BUCKET);
+    if (bucket) return bucket;
+    return tierRank(b.tier) - tierRank(a.tier)
+      || compareByOutcomeSignal(database, a, b)
+      || ((a.rank || 0) - (b.rank || 0));
+  });
+}
+
 function ftsSearch(query, limit, { tags, project, type, includeSuperseded }) {
   const { clauses, params } = tagFilterFor(tags ?? '', 'd.tags');
   if (project) {
@@ -1025,7 +1073,7 @@ function ftsSearch(query, limit, { tags, project, type, includeSuperseded }) {
       ORDER BY rank
       LIMIT ?
     `);
-    return preferConfirmed(stmt.all(sanitized, ...params, limit));
+    return preferOutcomeWithinRankBucket(stmt.all(sanitized, ...params, limit));
   }
 
   // Build FTS5 query: AND-first for precision, OR fallback for recall
@@ -1059,7 +1107,7 @@ function ftsSearch(query, limit, { tags, project, type, includeSuperseded }) {
     for (const r of results) r.rank = r.rank - identityBoost(r, terms);
   }
 
-  return preferConfirmed(results);
+  return preferOutcomeWithinRankBucket(results);
 }
 
 export function listDocuments({ type, tag, limit = 50, offset = 0, includeSuperseded = false } = {}) {
