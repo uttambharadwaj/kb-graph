@@ -29,14 +29,20 @@ export async function runReconcileCli(args = []) {
 
   if (args.includes('--queue')) {
     const snapshot = getReconciliationQueueSnapshot(options.db, options);
-    if (args.includes('--json')) return snapshot;
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(snapshot, null, 2));
+      return snapshot;
+    }
     console.log(`note supersession candidates: ${snapshot.note_supersession.length}`);
     console.log(`fact review candidates: ${snapshot.fact_review.length}`);
     return snapshot;
   }
 
   const result = await runReconciliation(options);
-  if (args.includes('--json')) return result;
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(result, null, 2));
+    return result;
+  }
   console.log(`reconciliation: ${result.applied} applied, ${result.abstained} abstained, ${result.stale} stale, ${result.already_applied} already applied, ${result.would_apply} dry-run`);
   return result;
 }
