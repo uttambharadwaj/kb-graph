@@ -195,6 +195,74 @@ describe('kb_context truth packet', () => {
     assert.ok(Number.isInteger(packet.history.superseded_notes[0].superseded_by));
   });
 
+  it('does not bind incidental generic entity tokens from a broad topic query', async () => {
+    addFact('agent', 'status', 'unrelated generic entity', { source: 'note:generic-agent' });
+    addFact('stale', 'status', 'unrelated stale entity', { source: 'note:generic-stale' });
+
+    const packet = await context('agent retrieval follow through stale plans correction');
+
+    assert.deepStrictEqual(packet.matched_entities.map(entity => entity.id), []);
+    assert.deepStrictEqual(packet.evidence.facts, []);
+    assert.deepStrictEqual(packet.unresolved.fact_groups, []);
+  });
+
+  it('keeps meaningful single-word entities in natural queries', async () => {
+    addFact('postgres', 'status', 'connection pooling owner set', { source: 'note:postgres' });
+
+    const packet = await context('Postgres connection pooling');
+
+    assert.deepStrictEqual(packet.matched_entities.map(entity => entity.id), ['postgres']);
+    assert.deepStrictEqual(packet.evidence.facts.map(fact => fact.object), ['connection pooling owner set']);
+  });
+
+  it('keeps meaningful single-word aliases in natural queries', async () => {
+    addFact('orion-service', 'status', 'deployed', { source: 'note:orion' });
+    getDb().prepare(
+      'INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)'
+    ).run('orion', 'orion_service');
+
+    const packet = await context('Orion deployment status');
+
+    assert.deepStrictEqual(packet.matched_entities.map(entity => entity.id), ['orion_service']);
+    assert.deepStrictEqual(packet.evidence.facts.map(fact => fact.object), ['deployed']);
+  });
+
+  it('keeps exact generic entity lookups explicit', async () => {
+    addFact('workstream', 'status', 'active', { source: 'note:generic-workstream' });
+
+    const packet = await context('agent');
+    assert.deepStrictEqual(packet.matched_entities.map(entity => entity.id), ['agent']);
+    assert.deepStrictEqual(packet.evidence.facts.map(fact => fact.object), ['unrelated generic entity']);
+
+    const fixedGenericPacket = await context('workstream');
+    assert.deepStrictEqual(fixedGenericPacket.matched_entities.map(entity => entity.id), ['workstream']);
+    assert.deepStrictEqual(fixedGenericPacket.evidence.facts.map(fact => fact.object), ['active']);
+  });
+
+  it('keeps exact generic aliases and concrete identifiers eligible', async () => {
+    addFact('retrieval-worker', 'status', 'ready', { source: 'note:retrieval-worker' });
+    addFact('status-probe', 'status', 'green', { source: 'note:status-probe' });
+    addFact('issue-4242', 'status', 'accepted', { source: 'note:issue-4242' });
+    getDb().prepare(
+      'INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)'
+    ).run('agent', 'retrieval_worker');
+    getDb().prepare(
+      'INSERT OR REPLACE INTO entity_aliases (alias, canonical) VALUES (?, ?)'
+    ).run('status', 'status_probe');
+
+    const aliasPacket = await context('agent');
+    assert.deepStrictEqual(aliasPacket.matched_entities.map(entity => entity.id), ['agent', 'retrieval_worker']);
+
+    const genericAliasPacket = await context('status');
+    assert.deepStrictEqual(genericAliasPacket.matched_entities.map(entity => entity.id), ['status_probe']);
+    assert.deepStrictEqual(genericAliasPacket.evidence.facts.map(fact => fact.object), ['green']);
+
+    const identifierPacket = await context('ISSUE-4242');
+    assert.deepStrictEqual(identifierPacket.matched_entities.map(entity => entity.id), ['issue_4242']);
+    assert.deepStrictEqual(identifierPacket.evidence.facts.map(fact => fact.object), ['accepted']);
+  });
+
+
   it('marks possible fact row omissions without counting unmeasured rows', async () => {
     const packet = await context('rowlimit service');
 
