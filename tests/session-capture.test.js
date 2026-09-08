@@ -257,7 +257,7 @@ describe('session capture queue', () => {
 
   it('completes a hook control request through the resident daemon asynchronously', async () => {
     const path = transcript('roundtrip.jsonl');
-    const dir = mkdtempSync(join('/private/tmp', 'kb-capture-sock-'));
+    const dir = mkdtempSync(join(tmpdir(), 'kb-capture-sock-'));
     scratch.push(dir);
     let harvestCalls = 0;
     const daemon = await startDaemon({
