@@ -5,12 +5,24 @@
 // process that started after the file changed.
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { z } from 'zod';
 
 const { MARKER } = await import(pathToFileURL(process.env.KB_TEST_MARKER).href);
 const text = (t) => ({ content: [{ type: 'text', text: t }] });
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+if (process.env.KB_TEST_CHILD_STARTED_DIR) {
+  mkdirSync(process.env.KB_TEST_CHILD_STARTED_DIR, { recursive: true });
+  writeFileSync(join(process.env.KB_TEST_CHILD_STARTED_DIR, `${MARKER}.started`), '');
+}
+
+const blockedMarkers = new Set((process.env.KB_TEST_READY_BLOCK_MARKERS || '').split(',').filter(Boolean));
+if (blockedMarkers.has(MARKER)) {
+  while (!existsSync(process.env.KB_TEST_READY_BLOCK)) await settle(10);
+}
 
 const server = new McpServer({ name: 'marker', version: '1.0.0' });
 
