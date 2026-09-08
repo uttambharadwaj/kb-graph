@@ -183,6 +183,12 @@ const COMMANDS = {
     valueEq: ['--since-hours', '--path'],
     run: a => import('../src/harvest.js').then(m => m.runHarvestCli(a)),
   },
+  'migrate-legacy': {
+    summary: 'Copy Claude memory, gstack, openspec, and spec files into the vault as native notes (--dry-run to preview; then run `kb vault reindex`)',
+    boolean: ['--dry-run'],
+    valueEq: ['--only', '--workspace'],
+    run: a => import('../src/cli/migrate-legacy.js').then(m => m.runMigrateLegacyCli(a)),
+  },
   'consolidate-state': {
     summary: 'Fold session notes into per-workstream state notes',
     boolean: ['--dry-run'],

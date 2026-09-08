@@ -1,0 +1,2 @@
+{"skill":"plan-eng-review","type":"architecture","key":"gateway-inmemory-cache-unnecessary","insight":"In-memory auth cache fallback creates cross-task invalidation complexity. Drop to Redis->MySQL->fail-closed.","confidence":9,"source":"inferred","files":["gateway/api/"],"ts":"2026-04-07T22:24:17.972Z"}
+{"skill":"review","type":"API: pitfall","key":"low-conf-item","insight":"Maybe true.","confidence":5,"source":"inferred","files":[],"ts":"2026-04-08T10:00:00Z"}

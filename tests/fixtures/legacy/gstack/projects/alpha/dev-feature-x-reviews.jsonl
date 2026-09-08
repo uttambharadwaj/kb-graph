@@ -1,0 +1,2 @@
+{"skill":"review","timestamp":"2026-06-08T18:29:33Z","status":"issues_found","issues_found":1,"critical":0,"informational":1,"commit":"60db054","findings":[{"fingerprint":"abc123","severity":"informational","action":"fixed"}]}
+{"skill":"review","timestamp":"2026-06-09T10:00:00Z","status":"clean","issues_found":0,"critical":0,"informational":0,"commit":"71ee055"}

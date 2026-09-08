@@ -292,6 +292,9 @@ kb migrate             Apply pending schema migrations (--dry-run to preview,
 kb register            Register MCP with Claude Code / Gemini / Cursor; prints the
                        config.toml block to paste for Codex
 kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
+kb migrate-legacy      One-shot copy of Claude memory, gstack, openspec, and
+                       spec files into the vault as native notes; originals
+                       untouched. --dry-run previews; follow with `kb vault reindex`
 kb consolidate-state   Fold session notes into workstream state notes
 kb vault reindex       Reindex the vault (embeddings included). A concurrent
                        note write is preserved and recorded in
