@@ -754,6 +754,34 @@ export const MIGRATIONS = [{
       SELECT RAISE(ABORT, 'review already contains its declared fact snapshot');
     END;
   `),
+}, {
+  version: 25,
+  // Transcript harvest used to summarize only the head and tail of long
+  // sessions, then mark the transcript complete. These checkpoints track the
+  // exact content spans that have actually been read, without storing transcript
+  // text. Offsets plus hashes let appended transcripts reuse completed prefix
+  // work while rewrites, truncation, or rotation are re-read.
+  name: 'content checkpoints for transcript harvest chunks',
+  applied: db => hasTable(db, 'harvest_chunk_log') && hasIndex(db, 'uq_harvest_chunk_log_content'),
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS harvest_chunk_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transcript_path TEXT NOT NULL,
+      pass TEXT NOT NULL CHECK (pass IN ('lessons', 'facts')),
+      chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+      start_char INTEGER NOT NULL CHECK (start_char >= 0),
+      end_char INTEGER NOT NULL CHECK (end_char >= start_char),
+      input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
+      completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      notes_added INTEGER,
+      facts_added INTEGER,
+      error_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_harvest_chunk_log_content
+      ON harvest_chunk_log(transcript_path, pass, chunk_index, start_char, end_char, input_hash);
+    CREATE INDEX IF NOT EXISTS idx_harvest_chunk_log_transcript_pass
+      ON harvest_chunk_log(transcript_path, pass);
+  `),
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
