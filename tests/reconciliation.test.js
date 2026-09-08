@@ -1,15 +1,20 @@
 import './helpers/tmp-kb.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { getDb, getDocument } from '../src/db.js';
 import { factReviewState } from '../src/fact-reviews.js';
 import { addFact } from '../src/facts.js';
 import { runReconcileCli } from '../src/cli/reconcile.js';
 import { RECONCILIATION_LOG_DIR, runReconciliation } from '../src/reconciliation.js';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const KB_BIN = join(ROOT, 'bin', 'kb.js');
 
 const db = getDb();
 let seq = 0;
@@ -43,6 +48,37 @@ function source(name, text) {
 function insertDoc({ title, content, tags = '', createdAt }) {
   return db.prepare('INSERT INTO documents (title, content, doc_type, tags, created_at) VALUES (?, ?, ?, ?, ?)')
     .run(title, content, 'note', tags, createdAt).lastInsertRowid;
+}
+
+function runKb(args, env = {}) {
+  return spawnSync(process.execPath, [KB_BIN, ...args], {
+    cwd: ROOT,
+    input: '',
+    encoding: 'utf8',
+    timeout: 30000,
+    env: {
+      ...process.env,
+      KB_SKIP_NODE_REEXEC: '1',
+      KB_DIR: process.env.KB_DIR,
+      OBSIDIAN_VAULT_PATH: process.env.OBSIDIAN_VAULT_PATH,
+      ...env,
+    },
+  });
+}
+
+async function captureLog(fn) {
+  const lines = [];
+  const original = console.log;
+  console.log = value => lines.push(String(value));
+  try {
+    return { value: await fn(), lines };
+  } finally {
+    console.log = original;
+  }
+}
+
+function parseOnlyJson(stdout) {
+  return JSON.parse(stdout);
 }
 
 function lineCount(path) {
@@ -329,12 +365,65 @@ describe('autonomous reconciliation', () => {
     assert.strictEqual(getDocument(stale).superseded_by, replacement);
   });
 
+  it('prints normal reconcile JSON exactly once through the top-level CLI', () => {
+    const result = runKb(['reconcile', '--dry-run', '--json', '--subject', 'NoSuchSubject', '--limit', '1']);
+
+    assert.strictEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.strictEqual(result.stderr, '');
+    const body = parseOnlyJson(result.stdout);
+    assert.deepStrictEqual(body, {
+      candidates: 0,
+      applied: 0,
+      abstained: 0,
+      stale: 0,
+      already_applied: 0,
+      would_apply: 0,
+      decisions: [],
+    });
+  });
+
+  it('prints queue JSON exactly once through the top-level CLI', () => {
+    addFact('Queuebin', 'status', 'GA', { source: source('queuebin-ga', 'Queuebin status is GA now.') });
+    addFact('Queuebin', 'status', 'beta', { source: source('queuebin-beta', 'Queuebin status was beta before launch.') });
+
+    const result = runKb(['reconcile', '--queue', '--json', '--limit', '1']);
+
+    assert.strictEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.strictEqual(result.stderr, '');
+    const body = parseOnlyJson(result.stdout);
+    assert.strictEqual(body.note_supersession.length, 0);
+    assert.strictEqual(body.fact_review.length, 1);
+    assert.strictEqual(body.fact_review[0].subject_name, 'Queuebin');
+  });
+
+  it('keeps invalid reconcile limits on the usage-error exit path', () => {
+    const result = runKb(['reconcile', '--json', '--limit', '-1']);
+
+    assert.strictEqual(result.status, 2);
+    assert.match(result.stderr, /--limit must be a non-negative integer/);
+    assert.match(result.stderr, /Usage: kb reconcile/);
+    assert.strictEqual(result.stdout, '');
+  });
+
+  it('keeps runtime failures on the general error exit path', () => {
+    const blockedKbDir = join(transcriptDir, 'not-a-directory');
+    writeFileSync(blockedKbDir, 'x');
+
+    const result = runKb(['reconcile', '--json', '--limit', '1'], { KB_DIR: blockedKbDir });
+
+    assert.strictEqual(result.status, 1);
+    assert.match(result.stderr, /ENOTDIR|not a directory/);
+    assert.strictEqual(result.stdout, '');
+  });
+
   it('exposes a bounded queue CLI without invoking the model', async () => {
     addFact('Queuebot', 'status', 'GA', { source: source('queue-ga', 'Queuebot status is GA now.') });
     addFact('Queuebot', 'status', 'beta', { source: source('queue-beta', 'Queuebot status was beta before launch.') });
 
-    const snapshot = await runReconcileCli(['--queue', '--json', '--limit', '1']);
+    const { value: snapshot, lines } = await captureLog(() => runReconcileCli(['--queue', '--json', '--limit', '1']));
 
+    assert.strictEqual(lines.length, 1);
+    assert.deepStrictEqual(JSON.parse(lines[0]), snapshot);
     assert.strictEqual(snapshot.note_supersession.length, 0);
     assert.strictEqual(snapshot.fact_review.length, 1);
     assert.strictEqual(snapshot.fact_review[0].subject_name, 'Queuebot');
