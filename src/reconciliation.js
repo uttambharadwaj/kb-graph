@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { getDb, setMeta, supersedeDocument } from './db.js';
 import { authoredBody } from './embeddings/embed.js';
-import { FactReviewError, factReviewState, reviewFactGroup } from './fact-reviews.js';
+import { FactReviewError, factReviewState, normalizeReviewItems, reviewFactGroup } from './fact-reviews.js';
 import { entityKey } from './facts.js';
 import { extractTranscriptText } from './harvest.js';
 import { LOGS_DIR } from './paths.js';
@@ -343,16 +343,6 @@ async function defaultDecideSupersession(candidate) {
   return runClaudeJSON(`You are deciding whether an old KB note should be superseded by a newer note. Return ONLY JSON {"action":"supersede|abstain","reason":"..."}. Supersede only when the quoted source excerpts explicitly support the change from old value to new value.\n\n${JSON.stringify(candidate, null, 2)}`, { caller: 'reconcile-supersession' });
 }
 
-function normalizeDecisionItems(items, assertions) {
-  if (!Array.isArray(items)) return [];
-  return items.map(item => ({
-      fact_id: item.fact_id,
-      disposition: item.disposition,
-      target_fact_id: item.target_fact_id ?? null,
-      reason: item.reason ?? null,
-  }));
-}
-
 function applyFactDecision(db, group, decisionItems, beforeSnapshot, { dryRun = false } = {}) {
   const live = currentFactsForGroup(db, group.subject_name, group.predicate);
   const nowSnapshot = groupSnapshot(live);
@@ -378,6 +368,7 @@ function applyFactDecision(db, group, decisionItems, beforeSnapshot, { dryRun = 
       const state = factReviewState(db, { subject: group.subject_name, predicate: group.predicate });
       return { outcome: 'already_applied', review_id: state.review_id };
     }
+    if (!(error instanceof FactReviewError)) throw error;
     return { outcome: 'abstained', reason: error.message };
   }
 }
@@ -439,8 +430,26 @@ async function reconcileFactGroup(db, group, paths, cache, options) {
   if (distinctSources.size !== group.assertions.length) {
     return { ...base, outcome: 'abstained', reason: 'each competing assertion must come from a distinct harvest source' };
   }
-  const rawDecision = await (options.decideFactGroup ?? defaultDecideFactGroup)({ ...base, assertions: group.assertions });
-  const items = normalizeDecisionItems(rawDecision.items, group.assertions);
+  let rawDecision;
+  try {
+    rawDecision = await (options.decideFactGroup ?? defaultDecideFactGroup)(safePayload({
+      ...base,
+      assertions: group.assertions.map(({ id, object_name, source }) => ({ id, object_name, source })),
+    }));
+  } catch (error) {
+    return { ...base, outcome: 'abstained', model_error: true, reason: `model call failed: ${error.message}` };
+  }
+  let items;
+  try {
+    const input = rawDecision && typeof rawDecision === 'object' && !Array.isArray(rawDecision)
+      ? rawDecision.items : null;
+    // Validate the complete response before equality checks or dry-run shortcuts.
+    items = normalizeReviewItems(input, group.assertions)
+      .map(({ evidence_ref: _source, ...item }) => safePayload(item));
+  } catch (error) {
+    if (!(error instanceof FactReviewError)) throw error;
+    return { ...base, outcome: 'abstained', reason: error.message };
+  }
   const result = applyFactDecision(db, group, items, beforeSnapshot, options);
   return { ...base, ...result, items };
 }
@@ -462,16 +471,68 @@ async function reconcileSupersession(db, candidate, paths, cache, options) {
     stale: documentSnapshot(db, candidate.note_id),
     replacement: documentSnapshot(db, candidate.suggested_replacement_id),
   };
-  const base = { ...candidate, evidence: { old: oldEvidence, change: changeEvidence }, snapshot: before };
+  const base = safePayload({
+    ...candidate,
+    evidence: { old: oldEvidence, change: changeEvidence },
+    snapshot: {
+      stale: { id: before.stale?.id, hash: hashJson(before.stale ?? null) },
+      replacement: { id: before.replacement?.id, hash: hashJson(before.replacement ?? null) },
+    },
+  });
   if (!oldEvidence.supported || !changeEvidence.supported) {
     return { ...base, outcome: 'abstained', reason: oldEvidence.reason || changeEvidence.reason };
   }
   if (candidate.retired_source === candidate.current_source) {
     return { ...base, outcome: 'abstained', reason: 'old and replacement facts must come from distinct harvest sources' };
   }
-  const decision = await (options.decideSupersession ?? defaultDecideSupersession)(base);
+  let rawDecision;
+  try {
+    rawDecision = await (options.decideSupersession ?? defaultDecideSupersession)(base);
+  } catch (error) {
+    return { ...base, outcome: 'abstained', model_error: true, reason: `model call failed: ${error.message}` };
+  }
+  if (!rawDecision || typeof rawDecision !== 'object' || Array.isArray(rawDecision)
+    || !['supersede', 'abstain'].includes(rawDecision.action)
+    || (rawDecision.reason != null && typeof rawDecision.reason !== 'string')) {
+    return { ...base, outcome: 'abstained', reason: 'invalid model supersession decision' };
+  }
+  const decision = safePayload({ action: rawDecision.action, reason: rawDecision.reason ?? null });
   const result = applySupersessionDecision(db, candidate, decision, before, options);
   return { ...base, ...result, decision };
+}
+
+// Only bounded source excerpts and review metadata leave this module. Full
+// document snapshots stay local for the optimistic-concurrency checks above.
+function safePayload(value, key = '') {
+  if (typeof value === 'string') {
+    if (['id', 'fact_id', 'target_fact_id'].includes(key)) return value;
+    return redactSecrets(value).slice(0, EXCERPT_CHARS);
+  }
+  if (Array.isArray(value)) return value.map(item => safePayload(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([name]) => name !== 'transcript_path')
+    .map(([name, item]) => [name, safePayload(item, name)]));
+}
+
+function putMeta(db, key, value) {
+  db.prepare('INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP').run(key, value);
+}
+
+function noteAcknowledgementKey(candidate) {
+  return `reconcile_note_done:${candidate.note_id}:${candidate.suggested_replacement_id}`;
+}
+
+function reconciliationQueue(db, { predicate, subject, since }) {
+  const acknowledged = db.prepare('SELECT 1 FROM meta WHERE key = ?');
+  const superseded = db.prepare('SELECT superseded_by FROM documents WHERE id = ?');
+  const notes = supersessionEvidenceCandidates(db, { since, limit: Infinity })
+    .filter(candidate => !acknowledged.get(noteAcknowledgementKey(candidate))
+      || superseded.get(candidate.note_id)?.superseded_by !== candidate.suggested_replacement_id)
+    .map(candidate => ({ kind: 'note_supersession', key: `0:${candidate.note_id}:${candidate.suggested_replacement_id}`, candidate }));
+  const facts = factGroups(db, { predicate, subject })
+    .map(candidate => ({ kind: 'fact_review', key: `1:${candidate.subject}:${candidate.predicate}`, candidate }));
+  return [...notes, ...facts].sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 }
 
 export async function runReconciliation({
@@ -493,18 +554,32 @@ export async function runReconciliation({
     const decisions = [];
     const options = { dryRun, decideFactGroup, decideSupersession };
 
-    for (const candidate of supersessionEvidenceCandidates(db, { since, limit: max })) {
-      if (decisions.length >= max) break;
-      const decision = await reconcileSupersession(db, candidate, paths, cache, options);
-      decisions.push({ decided_at: now, ...decision });
+    const cursorKey = `reconcile_cursor:${hashJson([predicate, subject, since])}`;
+    const cursor = db.prepare('SELECT value FROM meta WHERE key = ?').get(cursorKey)?.value;
+    const queue = reconciliationQueue(db, { predicate, subject, since });
+    const next = cursor ? queue.findIndex(item => item.key > cursor) : 0;
+    const start = next < 0 ? 0 : next;
+    const selected = [...queue.slice(start), ...queue.slice(0, start)].slice(0, max);
+    for (const entry of selected) {
+      const decision = entry.kind === 'note_supersession'
+        ? await reconcileSupersession(db, entry.candidate, paths, cache, options)
+        : await reconcileFactGroup(db, entry.candidate, paths, cache, options);
+      decisions.push(safePayload({ decided_at: now, ...decision }));
       appendDecision(decisions.at(-1), logPath);
+      if (!dryRun) {
+        // A failed append must leave this candidate eligible for crash recovery.
+        db.transaction(() => {
+          putMeta(db, cursorKey, entry.key);
+          if (entry.kind === 'note_supersession' && ['applied', 'already_applied'].includes(decision.outcome)) {
+            putMeta(db, noteAcknowledgementKey(entry.candidate), '1');
+          }
+        }).immediate();
+      }
     }
 
-    for (const group of factGroups(db, { predicate, subject })) {
-      if (decisions.length >= max) break;
-      const decision = await reconcileFactGroup(db, group, paths, cache, options);
-      decisions.push({ decided_at: now, ...decision });
-      appendDecision(decisions.at(-1), logPath);
+    const modelErrors = decisions.filter(decision => decision.model_error);
+    if (modelErrors.length) {
+      throw new Error(modelErrors.map(decision => decision.reason).join('; '));
     }
 
     const count = outcome => decisions.filter(decision => decision.outcome === outcome).length;
