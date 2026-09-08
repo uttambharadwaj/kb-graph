@@ -59,9 +59,13 @@ export function getBusNotifierPidPath({ agent, cwd }) {
 
 export function readBusNotifierPid({ agent, cwd }) {
   const path = getBusNotifierPidPath({ agent, cwd });
-  if (!existsSync(path)) return null;
-  const value = Number.parseInt(readFileSync(path, 'utf8').trim(), 10);
-  return Number.isFinite(value) && value > 0 ? value : null;
+  try {
+    const value = Number.parseInt(readFileSync(path, 'utf8').trim(), 10);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 export function writeBusNotifierPid({ agent, cwd, pid }) {
