@@ -202,7 +202,7 @@ export function extractTranscriptText(raw) {
       text = blocksToText(obj.message.content);
     }
 
-    if (role && text.trim() && !text.startsWith('<system-reminder>')) {
+    if ((role === 'user' || role === 'assistant') && text.trim() && !text.startsWith('<system-reminder>')) {
       parts.push(`${role.toUpperCase()}: ${text.trim()}`);
     }
   }
@@ -259,6 +259,32 @@ function recordChunkComplete(db, { transcriptPath, pass, chunk, notes = null, fa
       (transcript_path, pass, chunk_index, start_char, end_char, input_hash, notes_added, facts_added)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(transcriptPath, pass, chunk.index, chunk.start, chunk.end, chunk.hash, notes, facts);
+}
+
+function validateLessonsResponse(response) {
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('lessons response must be a JSON object');
+  }
+  if (!Object.hasOwn(response, 'notes') || !Array.isArray(response.notes)) {
+    throw new Error('lessons response must include a notes array');
+  }
+  for (const note of response.notes) {
+    if (!note || typeof note !== 'object' || Array.isArray(note)) {
+      throw new Error('lesson notes must be objects');
+    }
+    if (typeof note.title !== 'string' || !note.title.trim()) {
+      throw new Error('lesson note title must be a non-empty string');
+    }
+    if (typeof note.content !== 'string' || !note.content.trim()) {
+      throw new Error('lesson note content must be a non-empty string');
+    }
+    for (const field of ['type', 'tags', 'project']) {
+      if (note[field] != null && typeof note[field] !== 'string') {
+        throw new Error(`lesson note ${field} must be a string when present`);
+      }
+    }
+  }
+  return response.notes;
 }
 
 function completedChunkTotal(db, transcriptPath, pass, column) {
@@ -445,7 +471,7 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
     let ok = false;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        ({ notes = [] } = await runClaudeJSON(lessonsPrompt, { timeout: 120000, caller: 'harvest' }));
+        notes = validateLessonsResponse(await runClaudeJSON(lessonsPrompt, { timeout: 120000, caller: 'harvest' }));
         ok = true;
         break;
       } catch (err) {

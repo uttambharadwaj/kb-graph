@@ -31,6 +31,27 @@ writeFileSync(stub, [
   "try { prior = readFileSync(counterPath, 'utf8'); } catch {}",
   "const n = Number.parseInt(prior || '0', 10) + 1;",
   "writeFileSync(counterPath, `${n}`);",
+  "const reply = payload => process.stdout.write(JSON.stringify({ result: JSON.stringify(payload) }));",
+  `const retryPath = ${JSON.stringify(`${counter}.retry`)};`,
+  "if (prompt.includes('HARVEST_RETRY_THEN_VALID')) {",
+  "  let priorRetry = '0';",
+  "  try { priorRetry = readFileSync(retryPath, 'utf8'); } catch {}",
+  "  const retryN = Number.parseInt(priorRetry || '0', 10) + 1;",
+  "  writeFileSync(retryPath, `${retryN}`);",
+  "  const validNote = { title: 'Retry sentinel', type: 'lesson', content: 'HARVEST_RETRY_THEN_VALID was covered.', tags: 'test', project: 'kb-graph' };",
+  "  reply(retryN === 1 ? { notes: [{}] } : { notes: [validNote] });",
+  "  process.exit(0);",
+  "}",
+  "const malformed = [",
+  "  ['HARVEST_BAD_OBJECT_EMPTY', {}],",
+  "  ['HARVEST_BAD_ARRAY', []],",
+  "  ['HARVEST_BAD_ZERO', 0],",
+  "  ['HARVEST_BAD_NOTES_STRING', { notes: 'text' }],",
+  "  ['HARVEST_BAD_NOTE_EMPTY', { notes: [{}] }],",
+  "];",
+  "for (const [marker, payload] of malformed) {",
+  "  if (prompt.includes(marker)) { reply(payload); process.exit(0); }",
+  "}",
   // Long enough that no two harvest runs in this file reuse one: 8 chunks a run
   // (MAX_CONCURRENT_CALLS) plus a lessons call, three runs. A repeat would land
   // as a duplicate and the fact count would stop moving for the wrong reason.
@@ -38,7 +59,7 @@ writeFileSync(stub, [
   'const predicate = predicates[(n - 1) % predicates.length];',
   'const notes = prompt.includes("MIDDLE_SENTINEL") ? [{ title: "Middle sentinel", type: "lesson", content: "MIDDLE_SENTINEL was covered.", tags: "test", project: "knowledge-base-server" }] : [];',
   'const inner = { notes, facts: [{ subject: "billing service", predicate, object: "payments team", category: "status" }], skipped: [] };',
-  'process.stdout.write(JSON.stringify({ result: JSON.stringify(inner) }));',
+  'reply(inner);',
 ].join('\n') + '\n');
 chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
@@ -84,6 +105,42 @@ describe('harvest transcript parsing', () => {
       payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'codex says hi' }] },
     });
     assert.match(extractTranscriptText(raw), /ASSISTANT: codex says hi/);
+  });
+
+  it('keeps only user and assistant text from modern Codex response items', () => {
+    const raw = [
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'internal routing preamble' }] },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'system', content: [{ type: 'input_text', text: 'system policy' }] },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'please fix capture' }] },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'capture is fixed' }] },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'function_call', name: 'shell', arguments: '{"cmd":"npm test"}' },
+      },
+      {
+        type: 'response_item',
+        payload: { type: 'function_call_output', output: 'developer-like output' },
+      },
+    ].map(line => JSON.stringify(line)).join('\n');
+
+    const text = extractTranscriptText(raw);
+    assert.match(text, /USER: please fix capture/);
+    assert.match(text, /ASSISTANT: capture is fixed/);
+    assert.doesNotMatch(text, /internal routing preamble/);
+    assert.doesNotMatch(text, /system policy/);
+    assert.doesNotMatch(text, /developer-like output/);
   });
 
   it('extracts Cursor agent transcript turns (top-level role, no type)', () => {
@@ -653,6 +710,60 @@ describe('harvest candidate selection', () => {
     assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 4);
     assert.ok(getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path));
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('retries malformed lesson responses and checkpoints only after a valid response', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'retry-valid.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'HARVEST_RETRY_THEN_VALID '.repeat(400) }] } }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ onlyPath: path });
+
+    assert.strictEqual(summary.errors, 0);
+    assert.strictEqual(summary.lessonErrors, 0);
+    assert.strictEqual(summary.notes, 1);
+    assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 1);
+    assert.ok(getDb().prepare("SELECT 1 FROM documents WHERE title = 'Retry sentinel'").get());
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not checkpoint parseable but malformed lesson responses', async () => {
+    const cases = [
+      'HARVEST_BAD_OBJECT_EMPTY',
+      'HARVEST_BAD_ARRAY',
+      'HARVEST_BAD_ZERO',
+      'HARVEST_BAD_NOTES_STRING',
+      'HARVEST_BAD_NOTE_EMPTY',
+    ];
+    for (const marker of cases) {
+      const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+      const path = join(root, `${marker}.jsonl`);
+      writeTranscript(path, [
+        JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+        JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: `${marker} `.repeat(400) }] } }),
+      ].join('\n'));
+
+      const summary = await runHarvest({ onlyPath: path });
+
+      assert.strictEqual(summary.errors, 1, marker);
+      assert.strictEqual(summary.lessonErrors, 1, marker);
+      assert.strictEqual(summary.notes, 0, marker);
+      assert.strictEqual(summary.coverageComplete, false, marker);
+      assert.strictEqual(
+        getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n,
+        0,
+        marker,
+      );
+      assert.strictEqual(
+        getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path),
+        undefined,
+        marker,
+      );
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('resumes fact extraction after the per-run chunk cap', async () => {
