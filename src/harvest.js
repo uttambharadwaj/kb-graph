@@ -89,6 +89,7 @@ export function buildLessonsPrompt(text) {
 // real work.
 const PRINT_MODE_ENTRYPOINT = 'sdk-cli';
 const ENTRYPOINT_SCAN_BYTES = 65536;
+const HARVEST_CURSOR_META_KEY = 'harvest_backfill_cursor_path';
 const headBuffer = Buffer.allocUnsafe(ENTRYPOINT_SCAN_BYTES); // reused: this is synchronous and not reentrant
 
 export function isPrintModeTranscript(path) {
@@ -98,6 +99,21 @@ export function isPrintModeTranscript(path) {
     const read = readSync(fd, headBuffer, 0, headBuffer.length, 0);
     const found = headBuffer.toString('utf8', 0, read).match(/"entrypoint"\s*:\s*"([^"]*)"/);
     return found?.[1] === PRINT_MODE_ENTRYPOINT;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* already gone */ }
+  }
+}
+
+export function isActualSubagentTranscript(path) {
+  let fd;
+  try {
+    fd = openSync(path, 'r');
+    const read = readSync(fd, headBuffer, 0, headBuffer.length, 0);
+    const head = headBuffer.toString('utf8', 0, read);
+    return /"thread_source"\s*:\s*"subagent"/.test(head)
+      || /"source"\s*:\s*\{\s*"subagent"\s*:\s*\{\s*"thread_spawn"/.test(head);
   } catch {
     return false;
   } finally {
@@ -142,7 +158,7 @@ export function findTranscripts({ sinceMs, searchRoots, homeDir = homedir() }) {
     for (const path of walkJsonl(root)) {
       try {
         const mtime = statSync(path).mtimeMs;
-        if (mtime >= sinceMs) out.push({ path, mtime });
+        if (sinceMs === undefined || mtime >= sinceMs) out.push({ path, mtime });
       } catch { /* raced deletion */ }
     }
   }
@@ -269,21 +285,26 @@ function hasCompleteCoverage(db, transcriptPath, text, wantFacts) {
   return facts.pending === 0;
 }
 
-function isHistoricalBackfillCandidate(db, transcriptPath, wantFacts) {
-  if (!existsSync(transcriptPath)) return false;
-  if (!harvestsPrintModeSessions() && isPrintModeTranscript(transcriptPath)) return false;
-  const text = extractTranscriptText(readFileSync(transcriptPath, 'utf-8'));
-  if (text.length < MIN_TEXT_CHARS) return false;
-  const lessonChunks = chunkTextWithIdentity(text, { size: LESSON_CHARS });
-  const factChunks = chunkTextWithIdentity(text, { size: CHUNK_CHARS });
-  if (lessonChunks.length <= 1 && (!wantFacts || factChunks.length <= 1)) return false;
-  return !hasCompleteCoverage(db, transcriptPath, text, wantFacts);
+function isHarvestableTranscript(path) {
+  return (harvestsPrintModeSessions() || !isPrintModeTranscript(path))
+    && !isActualSubagentTranscript(path);
 }
 
-function findHistoricalBackfillCandidates(db, seenPaths, wantFacts) {
-  let rows;
+function isHistoricalBackfillCandidate(db, transcriptPath, wantFacts) {
   try {
-    rows = db.prepare(`
+    if (!existsSync(transcriptPath)) return false;
+    if (!isHarvestableTranscript(transcriptPath)) return false;
+    const text = extractTranscriptText(readFileSync(transcriptPath, 'utf-8'));
+    if (text.length < MIN_TEXT_CHARS) return false;
+    return !hasCompleteCoverage(db, transcriptPath, text, wantFacts);
+  } catch {
+    return false;
+  }
+}
+
+function historicalBackfillRows(db) {
+  try {
+    return db.prepare(`
       SELECT transcript_path, mtime
       FROM harvest_log
       ORDER BY harvested_at, transcript_path
@@ -292,15 +313,87 @@ function findHistoricalBackfillCandidates(db, seenPaths, wantFacts) {
   } catch {
     return [];
   }
-  const out = [];
-  for (const row of rows) {
-    if (seenPaths.has(row.transcript_path)) continue;
-    if (!isHistoricalBackfillCandidate(db, row.transcript_path, wantFacts)) continue;
-    try {
-      out.push({ path: row.transcript_path, mtime: statSync(row.transcript_path).mtimeMs, historicalBackfill: true });
-    } catch { /* raced deletion */ }
+}
+
+function compareCandidate(a, b) {
+  return a.mtime - b.mtime || a.path.localeCompare(b.path);
+}
+
+function readHarvestCursor(db) {
+  const value = db.prepare('SELECT value FROM meta WHERE key = ?').get(HARVEST_CURSOR_META_KEY)?.value;
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed?.path === 'string' && Number.isFinite(parsed.mtime)) return parsed;
+  } catch {
+    // Older installs stored only the path. Fall back to exact-path rotation.
   }
-  return out;
+  return { path: value, mtime: null };
+}
+
+function rotateAfterCursor(items, cursor) {
+  if (!cursor) return items;
+  if (Number.isFinite(cursor.mtime)) {
+    const successor = items.findIndex(candidate => compareCandidate(candidate, cursor) > 0);
+    return successor >= 0
+      ? [...items.slice(successor), ...items.slice(0, successor)]
+      : items;
+  }
+  const cursorIndex = items.findIndex(candidate => candidate.path === cursor.path);
+  return cursorIndex >= 0
+    ? [...items.slice(cursorIndex + 1), ...items.slice(0, cursorIndex + 1)]
+    : items;
+}
+
+function historicalBackfillMetadata(db, seenPaths, discovered = []) {
+  const rows = new Map();
+  for (const row of historicalBackfillRows(db)) rows.set(row.transcript_path, row);
+  for (const item of discovered) {
+    if (!seenPaths.has(item.path)) rows.set(item.path, item);
+  }
+  return [...rows.values()].flatMap(row => {
+    const transcriptPath = row.transcript_path || row.path;
+    if (seenPaths.has(transcriptPath)) return [];
+    try {
+      const mtime = statSync(transcriptPath).mtimeMs;
+      if (isInFlight(mtime) || !isHarvestableTranscript(transcriptPath)) return [];
+      return [{ path: transcriptPath, mtime, historicalBackfill: true }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function selectHarvestWork(db, recentCandidates, historicalCandidates, wantFacts, { dryRun = false } = {}) {
+  const ordered = [...recentCandidates, ...historicalCandidates].sort(compareCandidate);
+  if (ordered.length <= MAX_SESSIONS_PER_RUN && historicalCandidates.length === 0) {
+    return { work: ordered, pending: ordered.length };
+  }
+
+  const work = [];
+  const historicalPending = [];
+  let checkedHistorical = 0;
+  let cursorCandidate = null;
+  let cursorLockedToHistorical = false;
+  for (const candidate of rotateAfterCursor(ordered, readHarvestCursor(db))) {
+    if (work.length >= MAX_SESSIONS_PER_RUN) break;
+    if (candidate.historicalBackfill) {
+      if (checkedHistorical >= MAX_SESSIONS_PER_RUN) continue;
+      checkedHistorical++;
+      cursorCandidate = candidate;
+      cursorLockedToHistorical = true;
+      if (!isHistoricalBackfillCandidate(db, candidate.path, wantFacts)) continue;
+      historicalPending.push(candidate);
+    } else {
+      if (!cursorLockedToHistorical) cursorCandidate = candidate;
+    }
+    work.push(candidate);
+  }
+
+  if (!dryRun && cursorCandidate) {
+    setMeta(HARVEST_CURSOR_META_KEY, JSON.stringify({ path: cursorCandidate.path, mtime: cursorCandidate.mtime }));
+  }
+  return { work: work.sort(compareCandidate), pending: recentCandidates.length + historicalPending.length };
 }
 
 // --- per-session harvest ----------------------------------------------------
@@ -421,36 +514,42 @@ export function stillPending(db, candidates, wantFacts) {
 export const selectWork = candidates =>
   [...candidates].sort((a, b) => a.mtime - b.mtime).slice(0, MAX_SESSIONS_PER_RUN);
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, recordOutcomes = null, maintenance = true, runMaintenance = null } = {}) {
+export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, recordOutcomes = null, maintenance = true, runMaintenance = null, harvestOne = harvestTranscript } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
 
   // An explicit --path is an instruction, not a sweep: run it whatever the
   // watermark says, and whatever wrote it.
-  let candidates, printModeCalls = 0, inFlight = 0;
+  let candidates, work = null, pending = 0, printModeCalls = 0, inFlight = 0;
   if (onlyPath) {
     candidates = [{ path: onlyPath, mtime: statSync(onlyPath).mtimeMs, sessionId }];
   } else {
-    const found = findTranscripts({ sinceMs: Date.now() - sinceHours * 3600 * 1000, searchRoots });
-    const sessions = harvestsPrintModeSessions() ? found : found.filter(t => !isPrintModeTranscript(t.path));
-    printModeCalls = found.length - sessions.length;
+    const sinceMs = Date.now() - sinceHours * 3600 * 1000;
+    const allFound = findTranscripts({ searchRoots });
+    const found = allFound.filter(t => t.mtime >= sinceMs);
+    const userSessions = found.filter(t => !isActualSubagentTranscript(t.path));
+    const sessions = userSessions.filter(t => harvestsPrintModeSessions() || !isPrintModeTranscript(t.path));
+    printModeCalls = userSessions.length - sessions.length;
     const quiet = sessions.filter(t => !isInFlight(t.mtime));
     inFlight = sessions.length - quiet.length;
     candidates = stillPending(db, quiet, wantFacts);
     const seenPaths = new Set([...found.map(t => t.path), ...candidates.map(t => t.path)]);
-    candidates.push(...findHistoricalBackfillCandidates(db, seenPaths, wantFacts));
+    const historical = historicalBackfillMetadata(db, seenPaths, allFound.filter(t => t.mtime < sinceMs));
+    ({ work, pending } = selectHarvestWork(db, candidates, historical, wantFacts, { dryRun }));
   }
 
-  const pending = candidates.length;
-  const work = selectWork(candidates);
+  if (work === null) {
+    work = selectWork(candidates);
+    pending = candidates.length;
+  }
 
-  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, pending, tooShort: 0, partial: 0, contested: 0,
+  const summary = { sessions: 0, facts: 0, notes: 0, errors: 0, transcriptErrors: 0, chunkErrors: 0, lessonErrors: 0, pending, tooShort: 0, partial: 0, contested: 0,
     unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false,
     notReached: pending - work.length, printModeCalls, inFlight };
   for (const { path, mtime, sessionId: candidateSessionId = null } of work) {
     try {
-      const r = await harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts, db });
+      const r = await harvestOne(path, mtime, { vaultPath, dryRun, facts: wantFacts, db });
       if (r.skipped) {
         summary.tooShort++;
         // Watermark short sessions too — no point re-reading them nightly.
@@ -460,8 +559,11 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       summary.sessions++;
       summary.facts += r.facts;
       summary.notes += r.notes;
-      summary.errors += (r.chunkErrors || 0) + (r.lessonErrors || 0);
-      if (!dryRun && r.coverageComplete && !r.chunkErrors && !r.lessonErrors) {
+      summary.chunkErrors += r.chunkErrors || 0;
+      summary.lessonErrors += r.lessonErrors || 0;
+      const recoverableErrors = (r.chunkErrors || 0) + (r.lessonErrors || 0);
+      summary.errors += recoverableErrors;
+      if (!dryRun && r.coverageComplete && recoverableErrors === 0) {
         // NULL facts_added means extraction did not run, which is what lets a
         // later --facts pass pick this transcript up again. 0 means it ran and
         // found none, and is final.
@@ -494,6 +596,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
       summary.contested += r.contested;
       console.log(`${basename(path)}: ${factPart}${r.notes} notes${gaps.map(g => `, ${g}`).join('')}${r.contested ? `, ${r.contested} contested pairs` : ''}${r.chunkErrors ? `, ${r.chunkErrors} chunk errors` : ''}${r.lessonErrors ? ', lessons extraction failed' : ''}${dryRun ? ' (dry run)' : ''}`);
     } catch (err) {
+      summary.transcriptErrors++;
       summary.errors++;
       console.error(`${basename(path)}: ${err.message}`);
       // No watermark update — retried next run.
@@ -501,7 +604,7 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   }
 
   const doneFacts = wantFacts ? `${summary.facts} facts, ` : 'fact extraction off, ';
-  console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors`);
+  console.log(`Harvest done: ${summary.sessions} sessions, ${doneFacts}${summary.notes} notes, ${summary.errors} errors (${summary.transcriptErrors} transcript, ${summary.chunkErrors} chunk, ${summary.lessonErrors} lessons)`);
   // Everything the run passed over, so the totals account for the whole queue.
   if (summary.tooShort) console.log(`${summary.tooShort} sessions too short to harvest`);
   if (summary.partial) console.log(`${summary.partial} sessions were only partly read — see the per-session lines above`);
@@ -514,7 +617,10 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
   // stays current nightly without a separate job. Capture-only lifecycle calls
   // pass maintenance=false because their caller only needs this transcript's
   // coverage result and receipt state.
-  if (!dryRun) setMeta('last_harvest', String(summary.sessions));
+  if (!dryRun) {
+    setMeta('last_harvest', String(summary.sessions));
+    setMeta('last_harvest_errors', String(summary.errors));
+  }
   if (!dryRun && maintenance) {
     if (runMaintenance) {
       await runMaintenance({ vaultPath });

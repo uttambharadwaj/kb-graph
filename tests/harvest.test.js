@@ -112,6 +112,7 @@ describe('harvest candidate selection', () => {
     return path;
   };
   const writeTranscript = (path, lines) => quiesce((writeFileSync(path, lines), path));
+  const resetHarvestBackfillCursor = () => getDb().prepare("DELETE FROM meta WHERE key = 'harvest_backfill_cursor_path'").run();
 
   const jsonl = (name, lines) => {
     const path = join(tmp, name);
@@ -192,6 +193,343 @@ describe('harvest candidate selection', () => {
   it('leaves a shorter queue alone', () => {
     const candidates = Array.from({ length: 4 }, (_, i) => ({ path: `/t/${i}.jsonl`, mtime: i }));
     assert.strictEqual(selectWork(candidates).length, 4);
+  });
+
+  it('makes bounded progress on old never-watermarked Codex transcripts even under recent traffic', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const longCodexMessage = (text) => JSON.stringify({
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+    });
+    const writeAt = (name, text, secondsAgo) => {
+      const path = join(root, name);
+      writeFileSync(path, longCodexMessage(text));
+      const at = (Date.now() - secondsAgo * 1000) / 1000;
+      utimesSync(path, at, at);
+      return path;
+    };
+
+    const old = writeAt('rollout-2026-09-08T00-00-00-old-codex.jsonl', 'old codex session. '.repeat(400), 3 * 60 * 60);
+    for (let i = 0; i < MAX_SESSIONS_PER_RUN + 5; i++) {
+      writeAt(`rollout-2026-09-10T00-00-${String(i).padStart(2, '0')}-recent-codex.jsonl`, `recent codex session ${i}. `.repeat(400), 45 * 60);
+    }
+
+    const calls = [];
+    const summary = await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        calls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+
+    assert.strictEqual(calls.length, MAX_SESSIONS_PER_RUN, 'backfill must stay bounded by the normal per-run cap');
+    assert.ok(calls.includes(old), 'an old never-watermarked Codex transcript must not age out forever behind recent traffic');
+    assert.strictEqual(summary.notReached, 6, 'recent overflow remains for later runs instead of expanding the work cap');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('rotates through old never-watermarked Codex transcripts after partial progress', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const writeAt = (index) => {
+      const path = join(root, `rollout-2026-09-08T00-01-${String(index).padStart(2, '0')}-old-codex.jsonl`);
+      writeFileSync(path, JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `old codex partial ${index}. `.repeat(400) }] },
+      }));
+      const at = (Date.now() - (3 * 60 * 60 + index) * 1000) / 1000;
+      utimesSync(path, at, at);
+      return path;
+    };
+    const paths = Array.from({ length: MAX_SESSIONS_PER_RUN + 5 }, (_, i) => writeAt(i));
+
+    const firstCalls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        firstCalls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 1, unreadByFacts: 0, coverageComplete: false, coveragePending: 1, partialProgress: true };
+      },
+    });
+    assert.strictEqual(firstCalls.length, MAX_SESSIONS_PER_RUN);
+
+    const secondCalls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        secondCalls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+
+    const firstCallSet = new Set(firstCalls);
+    const unvisited = paths.filter(path => !firstCallSet.has(path));
+    assert.ok(
+      unvisited.some(path => secondCalls.includes(path)),
+      'old backfill must make fair progress beyond the first fixed prefix when prior old work stays partial',
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('bounds historical coverage checks and resumes past completed old transcripts', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    resetHarvestBackfillCursor();
+    const db = getDb();
+    const writeOldCodex = (name, text, index) => {
+      const path = join(root, name);
+      const raw = JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+      });
+      writeFileSync(path, raw);
+      const at = (Date.now() - (5 * 60 * 60 - index) * 1000) / 1000;
+      utimesSync(path, at, at);
+      return { path, mtime: statSync(path).mtimeMs, text: extractTranscriptText(raw) };
+    };
+    const markComplete = ({ path, mtime, text }) => {
+      const [chunk] = chunkTextWithIdentity(text, { size: 26000 });
+      db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, NULL, 0)').run(path, mtime);
+      db.prepare(`
+        INSERT OR IGNORE INTO harvest_chunk_log
+          (transcript_path, pass, chunk_index, start_char, end_char, input_hash, notes_added, facts_added)
+        VALUES (?, 'lessons', ?, ?, ?, ?, 0, NULL)
+      `).run(path, chunk.index, chunk.start, chunk.end, chunk.hash);
+    };
+
+    const completed = Array.from({ length: MAX_SESSIONS_PER_RUN + 5 }, (_, i) =>
+      writeOldCodex(`rollout-2026-09-08T00-03-${String(i).padStart(2, '0')}-complete.jsonl`, `completed old session ${i}. `.repeat(400), i));
+    for (const row of completed) markComplete(row);
+    const eligible = writeOldCodex(
+      `rollout-2026-09-08T00-04-${String(MAX_SESSIONS_PER_RUN + 5).padStart(2, '0')}-eligible.jsonl`,
+      'eligible old session. '.repeat(400),
+      MAX_SESSIONS_PER_RUN + 5,
+    );
+
+    const firstCalls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        firstCalls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+    assert.deepStrictEqual(firstCalls, [], 'completed historical rows must not all be full-checked until an eligible tail is found');
+
+    const secondCalls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        secondCalls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+    assert.deepStrictEqual(secondCalls, [eligible.path], 'the scan cursor must resume beyond completed old rows on the next run');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('continues old backfill at the successor when a saved cursor path has disappeared', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    resetHarvestBackfillCursor();
+    const db = getDb();
+    const writeOldCodex = (index) => {
+      const path = join(root, `rollout-2026-09-08T00-05-${String(index).padStart(2, '0')}.jsonl`);
+      const raw = JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `old cursor successor ${index}. `.repeat(400) }] },
+      });
+      writeFileSync(path, raw);
+      const at = (Date.now() - (4 * 60 * 60 - index) * 1000) / 1000;
+      utimesSync(path, at, at);
+      return { path, mtime: statSync(path).mtimeMs, text: extractTranscriptText(raw) };
+    };
+    const markComplete = ({ path, mtime, text }) => {
+      const [chunk] = chunkTextWithIdentity(text, { size: 26000 });
+      db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, NULL, 0)').run(path, mtime);
+      db.prepare(`
+        INSERT OR IGNORE INTO harvest_chunk_log
+          (transcript_path, pass, chunk_index, start_char, end_char, input_hash, notes_added, facts_added)
+        VALUES (?, 'lessons', ?, ?, ?, ?, 0, NULL)
+      `).run(path, chunk.index, chunk.start, chunk.end, chunk.hash);
+    };
+
+    const prefix = Array.from({ length: MAX_SESSIONS_PER_RUN }, (_, i) => writeOldCodex(i));
+    for (const row of prefix) markComplete(row);
+    const successor = writeOldCodex(MAX_SESSIONS_PER_RUN);
+    const missingCursor = join(root, 'rollout-2026-09-08T00-05-29-gone.jsonl');
+    db.prepare(
+      'INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'
+    ).run('harvest_backfill_cursor_path', JSON.stringify({ path: missingCursor, mtime: prefix.at(-1).mtime }));
+
+    const calls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (candidatePath) => {
+        calls.push(candidatePath);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+
+    assert.deepStrictEqual(calls, [successor.path]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not advance the old backfill cursor during dry runs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    resetHarvestBackfillCursor();
+    const db = getDb();
+    const original = JSON.stringify({ path: join(root, 'missing.jsonl'), mtime: 123 });
+    db.prepare(
+      'INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'
+    ).run('harvest_backfill_cursor_path', original);
+    try {
+      const path = join(root, 'rollout-2026-09-08T00-07-00-old.jsonl');
+      writeFileSync(path, JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'dry run old cursor. '.repeat(400) }] },
+      }));
+      const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+      utimesSync(path, old, old);
+
+      await runHarvest({
+        searchRoots: [root],
+        sinceHours: 1,
+        dryRun: true,
+        harvestOne: async () => ({
+          facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0,
+          unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true,
+          coveragePending: 0, partialProgress: false,
+        }),
+      });
+
+      assert.strictEqual(
+        db.prepare("SELECT value FROM meta WHERE key = 'harvest_backfill_cursor_path'").get().value,
+        original,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not phase-lock old pending transcripts behind a recent backlog', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    resetHarvestBackfillCursor();
+    const db = getDb();
+    const writeCodex = (name, text, secondsAgo) => {
+      const path = join(root, name);
+      const raw = JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+      });
+      writeFileSync(path, raw);
+      const at = (Date.now() - secondsAgo * 1000) / 1000;
+      utimesSync(path, at, at);
+      return { path, mtime: statSync(path).mtimeMs, text: extractTranscriptText(raw) };
+    };
+    const markComplete = ({ path, mtime, text }) => {
+      const [chunk] = chunkTextWithIdentity(text, { size: 26000 });
+      db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, NULL, 0)').run(path, mtime);
+      db.prepare(`
+        INSERT OR IGNORE INTO harvest_chunk_log
+          (transcript_path, pass, chunk_index, start_char, end_char, input_hash, notes_added, facts_added)
+        VALUES (?, 'lessons', ?, ?, ?, ?, 0, NULL)
+      `).run(path, chunk.index, chunk.start, chunk.end, chunk.hash);
+    };
+
+    const old = Array.from({ length: 60 }, (_, i) =>
+      writeCodex(`rollout-2026-09-08T00-06-${String(i).padStart(2, '0')}-old.jsonl`, `old phase lock ${i}. `.repeat(400), 4 * 60 * 60 - i));
+    for (const [index, row] of old.entries()) {
+      if (index !== 0 && index !== 30) markComplete(row);
+    }
+    for (let i = 0; i < 59; i++) {
+      writeCodex(`rollout-2026-09-10T00-06-${String(i).padStart(2, '0')}-recent.jsonl`, `recent phase lock ${i}. `.repeat(400), 45 * 60 - i);
+    }
+
+    try {
+      const calls = [];
+      for (let round = 0; round < 3; round++) {
+        await runHarvest({
+          searchRoots: [root],
+          sinceHours: 1,
+          harvestOne: async (path) => {
+            calls.push(path);
+            return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 1, unreadByFacts: 0, coverageComplete: false, coveragePending: 1, partialProgress: true };
+          },
+        });
+      }
+
+      assert.ok(calls.includes(old[0].path), 'the first pending old transcript is processed');
+      assert.ok(calls.includes(old[30].path), 'the second pending old transcript must not be lost between scan and work cursors');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('revisits an appended watermarked transcript after it aged out of the recent window', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'rollout-2026-09-08T00-02-00-appended-codex.jsonl');
+    const writeCodexText = (text) => writeTranscript(path, JSON.stringify({
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] },
+    }));
+
+    writeCodexText('original codex session. '.repeat(400));
+    await runHarvest({
+      onlyPath: path,
+      harvestOne: async () => ({ facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false }),
+    });
+
+    writeCodexText('original codex session. '.repeat(400) + 'new appended conclusion. '.repeat(40));
+    const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+    utimesSync(path, old, old);
+    const calls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (candidatePath) => {
+        calls.push(candidatePath);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+
+    assert.deepStrictEqual(calls, [path], 'an appended old transcript with a stale watermark must not depend on the recent mtime window');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('keeps old sdk-cli and sidechain-only transcripts out of never-watermarked backfill', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const sdk = join(root, 'sdk-old.jsonl');
+    const sidechain = join(root, 'sidechain-old.jsonl');
+    writeFileSync(sdk, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'sdk-cli' }),
+      JSON.stringify({ payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'generated model session. '.repeat(400) }] } }),
+    ].join('\n'));
+    writeFileSync(sidechain, [
+      JSON.stringify({
+        type: 'session_meta',
+        payload: {
+          source: { subagent: { thread_spawn: { depth: 1 } } },
+          thread_source: 'subagent',
+        },
+      }),
+      JSON.stringify({
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'child agent sidechain. '.repeat(400) }] },
+      }),
+    ].join('\n'));
+    const old = (Date.now() - 3 * 60 * 60 * 1000) / 1000;
+    utimesSync(sdk, old, old);
+    utimesSync(sidechain, old, old);
+
+    const calls = [];
+    await runHarvest({
+      searchRoots: [root],
+      sinceHours: 1,
+      harvestOne: async (path) => {
+        calls.push(path);
+        return { facts: 0, notes: 0, chunkErrors: 0, lessonErrors: 0, contested: 0, unreadByLessons: 0, unreadByFacts: 0, coverageComplete: true, coveragePending: 0, partialProgress: false };
+      },
+    });
+
+    assert.deepStrictEqual(calls, [], 'generated sdk-cli and child sidechain transcripts must not enter the old backfill path');
+    rmSync(root, { recursive: true, force: true });
   });
 
   // TKT-3187: the harvest read a session that was still open and wrote near-

@@ -158,7 +158,8 @@ export function resolveCaptureTranscript(request, searchRoots) {
 }
 
 export function sessionCaptureQueueStatus(now = Date.now()) {
-  const requests = dueQueueFiles(Infinity).map(item => item.request);
+  ensureDirs();
+  const requests = queueFiles().map(item => item.request).filter(Boolean);
   const due = requests.filter(request => request.dueAt <= now);
   return {
     queued: requests.length,
@@ -171,10 +172,16 @@ export function sessionCaptureQueueStatus(now = Date.now()) {
 function dueQueueFiles(now) {
   ensureDirs();
   recoverExpiredLeases(now);
+  return queueFiles()
+    .filter(item => item.request && item.request.dueAt <= now)
+    .sort((a, b) => a.request.dueAt - b.request.dueAt);
+}
+
+function queueFiles() {
   return readdirSync(SESSION_CAPTURE_QUEUE_DIR)
     .filter(name => name.endsWith('.json'))
     .map(name => ({ name, request: readJson(join(SESSION_CAPTURE_QUEUE_DIR, name)) }))
-    .filter(item => item.request && item.request.dueAt <= now)
+    .filter(item => item.request)
     .sort((a, b) => a.request.dueAt - b.request.dueAt);
 }
 
@@ -182,13 +189,18 @@ function recoverExpiredLeases(now) {
   for (const name of readdirSync(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json.working'))) {
     const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, name);
     const leased = readJson(workingPath);
-    if (!leased?.lease || leased.lease.expiresAt > now) continue;
+    if (!leased) continue;
+    const legacyExpiresAt = () => {
+      try { return statSync(workingPath).mtimeMs + LEASE_MS; } catch { return Infinity; }
+    };
+    const expiresAt = leased.lease?.expiresAt ?? legacyExpiresAt();
+    if (expiresAt > now) continue;
     const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, name.slice(0, -'.working'.length));
     const request = { ...leased };
     delete request.lease;
     if (!existsSync(queuePath)) atomicJson(queuePath, request);
     rmSync(workingPath, { force: true });
-    captureLog({ event: 'recovered', key: request.key, expiredAt: leased.lease.expiresAt });
+    captureLog({ event: 'recovered', key: request.key, expiredAt: expiresAt, legacy: !leased.lease || undefined });
   }
 }
 

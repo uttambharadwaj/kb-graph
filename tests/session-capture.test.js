@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -144,6 +144,27 @@ describe('session capture queue', () => {
     assert.equal(sessionCaptureQueueStatus(2001).failed, 1);
   });
 
+  it('ignores malformed queue JSON before sorting or processing due work', async () => {
+    const path = transcript('valid-with-corrupt-neighbor.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'valid-with-corrupt-neighbor', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 2100 });
+    writeFileSync(join(SESSION_CAPTURE_QUEUE_DIR, 'corrupt.json'), '{not-json');
+
+    assert.deepEqual(sessionCaptureQueueStatus(2100), { queued: 1, due: 1, failed: 0, oldestOverdueMs: 0 });
+
+    let calls = 0;
+    const result = await processSessionCaptureQueue({
+      now: 2100,
+      runHarvestFn: async () => {
+        calls++;
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+      },
+    });
+
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(calls, 1);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name === 'corrupt.json').length, 1);
+  });
+
   it('recovers an expired working lease and processes it', async () => {
     const path = transcript('orphan.jsonl');
     enqueueSessionCapture({ hookInput: { session_id: 'orphan', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 4000 });
@@ -163,6 +184,87 @@ describe('session capture queue', () => {
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
     assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 0);
     assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
+  it('recovers an old legacy working item that has no lease metadata', async () => {
+    const path = transcript('legacy-working.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'legacy-working', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 9000 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    const request = JSON.parse(readFileSync(queuePath, 'utf8'));
+    const workingPath = `${queuePath}.working`;
+    writeFileSync(workingPath, `${JSON.stringify(request)}\n`);
+    rmSync(queuePath);
+
+    const old = (Date.now() - 60 * 60 * 1000) / 1000;
+    utimesSync(workingPath, old, old);
+    const result = await processSessionCaptureQueue({
+      now: Date.now(),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+    });
+
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 0);
+    assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
+  it('does not steal a fresh legacy working item that has no lease metadata', async () => {
+    const path = transcript('fresh-legacy-working.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'fresh-legacy-working', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 9500 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    const request = JSON.parse(readFileSync(queuePath, 'utf8'));
+    writeFileSync(`${queuePath}.working`, `${JSON.stringify(request)}\n`);
+    rmSync(queuePath);
+
+    const result = await processSessionCaptureQueue({
+      now: Date.now(),
+      runHarvestFn: async () => {
+        throw new Error('fresh legacy working item must not be processed by another worker');
+      },
+    });
+
+    assert.deepEqual(result, { processed: 0, failed: 0, skipped: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 1);
+    assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 0);
+  });
+
+  it('does not let read-only queue status steal a live lease', () => {
+    const path = transcript('status-live.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'status-live', transcript_path: path }, agent: 'codex', reason: 'session_end' }, { now: 10000 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    const request = JSON.parse(readFileSync(queuePath, 'utf8'));
+    writeFileSync(`${queuePath}.working`, `${JSON.stringify({
+      ...request,
+      lease: { owner: 'live-worker', startedAt: 10000, expiresAt: 10000 + 10 * 60 * 1000 },
+    })}\n`);
+    rmSync(queuePath);
+
+    const status = sessionCaptureQueueStatus(10001);
+
+    assert.deepEqual(status, { queued: 0, due: 0, failed: 0, oldestOverdueMs: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 1);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 0);
+  });
+
+  it('does not let read-only queue status recover an expired lease', () => {
+    const path = transcript('status-expired.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'status-expired', transcript_path: path }, agent: 'codex', reason: 'session_end' }, { now: 11000 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    const request = JSON.parse(readFileSync(queuePath, 'utf8'));
+    writeFileSync(`${queuePath}.working`, `${JSON.stringify({
+      ...request,
+      lease: { owner: 'dead-worker', startedAt: 11000, expiresAt: 11001 },
+    })}\n`);
+    rmSync(queuePath);
+
+    const status = sessionCaptureQueueStatus(12000);
+
+    assert.deepEqual(status, { queued: 0, due: 0, failed: 0, oldestOverdueMs: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 1);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 0);
   });
 
   it('does not steal a live working lease', async () => {
