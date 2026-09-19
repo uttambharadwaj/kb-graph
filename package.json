@@ -1,6 +1,6 @@
 {
   "name": "kb-graph",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Persistent memory for AI agents — capture, classify, synthesize, retrieve (MCP + REST)",
   "type": "module",
   "bin": {

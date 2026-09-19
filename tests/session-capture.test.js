@@ -3,17 +3,18 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
-  chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
-  writeFileSync, utimesSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
+  utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startDaemon } from '../src/daemon.js';
+import { LOGS_DIR } from '../src/paths.js';
 import {
-  SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, enqueueSessionCapture,
+  SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, enqueueSessionCapture,
   ensureSessionCaptureDirectories, processSessionCaptureQueue, resolveCaptureTranscript,
-  sessionCaptureQueueStatus,
+  sessionCaptureQueueStatus, writeJsonExclusive,
 } from '../src/session-capture.js';
 
 const scratch = [];
@@ -35,12 +36,26 @@ const files = dir => {
   try { return readdirSync(dir); } catch { return []; }
 };
 
-function runCaptureHook({ socketPath, input }) {
+function fileMode(path) {
+  return statSync(path).mode & 0o777;
+}
+
+function runCaptureHook({ socketPath, input, umask }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [
+    const commandArgs = [
       join(import.meta.dirname, '..', 'bin', 'kb.js'),
       'session-capture-hook', '--agent', 'codex', '--reason=session_end',
-    ], {
+    ];
+    let executable = process.execPath;
+    let args = commandArgs;
+    if (umask !== undefined) {
+      executable = '/bin/sh';
+      args = [
+        '-c', `umask ${umask.toString(8)}; exec "$@"`, 'kb-capture-hook',
+        process.execPath, ...commandArgs,
+      ];
+    }
+    const child = spawn(executable, args, {
       env: { ...process.env, KB_SKIP_NODE_REEXEC: '1', KB_CONTROL_SOCKET_PATH: socketPath },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -207,6 +222,22 @@ describe('session capture queue', () => {
     assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name === 'corrupt.json').length, 1);
   });
 
+  it('repairs a mode-000 queue item before processing it', async () => {
+    const path = transcript('private-queue.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'private-queue', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 2200 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    chmodSync(queuePath, 0o000);
+
+    const result = await processSessionCaptureQueue({
+      now: 2200,
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+    });
+
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
   it('recovers an expired working lease and processes it', async () => {
     const path = transcript('orphan.jsonl');
     enqueueSessionCapture({ hookInput: { session_id: 'orphan', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 4000 });
@@ -226,6 +257,103 @@ describe('session capture queue', () => {
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
     assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 0);
     assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
+  it('repairs and recovers an expired mode-000 working lease', async () => {
+    const path = transcript('private-orphan.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'private-orphan', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 4000 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    const request = JSON.parse(readFileSync(queuePath, 'utf8'));
+    const workingPath = `${queuePath}.working`;
+    writeFileSync(workingPath, `${JSON.stringify({
+      ...request,
+      lease: { owner: 'dead-worker', startedAt: 4000, expiresAt: 5000 },
+    })}\n`);
+    chmodSync(workingPath, 0o000);
+    rmSync(queuePath);
+
+    const result = await processSessionCaptureQueue({
+      now: 5001,
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+    });
+
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 0);
+    assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
+  it('removes a stale unreadable lease so its queued capture can drain', async () => {
+    const path = transcript('corrupt-orphan.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'corrupt-orphan', transcript_path: path }, agent: 'claude', reason: 'session_end' }, { now: 4000 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, `${queued}.working`);
+    writeFileSync(workingPath, '{truncated');
+    chmodSync(workingPath, 0o000);
+    const old = (Date.now() - 20 * 60 * 1000) / 1000;
+    utimesSync(workingPath, old, old);
+
+    const result = await processSessionCaptureQueue({
+      now: Date.now(),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+    });
+
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(existsSync(workingPath), false);
+    assert.equal(files(SESSION_CAPTURE_RECEIPT_DIR).length, 1);
+  });
+
+  it('does not remove a fresh unreadable lease', async () => {
+    const path = transcript('fresh-corrupt-orphan.jsonl');
+    enqueueSessionCapture({ hookInput: { session_id: 'fresh-corrupt-orphan', transcript_path: path }, agent: 'claude', reason: 'session_end' });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, `${queued}.working`);
+    writeFileSync(workingPath, '{truncated');
+    chmodSync(workingPath, 0o000);
+
+    let harvests = 0;
+    const result = await processSessionCaptureQueue({
+      runHarvestFn: async () => {
+        harvests++;
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+      },
+    });
+
+    assert.deepEqual(result, { processed: 0, failed: 0, skipped: 0 });
+    assert.equal(harvests, 0);
+    assert.equal(existsSync(workingPath), true);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
+  });
+
+  it('removes an exclusive lease when private-mode repair fails', () => {
+    const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, 'chmod-failure.json.working');
+    const chmodError = Object.assign(new Error('chmod failed'), { code: 'EPERM' });
+
+    assert.throws(
+      () => writeJsonExclusive(workingPath, { key: 'chmod-failure' }, {
+        chmod: () => { throw chmodError; },
+      }),
+      error => error === chmodError,
+    );
+    assert.equal(existsSync(workingPath), false);
+  });
+
+  it('does not close an exclusive lease descriptor twice when close fails', () => {
+    const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, 'close-failure.json.working');
+    const closeError = Object.assign(new Error('close failed'), { code: 'EIO' });
+    let closes = 0;
+
+    assert.throws(
+      () => writeJsonExclusive(workingPath, { key: 'close-failure' }, {
+        close: () => {
+          closes++;
+          throw closeError;
+        },
+      }),
+      error => error === closeError,
+    );
+    assert.equal(closes, 1);
+    assert.equal(existsSync(workingPath), false);
   });
 
   it('recovers an old legacy working item that has no lease metadata', async () => {
@@ -397,6 +525,74 @@ describe('session capture queue', () => {
     assert.equal(answer.stdout, '');
     assert.ok(Date.now() - started < 1500, 'an unavailable daemon must not turn capture into a blocking hook');
     assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
+  });
+
+  it('writes queue, lease, and receipt files with mode 0600 under umask 0777', async () => {
+    const path = transcript('restrictive-umask.jsonl');
+    rmSync(LOGS_DIR, { recursive: true, force: true });
+    const started = Date.now();
+    const answer = await runCaptureHook({
+      socketPath: join(tmpdir(), `missing-kb-control-${process.pid}.sock`),
+      input: { session_id: 'restrictive-umask', transcript_path: path, hook_event_name: 'Stop' },
+      umask: 0o777,
+    });
+    assert.equal(answer.code, 0, answer.stderr);
+    assert.ok(Date.now() - started < 1500);
+    assert.equal(fileMode(SESSION_CAPTURE_QUEUE_DIR), 0o700);
+    assert.equal(fileMode(SESSION_CAPTURE_RECEIPT_DIR), 0o700);
+    assert.equal(fileMode(LOGS_DIR), 0o700);
+    assert.equal(fileMode(SESSION_CAPTURE_LOG), 0o600);
+
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    assert.ok(queued, 'the fail-open hook must leave a durable queue item');
+    const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, queued);
+    assert.equal(fileMode(queuePath), 0o600);
+    assert.equal(JSON.parse(readFileSync(queuePath, 'utf8')).sessionId, 'restrictive-umask');
+
+    let releaseHarvest;
+    let markHarvestStarted;
+    const harvestStarted = new Promise(resolve => { markHarvestStarted = resolve; });
+    const previousUmask = process.umask(0o777);
+    try {
+      const processing = processSessionCaptureQueue({
+        runHarvestFn: async () => {
+          markHarvestStarted();
+          await new Promise(resolve => { releaseHarvest = resolve; });
+          return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+        },
+      });
+      const startedOrFinished = await Promise.race([
+        harvestStarted.then(() => 'started'),
+        processing.then(result => ({ result })),
+      ]);
+      assert.equal(startedOrFinished, 'started',
+        `processor finished before harvest started: ${JSON.stringify(startedOrFinished)}`);
+      const [working] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working'));
+      assert.ok(working, 'the processor must claim the queue item');
+      assert.equal(fileMode(join(SESSION_CAPTURE_QUEUE_DIR, working)), 0o600);
+      releaseHarvest();
+      assert.deepEqual(await processing, { processed: 1, failed: 0, skipped: 0 });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    const [receipt] = files(SESSION_CAPTURE_RECEIPT_DIR).filter(name => name.endsWith('.json'));
+    assert.equal(fileMode(join(SESSION_CAPTURE_RECEIPT_DIR, receipt)), 0o600);
+  });
+
+  it('repairs an existing mode-000 capture log before appending', () => {
+    mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(SESSION_CAPTURE_LOG, 'existing\n', { mode: 0o600 });
+    chmodSync(SESSION_CAPTURE_LOG, 0o000);
+
+    enqueueSessionCapture({
+      hookInput: { session_id: 'private-log' },
+      agent: 'claude',
+      reason: 'session_end',
+    }, { now: 1000 });
+
+    assert.equal(fileMode(SESSION_CAPTURE_LOG), 0o600);
+    assert.equal(readFileSync(SESSION_CAPTURE_LOG, 'utf8').trim().split('\n').length, 2);
   });
 
   it('completes a hook control request through the resident daemon asynchronously', async () => {
