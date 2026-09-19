@@ -248,8 +248,8 @@ describe('workspace readers', () => {
     assert.equal(rf.length, 2, 'reader returns both copies; writer dedupes by body hash');
     assert.ok(rf.every(n => n.project === 'repo1'), 'worktree segment stripped before deriving repo');
     assert.ok(rf.every(n => n.created === '2026-08-11'), 'dated filename beats mtime');
-    assert.ok(!rf[0].source.includes('worktrees'), 'non-worktree copy survives the dedupe');
-    assert.ok(rf[1].source.includes('worktrees'));
+    assert.ok(!rf[0].source.includes('/.claude/worktrees/'), 'non-worktree copy survives the dedupe');
+    assert.ok(rf[1].source.includes('/.claude/worktrees/'));
     assert.equal(rf[0].folder, 'research');
     assert.ok(!notes.some(n => n.source.includes('node_modules')));
   });
