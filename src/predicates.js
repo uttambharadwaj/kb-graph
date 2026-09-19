@@ -230,8 +230,8 @@ const WORK_ITEM_TOKEN = configuredPattern('work_item_pattern').source;
 const IS_WORK_ITEM = new RegExp(`^(?:${WORK_ITEM_TOKEN})$`, 'i');
 const NAMES_WORK_ITEM = new RegExp(`^(?:${WORK_ITEM_TOKEN})(?![0-9a-z])`, 'i');
 
-// Not bus/config.js's getTicketRegex — that finds a ticket reference inside free
-// text; this asks whether the whole subject is one.
+// This asks whether the whole subject is a work item, not whether free text
+// merely contains a work-item reference.
 const SINGLE_ENTITY = configuredPattern('single_valued_subjects');
 
 // Whether a new object for this triple retires the old one. Shared, because the

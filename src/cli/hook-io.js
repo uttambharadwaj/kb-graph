@@ -13,12 +13,12 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { connect } from 'net';
 import { join } from 'path';
 import { CONTROL_SOCKET_PATH, HOOK_OP } from '../daemon-paths.js';
-import { LOGS_DIR } from '../paths.js';
+import { HOOK_ERROR_LOG, LOGS_DIR } from '../paths.js';
 import { AGENT, AGENT_FLAG, AGENTS } from '../process-ancestry.js';
 import { UsageError, readFlagValue } from './flags.js';
 
 // Re-exported so hook modules keep one import for their flag plumbing.
-export { AGENT_FLAG };
+export { AGENT_FLAG, HOOK_ERROR_LOG };
 
 // Which client this hook was installed for. Claude Code takes a hook's plain
 // stdout as context; Codex and Cursor take JSON envelopes of different
@@ -42,10 +42,7 @@ export function readAgentFlag(args = [], usage = null) {
   return value;
 }
 
-// The JSON shape a hook uses to hand text to Codex as session context. The
-// bus hooks (src/bus/cli.js) print the same envelope through this same
-// function — one spelling of the shape, since a client that gets the key
-// names wrong silently injects nothing.
+// The JSON shape a hook uses to hand text to Codex as session context.
 export function hookJsonEnvelope(hookEventName, additionalContext) {
   return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }, null, 2);
 }
@@ -61,11 +58,6 @@ export function hookOutput(output, { agent, hookEventName }) {
   if (agent === AGENT.CURSOR) return JSON.stringify({ additional_context: output });
   return output;
 }
-
-// Shared across every hook that reuses this module (prompt-hint.js and
-// trigger-hook.js so far) — one name, not one per hook, so a failure here
-// doesn't file itself under a different hook's name and mislead triage.
-export const HOOK_ERROR_LOG = join(LOGS_DIR, 'hook-errors.log');
 
 export function recordHookFailure(stage, err) {
   try {
@@ -159,6 +151,7 @@ const DEFAULT_DAEMON_TIMEOUT_MS = {
   [HOOK_OP.PROMPT_HINT]: 1500,
   [HOOK_OP.TRIGGER_HOOK]: 800,
   [HOOK_OP.WAKEUP_HOOK]: 3000,
+  [HOOK_OP.SESSION_CAPTURE]: 500,
 };
 
 export function hookDaemonTimeoutMs(op) {
@@ -197,6 +190,7 @@ export function callDaemonOp(op, payload, {
     let settled = false;
     let buffer = '';
     const socket = connect(socketPath);
+    socket.setEncoding('utf8');
 
     const finish = (result) => {
       if (settled) return;

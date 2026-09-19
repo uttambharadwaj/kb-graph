@@ -82,8 +82,8 @@ for (const file of files) {
 // drifted by the time anyone checked one against the registry. Read as text
 // rather than imported — importing the registry would pull the database and the
 // embedding model into a script whose whole job is to read files.
-const toolCount = ['src/tools.js', 'src/bus/tools.js']
-  .reduce((n, f) => n + (readFileSync(join(PROJECT_ROOT, f), 'utf-8').match(/^\s*name: '(kb|bus)_/gm) || []).length, 0);
+const toolCount = (readFileSync(join(PROJECT_ROOT, 'src/tools.js'), 'utf-8')
+  .match(/^\s*name: 'kb_/gm) || []).length;
 // A pattern that stops matching would otherwise publish "0 tools" as fact.
 if (toolCount === 0) throw new Error('found no tool definitions — the name: pattern in generate-codemap.js is stale');
 
@@ -99,7 +99,7 @@ let md = `# Codebase Map
 ## Architecture Overview
 \`\`\`
 src/
-  mcp.js          ← MCP server (${toolCount} tools: search, write, capture, classify, safety, bus)
+  mcp.js          ← MCP server (${toolCount} tools: search, write, capture, classify, safety)
   db.js            ← SQLite + FTS5 (documents, vault_files, embeddings tables)
   tiers.js         ← Epistemic tiers: the vocabulary, the verified-needs-a-reference rule, surface formatting
   server.js        ← Express dashboard server
@@ -144,7 +144,7 @@ md += `## Key Data Flows
 4. **Safety:** caller opts in (\`kb_safety_check\` tool or \`kb safety-check\`) → KB search → \`reviewDestructiveAction()\` → verdict; a reviewer that cannot answer blocks
 5. **Capture:** \`captureSession()\` / \`captureFix()\` → write to vault → \`indexVault()\` → searchable
 
-## MCP Tools (${16} total)
+## Selected MCP Tools
 | Tool | Purpose |
 |------|---------|
 | kb_search | FTS5 keyword search |

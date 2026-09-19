@@ -4,10 +4,17 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getDb, getHealth, getMeta } from '../src/db.js';
+import { addFact } from '../src/facts.js';
 import { JOBS, staleAfterHours } from '../src/jobs.js';
+import { HOOK_ERROR_LOG, LOGS_DIR } from '../src/paths.js';
+import { runReconciliation } from '../src/reconciliation.js';
 
 const summaryWarning = (health) => health.warnings.find(w => w.includes('summaries'));
+const hookWarning = (health) => health.warnings.find(w => w.includes('hook failure'));
 
 function addUnsummarizedNotes(count) {
   const db = getDb();
@@ -58,6 +65,52 @@ describe('backlog warnings fire on growth, not on existence', () => {
   });
 });
 
+describe('hook failure growth', () => {
+  it('warns only when repeated failures accumulate between briefings', () => {
+    mkdirSync(LOGS_DIR, { recursive: true });
+    rmSync(HOOK_ERROR_LOG, { force: true });
+    getDb().prepare("DELETE FROM meta WHERE key = 'hook_error_lines'").run();
+
+    appendFileSync(HOOK_ERROR_LOG, 'first\nsecond\n');
+    assert.strictEqual(hookWarning(getHealth({ recordBacklog: true })), undefined,
+      'an existing log must be adopted without turning historical failures into a new alarm');
+
+    appendFileSync(HOOK_ERROR_LOG, 'third\nfourth\n');
+    assert.strictEqual(hookWarning(getHealth({ recordBacklog: true })), undefined,
+      'isolated failures below the repeated-failure threshold should not page every session');
+    assert.strictEqual(getMeta('hook_error_lines').value, '2',
+      'sub-threshold failures must remain pending so repeated small leaks accumulate');
+
+    appendFileSync(HOOK_ERROR_LOG, 'fifth\n');
+    const baseline = getMeta('hook_error_lines').value;
+    const readOnlyWarning = hookWarning(getHealth());
+    assert.match(readOnlyWarning, /3 new hook failures/);
+    assert.strictEqual(getMeta('hook_error_lines').value, baseline,
+      'read-only health checks must not move the briefing baseline');
+
+    const warning = hookWarning(getHealth({ recordBacklog: true }));
+    assert.match(warning, /3 new hook failures/);
+    assert.match(warning, /hook-errors\.log/);
+    assert.strictEqual(hookWarning(getHealth({ recordBacklog: true })), undefined,
+      'the reported count becomes the next briefing baseline');
+  });
+
+  it('re-baselines after a partial log rotation before accumulating new failures', () => {
+    mkdirSync(LOGS_DIR, { recursive: true });
+    getDb().prepare("DELETE FROM meta WHERE key = 'hook_error_lines'").run();
+    writeFileSync(HOOK_ERROR_LOG, 'one\ntwo\nthree\nfour\nfive\n');
+    getHealth({ recordBacklog: true });
+
+    writeFileSync(HOOK_ERROR_LOG, 'rotated-one\nrotated-two\n');
+    assert.strictEqual(hookWarning(getHealth({ recordBacklog: true })), undefined);
+    assert.strictEqual(getMeta('hook_error_lines').value, '2',
+      'a lower non-zero count must become the baseline after log rotation');
+
+    appendFileSync(HOOK_ERROR_LOG, 'new-one\nnew-two\nnew-three\n');
+    assert.match(hookWarning(getHealth({ recordBacklog: true })), /3 new hook failures/);
+  });
+});
+
 // A tolerance chosen independently of the cadence it watches will drift wider
 // than it. The harvest's was 48h against a 24h period, so one dead night was
 // indistinguishable from a night that worked and the briefing read OK through
@@ -69,7 +122,7 @@ describe('staleness tolerance is derived from the period', () => {
   // a warning nobody reads — which is how the useful ones stop being read too.
   it('leaves one skipped run reportable for every loop slower than an hour', () => {
     const reportable = JOBS.filter(job => job.periodHours >= 1);
-    assert.deepStrictEqual(reportable.map(j => j.name), ['harvest', 'synthesis'],
+    assert.deepStrictEqual(reportable.map(j => j.name), ['harvest', 'synthesis', 'reconcile'],
       'a new slow loop must be considered here rather than inherit a default');
     for (const job of reportable) {
       const tolerance = staleAfterHours(job.periodHours);
@@ -91,5 +144,67 @@ describe('staleness tolerance is derived from the period', () => {
     assert.strictEqual(staleAfterHours(24), 30);
     assert.strictEqual(staleAfterHours(24 * 7), 174);
     assert.ok(Math.abs(staleAfterHours(5 / 60) - 1.083) < 0.01);
+  });
+});
+
+
+describe('reconciliation heartbeat', () => {
+  function clearReconciliationState() {
+    getDb().exec(`
+      DELETE FROM facts;
+      DELETE FROM entity_aliases;
+      DELETE FROM entities;
+      DELETE FROM harvest_log;
+      DELETE FROM meta WHERE key IN ('last_reconcile', 'last_reconcile_error');
+    `);
+  }
+
+  function source(name, text) {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-health-reconcile-'));
+    const path = join(dir, `${name}.jsonl`);
+    writeFileSync(path, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }) + '\n');
+    getDb().prepare('INSERT INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)')
+      .run(path, Date.now(), 1, 0);
+    return `harvest:${name}`;
+  }
+
+  it('records a fresh heartbeat when scheduled reconciliation has nothing to do', async () => {
+    clearReconciliationState();
+
+    const result = await runReconciliation({ db: getDb(), limit: 1 });
+
+    assert.strictEqual(result.candidates, 0);
+    assert.ok(getMeta('last_reconcile'), 'no-op success still proves the scheduler ran');
+    assert.strictEqual(getMeta('last_reconcile_error').value, '');
+    assert.strictEqual(
+      getHealth().warnings.find(w => w.includes('reconcile')),
+      undefined,
+      'fresh successful reconciliation should not stay health-stale'
+    );
+  });
+
+  it('keeps the last reconciliation model failure visible in health', async () => {
+    clearReconciliationState();
+    addFact('Healthbot', 'status', 'green', {
+      source: source('healthbot-green', 'Healthbot status is green after the first launch.'),
+    });
+    addFact('Healthbot', 'status', 'red', {
+      source: source('healthbot-red', 'Healthbot status is red after the rollback.'),
+    });
+
+    await assert.rejects(
+      () => runReconciliation({
+        db: getDb(),
+        limit: 1,
+        decideFactGroup: async () => { throw new Error('model exploded for health'); },
+      }),
+      /model exploded for health/
+    );
+
+    assert.match(getMeta('last_reconcile_error').value, /model exploded for health/);
+    assert.ok(
+      getHealth().warnings.some(w => w.includes('reconcile last failed') && w.includes('model exploded for health')),
+      'health should surface the reconciliation failure instead of only reporting stale age'
+    );
   });
 });

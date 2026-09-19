@@ -146,3 +146,100 @@ describe('the hint count is not a constant', () => {
     assert.ok(counts.has(0), 'no prompt was ever declined');
   });
 });
+
+function ensureOutcomeSchema(db) {
+  const columns = db.prepare('PRAGMA table_info(retrievals)').all().map(c => c.name);
+  if (!columns.includes('doc_version')) db.exec('ALTER TABLE retrievals ADD COLUMN doc_version TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS retrieval_outcomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      retrieval_id INTEGER NOT NULL,
+      doc_id INTEGER NOT NULL,
+      doc_version TEXT,
+      session TEXT,
+      event_id TEXT,
+      outcome TEXT NOT NULL,
+      evidence_kind TEXT NOT NULL,
+      evidence_ref TEXT NOT NULL,
+      source TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(session, doc_id, doc_version, outcome, evidence_ref)
+    );
+  `);
+}
+
+function insertOutcomeNote(db, title, hash) {
+  const id = db.prepare('INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, ?, ?)')
+    .run(title, 'outcome compass calibration body', 'note', 'outcomes').lastInsertRowid;
+  db.prepare("INSERT INTO vault_files (vault_path, content_hash, document_id, title, note_type) VALUES (?, ?, ?, ?, 'note')")
+    .run(`${hash}.md`, hash, id, title);
+  return id;
+}
+
+function recordOutcome(db, { docId, version, outcome, evidence = outcome }) {
+  const retrievalId = db.prepare(`
+    INSERT INTO retrievals (doc_id, doc_version, surface, session, is_test)
+    VALUES (?, ?, 'kb_read', ?, 0)
+  `).run(docId, version, `sess-${evidence}`).lastInsertRowid;
+  db.prepare(`
+    INSERT INTO retrieval_outcomes
+      (retrieval_id, doc_id, doc_version, session, outcome, evidence_kind, evidence_ref, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(retrievalId, docId, version, `sess-${evidence}`, outcome, 'test', evidence, 'test');
+}
+
+describe('relevantNotes outcome feedback', () => {
+  it('uses grounded helped outcomes as a conservative ordering signal only after admission', () => {
+    const db = getDb();
+    ensureOutcomeSchema(db);
+    const first = insertOutcomeNote(db, 'Outcome compass calibration alpha', 'hint-helped-a');
+    const second = insertOutcomeNote(db, 'Outcome compass calibration beta', 'hint-helped-b');
+    recordOutcome(db, { docId: second, version: 'hint-helped-b', outcome: 'helped', evidence: 'helped-beta' });
+
+    const hits = relevantNotes('outcome compass calibration needs review', { limit: 5, explain: true });
+
+    assert.ok(hits.some(hit => hit.id === first), JSON.stringify(hits));
+    assert.ok(hits.some(hit => hit.id === second), JSON.stringify(hits));
+    assert.strictEqual(hits[0].id, second);
+    assert.strictEqual(hits[0].outcome_adjustment, 0.5);
+  });
+
+  it('does not let helped history outrank much stronger prompt coverage', () => {
+    const db = getDb();
+    ensureOutcomeSchema(db);
+    const weak = insertOutcomeNote(db, 'Outcome compass calibration alpha', 'hint-weak-helped');
+    const strong = insertOutcomeNote(db, 'Outcome compass calibration vector matrix', 'hint-strong-lexical');
+    recordOutcome(db, { docId: weak, version: 'hint-weak-helped', outcome: 'helped', evidence: 'weak-helped' });
+
+    const hits = relevantNotes('outcome compass calibration vector matrix needs review', { limit: 5, explain: true });
+
+    assert.ok(hits.findIndex(hit => hit.id === strong) < hits.findIndex(hit => hit.id === weak), JSON.stringify(hits));
+  });
+
+  it('does not admit an off-topic note just because it has helped history', () => {
+    const db = getDb();
+    ensureOutcomeSchema(db);
+    const docId = insertOutcomeNote(db, 'Outcome unrelated zebra fixture', 'hint-offtopic');
+    recordOutcome(db, { docId, version: 'hint-offtopic', outcome: 'helped', evidence: 'offtopic-helped' });
+
+    const hits = relevantNotes('what is the weather forecast for tomorrow afternoon', { explain: true });
+
+    assert.deepStrictEqual(hits, []);
+  });
+
+  it('demotes corrected outcomes without changing the note tier', () => {
+    const db = getDb();
+    ensureOutcomeSchema(db);
+    const helped = insertOutcomeNote(db, 'Outcome compass correction alpha', 'hint-correct-a');
+    const corrected = insertOutcomeNote(db, 'Outcome compass correction beta', 'hint-correct-b');
+    const tierBefore = db.prepare('SELECT tier FROM documents WHERE id = ?').get(corrected).tier;
+    recordOutcome(db, { docId: helped, version: 'hint-correct-a', outcome: 'helped', evidence: 'correct-helped' });
+    recordOutcome(db, { docId: corrected, version: 'hint-correct-b', outcome: 'corrected', evidence: 'corrected-beta' });
+
+    const hits = relevantNotes('outcome compass correction needs review', { limit: 5, explain: true });
+
+    assert.ok(hits.find(hit => hit.id === corrected).outcome_adjustment < 0);
+    assert.ok(hits.findIndex(hit => hit.id === helped) < hits.findIndex(hit => hit.id === corrected));
+    assert.strictEqual(db.prepare('SELECT tier FROM documents WHERE id = ?').get(corrected).tier, tierBefore);
+  });
+});

@@ -39,7 +39,5 @@ export function register(args = []) {
   }
 
   console.log('Restart these local agent sessions to activate the updated knowledge-base tools.');
-  console.log('Core tools: kb_search, kb_list, kb_read, kb_ingest, ...');
-  console.log('Local-only bus tools: bus_send, bus_read');
-  console.log('Long-lived sessions that cannot restart can still use the CLI fallback: bus-bind / bus-send / bus-read / bus-hook / bus-hook-current');
+  console.log('Core tools: kb_search, kb_list, kb_read, kb_write, ...');
 }

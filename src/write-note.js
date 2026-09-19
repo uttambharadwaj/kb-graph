@@ -143,8 +143,6 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
 
   const date = new Date().toISOString().split('T')[0];
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
-  const filename = `${date}-${slug}.md`;
-  const relPath = `${folder}/${filename}`;
 
   const tagList = tags ? splitTags(tags) : [];
   const fm = [
@@ -164,7 +162,21 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
   fm.push('status: active');
   fm.push('---');
 
-  writeFileSync(join(destDir, filename), fm.join('\n') + '\n\n' + content + renderRelatedSection(related));
+  const body = fm.join('\n') + '\n\n' + content + renderRelatedSection(related);
+  let relPath;
+  for (let suffix = 1; ; suffix++) {
+    const filename = `${date}-${slug}${suffix === 1 ? '' : `-${suffix}`}.md`;
+    relPath = `${folder}/${filename}`;
+    // Only an explicit supersede target may be updated in place. Exclusive
+    // creation protects every other file, including unindexed/concurrent writes.
+    const overwrite = excludeId != null && getVaultFile(relPath)?.document_id === excludeId;
+    try {
+      writeFileSync(join(destDir, filename), body, { flag: overwrite ? 'w' : 'wx' });
+      break;
+    } catch (err) {
+      if (overwrite || err.code !== 'EEXIST') throw err;
+    }
+  }
 
   let indexStatus = '';
   try {

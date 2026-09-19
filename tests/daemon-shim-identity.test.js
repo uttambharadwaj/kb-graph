@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import packageJson from '../package.json' with { type: 'json' };
 import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
 import { AGENT } from '../src/process-ancestry.js';
@@ -158,7 +159,7 @@ describe('daemon shim-hello intake', () => {
       // is exactly what a real shim produces and what an unshift bug eats.
       client.write(encodeHello({ harnessPid: 90101, pidStart: 'START-90101', agent: AGENT.CLAUDE }) + initializeLine(1));
       const init = await client.expect(1);
-      assert.deepStrictEqual(init.result.serverInfo, { name: 'knowledge-base', version: '1.0.0' });
+      assert.deepStrictEqual(init.result.serverInfo, { name: 'knowledge-base', version: packageJson.version });
     } finally {
       client.close();
       await closeDaemon(daemon);

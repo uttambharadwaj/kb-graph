@@ -9,7 +9,6 @@ import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 
 import { MIGRATIONS as KB_MIGRATIONS } from '../src/db.js';
-import { MIGRATIONS as BUS_MIGRATIONS } from '../src/bus/db.js';
 import { MIGRATION_TARGETS, migrationsFor } from '../src/migration-targets.js';
 import { PENDING_EXIT } from '../src/schema.js';
 import { seedDb as seed, shortOf as short } from './helpers/migrations.js';
@@ -28,14 +27,11 @@ function temp(prefix) {
   return dir;
 }
 
-// A KB_DIR and bus home nothing else shares. Neither database exists until a
-// test seeds it, which is the fresh-install case.
 function install() {
   const dir = temp('kb-gate-');
   return {
     kb: join(dir, 'kb', 'kb.db'),
-    bus: join(dir, 'bus', 'bus.db'),
-    env: { KB_DIR: join(dir, 'kb'), KB_BUS_HOME: join(dir, 'bus'), KB_BUS_DB_PATH: '' },
+    env: { KB_DIR: join(dir, 'kb') },
   };
 }
 
@@ -54,9 +50,8 @@ describe('kb migrate --check', () => {
   });
 
   it('exits zero and says so when every database is current', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     seed(kb, KB_MIGRATIONS);
-    seed(bus, BUS_MIGRATIONS);
 
     const done = check(env);
     assert.strictEqual(done.status, 0, done.stderr);
@@ -64,57 +59,41 @@ describe('kb migrate --check', () => {
   });
 
   it('exits with the pending code and names what is missing', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     const { applied, pending } = short(KB_MIGRATIONS);
     const missing = pending[0];
     seed(kb, applied);
-    seed(bus, BUS_MIGRATIONS);
 
     const done = check(env);
     assert.strictEqual(done.status, PENDING_EXIT, done.stderr);
     // The version and the name both, because the remedy is to read the list.
     assert.match(done.stdout, new RegExp(`${missing.version}\\. ${missing.name}`));
     assert.match(done.stdout, /knowledge base/);
-    assert.doesNotMatch(done.stdout, /message bus/, 'a current database must not be reported as behind');
-  });
-
-  it('reports every behind database, not just the first', () => {
-    const { kb, bus, env } = install();
-    seed(kb, short(KB_MIGRATIONS).applied);
-    seed(bus, short(BUS_MIGRATIONS).applied);
-
-    const done = check(env);
-    assert.strictEqual(done.status, PENDING_EXIT, done.stderr);
-    assert.match(done.stdout, /knowledge base/);
-    assert.match(done.stdout, /message bus/);
   });
 
   // A fresh install is not behind, it is empty — `ensureSchemaReady` bootstraps
   // it on connect. A check that said otherwise would gate on the wrong thing
   // and hold a reload that was never going to fail.
   it('treats a database that does not exist yet as current, and does not create it', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
 
     const done = check(env);
     assert.strictEqual(done.status, 0, done.stderr);
     assert.ok(!existsSync(kb), 'the check created the knowledge base database');
-    assert.ok(!existsSync(bus), 'the check created the bus database');
   });
 
   it('treats an existing but empty database as current', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     mkdirSync(dirname(kb), { recursive: true });
     new Database(kb).close();
-    seed(bus, BUS_MIGRATIONS);
 
     const done = check(env);
     assert.strictEqual(done.status, 0, done.stderr);
   });
 
   it('writes nothing to a database that is behind', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     seed(kb, short(KB_MIGRATIONS).applied);
-    seed(bus, BUS_MIGRATIONS);
     const before = statSync(kb);
 
     assert.strictEqual(check(env).status, PENDING_EXIT);
@@ -128,9 +107,8 @@ describe('kb migrate --check', () => {
   });
 
   it('leaves `migrate` and `--dry-run` alone', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     seed(kb, short(KB_MIGRATIONS).applied);
-    seed(bus, short(BUS_MIGRATIONS).applied);
 
     const preview = spawnSync(process.execPath, [KB_BIN, 'migrate', '--dry-run'], {
       encoding: 'utf8',
@@ -166,7 +144,6 @@ describe('migration targets', () => {
     // Identity, not shape: a source path that resolved to some other copy of
     // the module would still look like a valid list.
     assert.ok(loaded.includes(KB_MIGRATIONS), 'no target loads the knowledge base migrations');
-    assert.ok(loaded.includes(BUS_MIGRATIONS), 'no target loads the bus migrations');
   });
 
   it('resolves a database path for every target', () => {

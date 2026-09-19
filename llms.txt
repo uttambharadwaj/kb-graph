@@ -21,7 +21,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 |------|---------|
 | kb_search | FTS5 keyword search. You know roughly what you are looking for. |
 | kb_search_smart | Hybrid keyword + semantic search. Conceptual or fuzzy queries. |
-| kb_context | Token-efficient briefing — summaries only, ~98% fewer tokens. Use BEFORE kb_read. |
+| kb_context | Bounded truth packet — live summaries, reviewed current state, raw evidence, superseded history, and unresolved claims. Use BEFORE kb_read. |
 | kb_read | Full document by ID. After kb_context says which ones are worth it. |
 | kb_list | Enumerate documents by type or tag when you are browsing, not searching. |
 | kb_tunnels | Which domains a tag connects to, or the bridge between two — cross-domain exploration. |
@@ -35,9 +35,9 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 | kb_promote | A later session confirmed a note — raise its tier, recording what did the confirming. |
 | kb_synthesize | A review brief over recent notes, for the "what have we learned lately" pass. |
 | kb_fact_add | One durable subject-predicate-object fact, with validity dates. |
-| kb_fact_query | How an entity relates to everything else, optionally as of a date. |
+| kb_fact_query | Raw fact history plus any reviewed current-state projection for an entity. Historical as_of queries do not project reviewed live state. |
 | kb_fact_timeline | The order things happened to an entity. |
-| kb_fact_invalidate | A decision was reversed or a state expired — end the fact, keep the history. |
+| kb_fact_invalidate | End erroneous evidence by exact fact ID while preserving the raw row and provenance. |
 | kb_capture_session | End of a debugging or implementation session. Redacts secrets from pasted output; kb_write does not. |
 | kb_capture_fix | A bug you verified fixed. Symptom and cause are separate fields, so searching the symptom finds the cause. |
 | kb_capture_web | A page you fetched and will want to cite. Keeps the URL as provenance. |
@@ -45,20 +45,6 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 | kb_wakeup | Session start, when no briefing hook ran (remote or cloud sessions). |
 | kb_vault_status | Vault indexing stats: note counts by type and project. |
 | kb_safety_check | Before any destroy, delete, drop or force-push — checks the action against past incidents. |
-
-The `bus_*` tools cover the one case a harness cannot: coordinating with an agent in a *different* tool (a Codex session, a Gemini session, another terminal). In-harness agent teams operate inside one process tree; the bus crosses that boundary. See docs/message-bus.md for wiring.
-
-| Tool | When to reach for it |
-|------|---------|
-| bus_send | Hand off, report a step done, ask a blocking question, announce a decision — across tools. |
-| bus_read | Collect your own mail from a stored cursor. The agent-facing read API. |
-| bus_status | A peer went quiet — tell "has not read it" from "read it and did not reply". |
-| bus_sessions | Who is reachable on a channel, and in which workspace. |
-| bus_session_register | You are not listed on a channel you should be working — mail sends, none arrives. |
-| bus_deliveries | Which message reached which session: a wiring problem vs. an ignored message. |
-| bus_agent_register | Work should be picked up when no session is open to receive it. |
-| bus_agents | Whether a channel already has a worker that would race yours. |
-| bus_agentd_once | Drain the queue now instead of waiting for the scheduled pass (dry_run launches nothing). |
 
 ## Extension Points
 
@@ -90,7 +76,7 @@ The `bus_*` tools cover the one case a harness cannot: coordinating with an agen
 ## Integration Patterns
 
 ### Claude Code (local, stdio)
-Register with `node bin/kb.js register`. Uses stdio MCP transport. All 35 tools available.
+Register with `node bin/kb.js register`. Uses stdio MCP transport. All 26 tools available.
 
 ### Claude.ai (remote, HTTP MCP)
 Connect via remote MCP at `https://your-domain.com/mcp`. Authenticates with API key or OAuth. Admin-only tools are filtered out.

@@ -14,16 +14,12 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // print usage and write nothing — the whole point of the command.
 const KB_COMMANDS = [
   'start', 'stop', 'mcp', 'mcp-shim', 'tool', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
-  'retrieval-report', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
+  'retrieval-report', 'fact-conflicts', 'fact-adjudicate', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'session-capture-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
   'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
-  'bus-send', 'bus-read', 'bus-status', 'bus-session', 'bus-agent', 'bus-agentd',
-  'bus-hook', 'bus-bind', 'bus-unbind', 'bus-hook-current', 'bus-notifier',
 ];
 
 const STANDALONE_BINS = [
-  'bus-agent', 'bus-agentd', 'bus-autobind', 'bus-bind', 'bus-hook-current', 'bus-hook',
-  'bus-notifier', 'bus-read', 'bus-send', 'bus-session', 'bus-status', 'bus-unbind',
   'generate-codemap', 'weekly-synthesis',
 ];
 
@@ -39,7 +35,6 @@ function run(args) {
       ...process.env,
       KB_SKIP_NODE_REEXEC: '1',
       KB_DIR: join(home, 'kb'),
-      KB_BUS_HOME: join(home, 'bus'),
       OBSIDIAN_VAULT_PATH: join(home, 'vault'),
       // `kb register` writes agent configs under homedir(), which no KB_* var
       // redirects. If the help guard ever regresses, this test must catch it by
@@ -53,14 +48,10 @@ function run(args) {
 // One number per database that any write would move.
 function rowCounts() {
   const counts = {};
-  for (const [name, file, tables] of [
-    ['kb', join(home, 'kb', 'kb.db'), ['documents', 'harvest_log', 'vault_files', 'facts', 'meta', 'retrievals', 'embeddings', 'extractions']],
-    ['bus', join(home, 'bus', 'bus.db'), ['bus_messages', 'bus_readers', 'bus_sessions', 'bus_deliveries']],
-  ]) {
-    const db = new Database(file, { readonly: true });
-    for (const table of tables) counts[`${name}.${table}`] = db.prepare(`SELECT COUNT(*) c FROM ${table}`).get().c;
-    db.close();
-  }
+  const tables = ['documents', 'harvest_log', 'vault_files', 'facts', 'fact_reviews', 'fact_review_items', 'meta', 'retrievals', 'embeddings', 'extractions'];
+  const db = new Database(join(home, 'kb', 'kb.db'), { readonly: true });
+  for (const table of tables) counts[`kb.${table}`] = db.prepare(`SELECT COUNT(*) c FROM ${table}`).get().c;
+  db.close();
   return counts;
 }
 
@@ -153,17 +144,11 @@ describe('a mistyped flag stops the command instead of running with defaults', (
     });
   }
 
-  it('a standalone bin rejects its own unknown flags', () => {
-    const result = run([join(ROOT, 'bin', 'bus-send.js'), 'chan', 'hello', '--sendr', 'me']);
+  it('a standalone bin rejects unknown flags', () => {
+    const result = run([join(ROOT, 'bin', 'generate-codemap.js'), '--unknown-flag']);
     assert.strictEqual(result.status, 2);
-    assert.match(result.stderr, /Unknown flag: --sendr/);
-    assert.match(result.stderr, /Usage: bus-send/);
-  });
-
-  it('a missing required argument is a usage error, not a crash', () => {
-    const result = run([join(ROOT, 'bin', 'bus-send.js')]);
-    assert.strictEqual(result.status, 2);
-    assert.match(result.stderr, /bus-send needs a channel and a message/);
+    assert.match(result.stderr, /Unknown flag: --unknown-flag/);
+    assert.match(result.stderr, /Usage: generate-codemap/);
   });
 });
 

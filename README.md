@@ -29,6 +29,8 @@ vault is plain markdown.
 Open a new Claude Code session: you should see your first **KB BRIEFING**.
 
 Onboarding a teammate? Send them [docs/ONBOARDING.md](docs/ONBOARDING.md).
+Coming from 1.x? Read [Upgrading to 2.0](docs/UPGRADING-2.0.md) before replacing
+your installed hooks or removing the retired message bus.
 
 ---
 
@@ -80,7 +82,7 @@ and tool hooks cannot inject context) mean your agent never starts cold:
   notes, model-proposed triggers, advisory caps, and prior warnings cannot gain
   or consume blocking authority.
 
-Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (token-efficient briefing) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
+Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (a bounded truth packet that separates live note summaries, reviewed current state, raw evidence, superseded history, and unresolved claims) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
 
 ### 2. Capture that doesn't rely on discipline
 
@@ -92,7 +94,7 @@ Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + sem
   validated handlers from JSON on stdin. `/debrief` uses that automatically;
   it does not leave a pending markdown file for a later human to ingest.
 
-- **Entity facts.** Alongside prose notes, a lightweight fact store tracks `(subject, predicate, object)` triples with validity windows: `kb_fact_add`, `kb_fact_query`, `kb_fact_timeline` ("how did our auth approach evolve?"), `kb_fact_invalidate` (supersede without deleting history).
+- **Entity facts.** Alongside prose notes, a fact ledger tracks provenance-bearing `(subject, predicate, object)` assertions and validity windows. `kb_fact_query` returns that raw history separately from append-only reviewed projections. Only a fresh, complete, non-abstained review supplies current state; a missing, stale, or abstained projection is unresolved rather than latest-wins. `kb_fact_invalidate` is reserved for erroneous evidence, not duplication, synonymy, contest, or semantic supersession. Use `kb fact-adjudicate` to record a complete per-fact review without rewriting raw facts or earlier reviews.
 
 ### 3. State notes, not stale sessions
 
@@ -231,7 +233,7 @@ each one, because an agent picks a tool from that line and nothing else:
 |------|-------------|
 | `kb_search` | Full-text search, BM25 ranking, highlighted snippets |
 | `kb_search_smart` | Hybrid keyword + semantic search for conceptual queries |
-| `kb_context` | Token-efficient briefing — summaries only; use before `kb_read` |
+| `kb_context` | Provenance-aware truth packet — live summaries, reviewed current state, raw evidence, history, and unresolved claims; use before `kb_read` |
 | `kb_read` | Read a document by ID (returns a `related:` neighborhood) |
 | `kb_list` | List documents by type or tag |
 | `kb_tunnels` | Cross-domain bridges: neighboring domains for one tag, or the shared notes + entities between two |
@@ -245,9 +247,9 @@ each one, because an agent picks a tool from that line and nothing else:
 | `kb_promote` | Raise a note's tier when a later session confirms it, recording what did the confirming |
 | `kb_synthesize` | A review brief over recent notes — for the "what have we learned lately" pass, not a lookup |
 | `kb_fact_add` | Add an entity fact (subject/predicate/object + validity) |
-| `kb_fact_query` | Query facts about an entity |
+| `kb_fact_query` | Query raw fact history plus any reviewed current-state projection |
 | `kb_fact_timeline` | How an entity's facts evolved over time |
-| `kb_fact_invalidate` | Supersede a fact, preserving history |
+| `kb_fact_invalidate` | End erroneous evidence by exact fact ID, preserving the raw row and provenance; not a current-state selection tool |
 | `kb_capture_session` | Record a coding/debugging session (redacts secrets from pasted output; `kb_write` does not) |
 | `kb_capture_fix` | Record a bug fix: symptom, cause, resolution — searching the symptom later finds the cause |
 | `kb_capture_web` | File a page you fetched, with its URL as provenance |
@@ -255,22 +257,6 @@ each one, because an agent picks a tool from that line and nothing else:
 | `kb_wakeup` | The session briefing (what the SessionStart hook calls) |
 | `kb_vault_status` | Vault indexing stats |
 | `kb_safety_check` | Review a destructive action against KB history |
-
-A local message bus ships alongside, for the one thing a harness cannot do for itself: talk to an agent running in a *different* tool. In-harness agent teams and subagent messaging coordinate agents inside one process tree; when a Claude session and a Codex session are working the same branch, neither can see the other, and this is the channel between them.
-
-| Tool | When to reach for it |
-|------|----------------------|
-| `bus_send` | Hand off, report a step done, ask a blocking question, announce a decision — across tools |
-| `bus_read` | Collect your own mail from a stored cursor; the agent-facing read API |
-| `bus_status` | A peer went quiet — tell "has not read it" from "read it and did not reply" |
-| `bus_sessions` | Who is actually reachable on a channel, and in which workspace |
-| `bus_session_register` | You are not listed on a channel you should be working — mail sends, none arrives |
-| `bus_deliveries` | Which message reached which session; a wiring problem vs. an ignored message |
-| `bus_agent_register` | Work should be picked up when no session is open to receive it |
-| `bus_agents` | Whether a channel already has a worker that would race yours |
-| `bus_agentd_once` | Drain the queue now instead of waiting for the scheduled pass (`dry_run` launches nothing) |
-
-See [docs/message-bus.md](docs/message-bus.md) for wiring.
 
 ## CLI commands
 
@@ -310,6 +296,8 @@ kb summarize           Generate summaries for unsummarized notes (one model call
                        the graph picks it up on the next reindex. Try
                        --limit=N --dry-run first)
 kb entity-merge        Merge two entity aliases in the fact store
+kb fact-conflicts      List current multi-object groups and their review state
+kb fact-adjudicate     Append a complete per-fact current-state review
 kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
 kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
 kb status              Stats and server status
@@ -318,7 +306,7 @@ kb meters prune        Delete old meter rows (--keep-days N required, --dry-run 
 
 `kb tool` is intentionally narrower than MCP. It permits the retrieval,
 capture, correction, promotion, and fact tools needed by `/debrief` and
-`/wrap`; it refuses bus and administrative tools. For example:
+`/wrap`; it refuses administrative tools. For example:
 
 ```bash
 printf '%s\n' '{"query":"resident daemon restart"}' | kb tool kb_search
@@ -334,10 +322,10 @@ arguments or error text in
 `~/.knowledge-base/logs/direct-tool-fallbacks.jsonl`; `kb serve --status`
 reports the 24-hour success denominator and per-tool counts.
 
-That is the set you reach for by hand. `kb --help` lists all 51, including the
-hook entrypoints the installed hooks call, the 11 `bus-*` commands, and the
-maintenance passes (`tier`, `link-backfill`, `fold-inverses`, `stale-servers`,
-`retrieval-report`, `follow-through`, `hint-probe`, `surface-report`, `meters prune`).
+That is the set you reach for by hand. `kb --help` lists every command, including the
+hook entrypoints the installed hooks call and the maintenance passes (`tier`,
+`link-backfill`, `fold-inverses`, `stale-servers`, `retrieval-report`,
+`follow-through`, `hint-probe`, `surface-report`, `meters prune`).
 
 `kb surface-report` answers four questions the store could not answer about
 itself. Which tools does anyone actually call — including the ones nobody has
@@ -435,8 +423,8 @@ still agree.
 
 ## Schema changes
 
-`kb migrate` is the only command that changes the knowledge base or message bus
-schema. Everything else verifies on connect and refuses to run when the database
+`kb migrate` is the only command that changes the knowledge-base schema.
+Everything else verifies on connect and refuses to run when the database
 is behind the code, naming `kb migrate` in the error. A database with no schema
 yet is created on first connect — that has nothing to damage — but an existing
 one is never altered as a side effect of being opened. (`auth.db` is the
@@ -451,7 +439,7 @@ costs you a startup failure that names the fix, not a half-migrated database.
 code: `0` when every database is current, `3` when one is behind, and it prints
 which migrations are missing. For gating a script, prefer it over `kb status` —
 that also exits non-zero when the knowledge base is behind, but with the plain
-`1` it uses for any other failure, and it never looks at the message bus.
+`1` it uses for any other failure.
 
 An MCP session picks up new code without a restart, and that includes new code
 carrying a migration: the supervisor checks before it replaces its child, and if
@@ -459,10 +447,6 @@ the database is behind it keeps the running server answering rather than swappin
 in one that cannot open the database. It says so once, on stderr, and finishes
 the reload by itself once you have run `kb migrate` — no reconnect. Pull, then
 migrate whenever you get to it; the session is not waiting on you.
-
-`kb migrate` covers both databases, and they are located by different variables:
-pointing it somewhere disposable takes `KB_DIR` **and** `KB_BUS_HOME`. `KB_DIR`
-alone still reaches the real message bus.
 
 ---
 
@@ -521,7 +505,6 @@ All agents share one brain: what one learns in a session, the others have in the
 | `KB_HARVEST_SDK_SESSIONS` | No | off | `1`/`true`/`yes` harvests print-mode (SDK) transcripts too. Off because the harvest's own `claude -p` calls look like sessions — 98% of candidates on a busy install. Turn on if you drive Claude Code headlessly and want that work captured |
 | `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
 | `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
-| `KB_TICKET_REGEX` | No | `(?<=^\|[/_])[a-z]{2,6}-(\d+)` | Workstream autobind: regex that recognizes ticket ids in directory/branch names. Full match (lowercased) becomes the bus channel name. The default deliberately accepts any short prefix so autobind works unconfigured; it will also match same-shaped directory names like `node-22`, so set this to something exact if that bothers you |
 | `KB_REPO_ROOTS` | No | `process.cwd()` | Colon-separated absolute paths searched to verify a `verified`-tier commit sha or file-path reference. The server's cwd is often a workspace directory sitting one level above every git repo, where nothing ever resolves — set this to that workspace and each immediate subdirectory that is a git repo is searched too |
 
 ## Running as a service

@@ -159,12 +159,6 @@ describe('migration 12 — folding rows already stored', () => {
     ).run('dryrun_1', 'dryrun_probe', 'landed_on', 'main', '2026-01-01');
     raw.close();
 
-    // runMigrateCli walks every target, and the second one is the message bus —
-    // whose default path is the real one in the user's home. Point it at a
-    // throwaway file for the duration, or this test opens live storage.
-    const previousBus = process.env.KB_BUS_DB_PATH;
-    process.env.KB_BUS_DB_PATH = join(mkdtempSync(join(tmpdir(), 'kb-bus-')), 'bus.db');
-
     const lines = [];
     const realLog = console.log;
     console.log = (...args) => lines.push(args.join(' '));
@@ -172,8 +166,6 @@ describe('migration 12 — folding rows already stored', () => {
       await runMigrateCli(['--dry-run']);
     } finally {
       console.log = realLog;
-      if (previousBus === undefined) delete process.env.KB_BUS_DB_PATH;
-      else process.env.KB_BUS_DB_PATH = previousBus;
     }
 
     const out = lines.join('\n');

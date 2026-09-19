@@ -31,6 +31,7 @@ export const FILES_DIR = join(KB_DIR, 'files');
 // it — so the job whose failures are hardest to notice was the only one that
 // never had a log left to read.
 export const LOGS_DIR = join(KB_DIR, 'logs');
+export const HOOK_ERROR_LOG = join(LOGS_DIR, 'hook-errors.log');
 export const DB_PATH = join(KB_DIR, 'kb.db');
 export const CONFIG_PATH = join(KB_DIR, 'config.json');
 export const PID_PATH = join(KB_DIR, 'kb.pid');

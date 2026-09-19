@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
-import { statSync } from 'fs';
-import { DB_PATH } from './paths.js';
+import { readFileSync, statSync } from 'fs';
+import { DB_PATH, HOOK_ERROR_LOG } from './paths.js';
 import { normalizeTagString, splitTags, canonicalTag, tagSpellings, getTagAliasMap } from './tags.js';
 import { STALE_AFTER } from './jobs.js';
 import {
@@ -11,6 +11,7 @@ import {
 import { logRetrievalResults } from './retrieval.js';
 import { canonicalPredicate } from './predicates.js';
 import { authoredBody } from './embeddings/embed.js';
+import { FTS_OUTCOME_TIE_BUCKET, compareByOutcomeSignal } from './outcome-ranking.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 
 let db = null;
@@ -640,6 +641,183 @@ export const MIGRATIONS = [{
     addColumn(db, 'extractions', 'model_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
     addColumn(db, 'extractions', 'consolidation_duration_ms', 'INTEGER NOT NULL DEFAULT 0');
   },
+}, {
+  version: 24,
+  // Reviews are a derived, append-only judgment over the raw fact ledger. The
+  // fact/entity ids intentionally are not foreign keys: entity merges and fact
+  // dedupes must be able to proceed and make an old review visibly stale,
+  // rather than either failing or cascading away the review's provenance.
+  name: 'append-only per-fact adjudication reviews',
+  applied: db => {
+    const required = [
+      ['table', 'fact_reviews'],
+      ['table', 'fact_review_items'],
+      ['trigger', 'fact_reviews_no_update'],
+      ['trigger', 'fact_reviews_no_delete'],
+      ['trigger', 'fact_review_items_no_update'],
+      ['trigger', 'fact_review_items_no_delete'],
+      ['trigger', 'fact_review_items_require_live_member'],
+      ['trigger', 'fact_review_items_require_current_target'],
+      ['trigger', 'fact_review_items_capacity'],
+    ];
+    const hasObject = db.prepare('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?');
+    return required.every(([type, name]) => hasObject.get(type, name));
+  },
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS fact_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      subject TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      reviewer TEXT NOT NULL CHECK (length(trim(reviewer)) BETWEEN 1 AND 200),
+      policy TEXT NOT NULL DEFAULT 'manual-review-v1',
+      fact_count INTEGER NOT NULL CHECK (fact_count > 0),
+      note TEXT CHECK (note IS NULL OR length(note) <= 4000),
+      reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_fact_reviews_group
+      ON fact_reviews(subject, predicate, id DESC);
+
+    CREATE TABLE IF NOT EXISTS fact_review_items (
+      review_id INTEGER NOT NULL,
+      fact_id TEXT NOT NULL,
+      disposition TEXT NOT NULL CHECK (
+        disposition IN ('current', 'superseded', 'synonym', 'rejected', 'abstain')
+      ),
+      target_fact_id TEXT,
+      evidence_ref TEXT,
+      reason TEXT CHECK (reason IS NULL OR length(reason) <= 1000),
+      PRIMARY KEY (review_id, fact_id),
+      CHECK (
+        (disposition IN ('superseded', 'synonym') AND target_fact_id IS NOT NULL)
+        OR (disposition NOT IN ('superseded', 'synonym') AND target_fact_id IS NULL)
+      ),
+      CHECK (target_fact_id IS NULL OR target_fact_id <> fact_id),
+      CHECK (evidence_ref IS NOT NULL OR disposition = 'abstain'),
+      CHECK (
+        disposition NOT IN ('rejected', 'abstain')
+        OR (reason IS NOT NULL AND length(trim(reason)) > 0)
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_fact_review_items_fact ON fact_review_items(fact_id);
+
+    CREATE TRIGGER IF NOT EXISTS fact_reviews_no_update
+    BEFORE UPDATE ON fact_reviews BEGIN
+      SELECT RAISE(ABORT, 'fact_reviews is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_reviews_no_delete
+    BEFORE DELETE ON fact_reviews BEGIN
+      SELECT RAISE(ABORT, 'fact_reviews is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_no_update
+    BEFORE UPDATE ON fact_review_items BEGIN
+      SELECT RAISE(ABORT, 'fact_review_items is append-only');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_no_delete
+    BEFORE DELETE ON fact_review_items BEGIN
+      SELECT RAISE(ABORT, 'fact_review_items is append-only');
+    END;
+
+    -- Application validation gives precise errors. These triggers are the
+    -- lower boundary: direct SQL still cannot invent ids, cross groups, point
+    -- at a non-current target, or append items after the declared snapshot is
+    -- complete. Targets are inserted first by the writer.
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_require_live_member
+    BEFORE INSERT ON fact_review_items
+    WHEN NOT EXISTS (
+      SELECT 1
+      FROM fact_reviews r
+      JOIN facts f
+        ON f.id = NEW.fact_id
+       AND f.subject = r.subject
+       AND f.predicate = r.predicate
+       AND f.valid_to IS NULL
+      WHERE r.id = NEW.review_id
+    ) BEGIN
+      SELECT RAISE(ABORT, 'review item must be a live fact in the reviewed group');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_require_current_target
+    BEFORE INSERT ON fact_review_items
+    WHEN NEW.target_fact_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM fact_review_items
+      WHERE review_id = NEW.review_id
+        AND fact_id = NEW.target_fact_id
+        AND disposition = 'current'
+    ) BEGIN
+      SELECT RAISE(ABORT, 'review target must be a current item in the same review');
+    END;
+    CREATE TRIGGER IF NOT EXISTS fact_review_items_capacity
+    BEFORE INSERT ON fact_review_items
+    WHEN (
+      SELECT COUNT(*) FROM fact_review_items WHERE review_id = NEW.review_id
+    ) >= COALESCE((
+      SELECT fact_count FROM fact_reviews WHERE id = NEW.review_id
+    ), 0) BEGIN
+      SELECT RAISE(ABORT, 'review already contains its declared fact snapshot');
+    END;
+  `),
+}, {
+  version: 25,
+  // Transcript harvest used to summarize only the head and tail of long
+  // sessions, then mark the transcript complete. These checkpoints track the
+  // exact content spans that have actually been read, without storing transcript
+  // text. Offsets plus hashes let appended transcripts reuse completed prefix
+  // work while rewrites, truncation, or rotation are re-read.
+  name: 'content checkpoints for transcript harvest chunks',
+  applied: db => hasTable(db, 'harvest_chunk_log') && hasIndex(db, 'uq_harvest_chunk_log_content'),
+  up: db => db.exec(`
+    CREATE TABLE IF NOT EXISTS harvest_chunk_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      transcript_path TEXT NOT NULL,
+      pass TEXT NOT NULL CHECK (pass IN ('lessons', 'facts')),
+      chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+      start_char INTEGER NOT NULL CHECK (start_char >= 0),
+      end_char INTEGER NOT NULL CHECK (end_char >= start_char),
+      input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
+      completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      notes_added INTEGER,
+      facts_added INTEGER,
+      error_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_harvest_chunk_log_content
+      ON harvest_chunk_log(transcript_path, pass, chunk_index, start_char, end_char, input_hash);
+    CREATE INDEX IF NOT EXISTS idx_harvest_chunk_log_transcript_pass
+      ON harvest_chunk_log(transcript_path, pass);
+  `),
+}, {
+  version: 26,
+  // Outcome feedback is tied to the exact note version the agent saw. A later
+  // edit can make an old success irrelevant, so retrieval rows store the version
+  // at read time and outcome rows keep that same version beside the evidence.
+  // This table is advisory ranking data only: it never writes document tiers.
+  name: 'retrieval outcome feedback by document version',
+  applied: db => hasColumn(db, 'retrievals', 'doc_version')
+    && hasTable(db, 'retrieval_outcomes')
+    && hasIndex(db, 'uq_retrieval_outcomes_evidence'),
+  up: db => {
+    addColumn(db, 'retrievals', 'doc_version', 'TEXT');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS retrieval_outcomes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        retrieval_id INTEGER REFERENCES retrievals(id) ON DELETE SET NULL,
+        doc_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        doc_version TEXT NOT NULL,
+        session TEXT,
+        event_id TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('helped', 'corrected', 'stale')),
+        evidence_kind TEXT NOT NULL,
+        evidence_ref TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(session, doc_id, doc_version, outcome, evidence_ref)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_retrieval_outcomes_evidence
+        ON retrieval_outcomes(session, doc_id, doc_version, outcome, evidence_ref);
+      CREATE INDEX IF NOT EXISTS idx_retrieval_outcomes_doc_version
+        ON retrieval_outcomes(doc_id, doc_version, outcome);
+      CREATE INDEX IF NOT EXISTS idx_retrieval_outcomes_retrieval
+        ON retrieval_outcomes(retrieval_id);
+    `);
+  },
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
@@ -795,8 +973,8 @@ export function preferConfirmed(results) {
 // surface — MCP, REST, CLI — so a new caller cannot ship an unmetered read
 // path by forgetting to add a log line; the most it can get wrong is the
 // surface label. See logRetrievalResults for when to log here vs. yourself.
-export function searchDocuments(query, limit = 20, { tags, includeSuperseded = false, surface = null } = {}) {
-  const results = ftsSearch(query, limit, { tags, includeSuperseded });
+export function searchDocuments(query, limit = 20, { tags, project, type, includeSuperseded = false, surface = null } = {}) {
+  const results = ftsSearch(query, limit, { tags, project, type, includeSuperseded });
   // One id per call, not per row: two calls landing in the same session in
   // the same second are otherwise indistinguishable to a report that has to
   // reconstruct events from (session, surface, timestamp).
@@ -842,9 +1020,29 @@ export function identityBoost(doc, terms) {
   return boost;
 }
 
-function ftsSearch(query, limit, { tags, includeSuperseded }) {
-  const { clauses, params: tagParams } = tagFilterFor(tags ?? '', 'd.tags');
-  const tagFilter = clauses.map(c => `AND ${c}`).join(' ');
+function preferOutcomeWithinRankBucket(results) {
+  const database = getDb();
+  return results.sort((a, b) => {
+    const bucket = Math.round((a.rank || 0) / FTS_OUTCOME_TIE_BUCKET)
+      - Math.round((b.rank || 0) / FTS_OUTCOME_TIE_BUCKET);
+    if (bucket) return bucket;
+    return tierRank(b.tier) - tierRank(a.tier)
+      || compareByOutcomeSignal(database, a, b)
+      || ((a.rank || 0) - (b.rank || 0));
+  });
+}
+
+function ftsSearch(query, limit, { tags, project, type, includeSuperseded }) {
+  const { clauses, params } = tagFilterFor(tags ?? '', 'd.tags');
+  if (project) {
+    clauses.push('EXISTS (SELECT 1 FROM vault_files vf WHERE vf.document_id = d.id AND vf.project = ?)');
+    params.push(project);
+  }
+  if (type) {
+    clauses.push('d.doc_type = ?');
+    params.push(type);
+  }
+  const filter = clauses.map(c => `AND ${c}`).join(' ');
   // Superseded notes drop out of current-state recall unless explicitly asked
   // for. No bound param — the clause is a literal, so param arrays are unchanged.
   const supersededFilter = includeSuperseded ? '' : 'AND d.superseded_at IS NULL';
@@ -870,12 +1068,12 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
       FROM documents_fts f
       JOIN documents d ON d.id = f.rowid
       WHERE documents_fts MATCH ?
-      ${tagFilter}
+      ${filter}
       ${supersededFilter}
       ORDER BY rank
       LIMIT ?
     `);
-    return preferConfirmed(stmt.all(sanitized, ...tagParams, limit));
+    return preferOutcomeWithinRankBucket(stmt.all(sanitized, ...params, limit));
   }
 
   // Build FTS5 query: AND-first for precision, OR fallback for recall
@@ -891,16 +1089,16 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
-    ${tagFilter}
+    ${filter}
     ${supersededFilter}
     ORDER BY rank
     LIMIT ?
   `);
 
   // Try AND first for precision; fall back to OR if no results
-  let results = stmt.all(andQuery, ...tagParams, limit);
+  let results = stmt.all(andQuery, ...params, limit);
   if (results.length === 0 && terms.length > 1) {
-    results = stmt.all(orQuery, ...tagParams, limit);
+    results = stmt.all(orQuery, ...params, limit);
   }
 
   // If OR gives too many low-quality results, re-rank: boost docs matching more terms
@@ -909,7 +1107,7 @@ function ftsSearch(query, limit, { tags, includeSuperseded }) {
     for (const r of results) r.rank = r.rank - identityBoost(r, terms);
   }
 
-  return preferConfirmed(results);
+  return preferOutcomeWithinRankBucket(results);
 }
 
 export function listDocuments({ type, tag, limit = 50, offset = 0, includeSuperseded = false } = {}) {
@@ -1264,15 +1462,35 @@ export function getMeta(key) {
 // `record` is passed by the session-start surfaces alone. Read-only callers
 // must leave the baseline where it is, or the comparison measures how often the
 // snapshot was taken.
-function backlogWarning({ key, count, floor, message, record }) {
+function backlogWarning({ key, count, floor, minimumGrowth = 1, message, record }) {
   const seen = getMeta(key);
   const previous = seen ? Number(seen.value) : null;
-  if (record) setMeta(key, count);
+  function recordCurrentCount() {
+    if (record) setMeta(key, count);
+  }
   // No baseline yet: adopt this one silently. A fresh install's backlog is its
   // starting condition, not a regression.
-  if (previous === null || !Number.isFinite(previous)) return null;
-  if (count <= floor || count <= previous) return null;
+  if (previous === null || !Number.isFinite(previous)) {
+    recordCurrentCount();
+    return null;
+  }
+  // Recovery establishes a new low-water mark. Sub-threshold growth does not:
+  // it accumulates until the debounce threshold is crossed.
+  if (count <= floor || count < previous) {
+    recordCurrentCount();
+    return null;
+  }
+  if (count - previous < minimumGrowth) return null;
+  recordCurrentCount();
   return message(count, previous);
+}
+
+function lineCount(path) {
+  try {
+    return (readFileSync(path, 'utf8').match(/\n/g) || []).length;
+  } catch {
+    return 0;
+  }
 }
 
 // One health snapshot for wakeup/status: derived-layer coverage plus job
@@ -1301,6 +1519,9 @@ export function getHealth({ recordBacklog = false } = {}) {
   const lastHarvest = harvest?.updated_at || harvestLogged;
   const harvestAge = lastHarvest ? (Date.now() - new Date(lastHarvest + 'Z').getTime()) / 3600000 : null;
   const synthesis = getMeta('last_synthesis');
+  const hookErrors = lineCount(HOOK_ERROR_LOG);
+  const reconcile = getMeta('last_reconcile');
+  const reconcileError = getMeta('last_reconcile_error');
 
   const warnings = [];
   // Both remedies are long-running and neither is free, so each says what it
@@ -1315,6 +1536,10 @@ export function getHealth({ recordBacklog = false } = {}) {
       key: 'backlog_summaries', count: vaultFiles - summarized, floor: 50, record: recordBacklog,
       message: (now, was) => `notes missing summaries grew ${was} → ${now} — 'kb summarize' rewrites note frontmatter in the vault, ~11s and one model call per note (try --limit=N --dry-run first); the graph picks it up on the next reindex`,
     }),
+    backlogWarning({
+      key: 'hook_error_lines', count: hookErrors, floor: 0, minimumGrowth: 3, record: recordBacklog,
+      message: (now, was) => `${now - was} new hook failures since the last briefing (${was} → ${now}) — check hook-errors.log`,
+    }),
   ].filter(Boolean);
   warnings.push(...growth);
   // Every tolerance is one period plus slack (src/jobs.js), so a loop that
@@ -1325,6 +1550,9 @@ export function getHealth({ recordBacklog = false } = {}) {
   if (harvestAge === null || harvestAge > STALE_AFTER.harvest) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);
   const synthAge = ageHours(synthesis);
   if (synthAge === null || synthAge > STALE_AFTER.synthesis) warnings.push(`synthesis ${synthAge === null ? 'never recorded' : Math.round(synthAge / 24) + 'd ago'} — check com.kb.synthesis launchd job`);
+  const reconcileAge = ageHours(reconcile);
+  if (reconcileAge === null || reconcileAge > STALE_AFTER.reconcile) warnings.push(`reconcile heartbeat ${reconcileAge === null ? 'never recorded' : Math.round(reconcileAge) + 'h old'} — check com.kb.reconcile launchd job`);
+  if (reconcileError?.value) warnings.push(`reconcile last failed: ${reconcileError.value}`);
 
   return {
     embeddings: `${embedded}/${docs}`,
@@ -1332,6 +1560,7 @@ export function getHealth({ recordBacklog = false } = {}) {
     last_reindex: reindex?.updated_at || null,
     last_harvest: lastHarvest,
     last_synthesis: synthesis?.updated_at || null,
+    last_reconcile: reconcile?.updated_at || null,
     ok: warnings.length === 0,
     warnings,
   };

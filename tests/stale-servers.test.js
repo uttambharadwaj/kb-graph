@@ -66,10 +66,10 @@ describe('staleServers', () => {
     assert.deepStrictEqual(stale.map(s => s.pid), [69752, 56351, 87003]);
   });
 
-  // bus-notifier runs from the same bin/kb.js and is far more numerous than the
-  // MCP servers; matching it would bury the processes that actually matter.
+  // Maintenance commands run from the same bin/kb.js; matching them would bury
+  // the MCP processes that actually matter.
   it('does not match other kb.js subcommands', () => {
-    const line = '  2975     1 Sat Jul 25 22:45:32 2026 /opt/node/bin/node /repo/bin/kb.js bus-notifier --agent claude';
+    const line = '  2975     1 Sat Jul 25 22:45:32 2026 /opt/node/bin/node /repo/bin/kb.js harvest';
     assert.deepStrictEqual(staleServers(ps(line), at).stale, []);
   });
 

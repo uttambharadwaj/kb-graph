@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/server';
+import packageJson from '../package.json' with { type: 'json' };
 import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
 import { resolveHarnessAncestry } from '../src/process-ancestry.js';
@@ -160,7 +161,7 @@ describe('kb mcp-shim', () => {
     const driver = jsonRpcDriver(child);
     try {
       const init = await initialize(driver);
-      assert.deepStrictEqual(init.result.serverInfo, { name: 'knowledge-base', version: '1.0.0' });
+      assert.deepStrictEqual(init.result.serverInfo, { name: 'knowledge-base', version: packageJson.version });
 
       const list = await driver.call('tools/list');
       assert.ok(list.result.tools.some((tool) => tool.name === 'kb_search'), 'kb_search must be registered');

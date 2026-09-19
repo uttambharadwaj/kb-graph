@@ -121,7 +121,6 @@ This is NOT fine-tuning. The model doesn't change. The context it receives impro
 | A briefing contradicts what you just saw | `kb_supersede_candidates` | Lists what the fact graph thinks went stale; changes nothing |
 | "What have we learned lately?" across projects | `kb_synthesize` | A review brief to answer — not a lookup, and not a finished synthesis |
 | Search turns up notes with no type or tags | `kb_classify` | Unclassified notes have no summary, so they rank badly and `kb_context` shows nothing |
-| Coordinating with an agent in a *different* tool | `bus_send` / `bus_read` | Your harness cannot see a Codex or Gemini session; the bus can |
 
 ## Reaching for the less obvious tools
 

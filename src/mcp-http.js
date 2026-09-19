@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import packageJson from '../package.json' with { type: 'json' };
 import { createHttpKbServer } from './mcp-factory.js';
 import { getHttpToolDefinitions } from './tools.js';
 
@@ -112,7 +113,7 @@ export async function mcpGetHandler(req, res) {
   // No session — return discovery metadata
   res.json({
     name: 'knowledge-base-brain',
-    version: '1.0.0',
+    version: packageJson.version,
     capabilities: { tools: {} },
     toolCount: getHttpToolDefinitions().length,
   });

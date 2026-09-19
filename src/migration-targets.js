@@ -8,7 +8,6 @@
 
 import { dirname, join } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { ensureBusStorage, getBusDbPath } from './bus/config.js';
 import { DB_PATH } from './paths.js';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
@@ -19,12 +18,6 @@ export const MIGRATION_TARGETS = [
     source: join(SRC, 'db.js'),
     db: () => DB_PATH,
     prepare: () => {},
-  },
-  {
-    label: 'message bus',
-    source: join(SRC, 'bus', 'db.js'),
-    db: getBusDbPath,
-    prepare: ensureBusStorage,
   },
 ];
 

@@ -13,7 +13,7 @@ import authRoutes from './routes/auth-routes.js';
 import apiRoutes from './routes/api.js';
 import { toNodeHandler } from 'better-auth/node';
 import { auth } from './auth-oauth.js';
-import { createApiKeyMiddleware } from './middleware/api-key.js';
+import { createApiKeyMiddleware, getApiKeyService } from './middleware/api-key.js';
 import v1Router from './routes/v1.js';
 import openapiRoute from './routes/openapi.js';
 import { mcpHttpHandler, mcpGetHandler } from './mcp-http.js';
@@ -136,12 +136,9 @@ export async function start() {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       // Check if it's an API key in Bearer format
       const token = authHeader.slice(7);
-      const keyMap = {};
-      if (process.env.KB_API_KEY_CLAUDE) keyMap[process.env.KB_API_KEY_CLAUDE] = 'claude';
-      if (process.env.KB_API_KEY_OPENAI) keyMap[process.env.KB_API_KEY_OPENAI] = 'openai';
-      if (process.env.KB_API_KEY_GEMINI) keyMap[process.env.KB_API_KEY_GEMINI] = 'gemini';
-      if (keyMap[token]) {
-        req.apiService = keyMap[token];
+      const service = getApiKeyService(token);
+      if (service) {
+        req.apiService = service;
         return next();
       }
 

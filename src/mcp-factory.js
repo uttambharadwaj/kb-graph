@@ -3,10 +3,10 @@
 // comes through here, so a tool cannot reach one client and not another
 // because a second registration loop was never updated.
 import { McpServer } from '@modelcontextprotocol/server';
-import { registerBusResources } from './bus/resources.js';
+import packageJson from '../package.json' with { type: 'json' };
 import { getHttpToolDefinitions, getToolDefinitions } from './tools.js';
 
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = packageJson.version;
 
 // Clients that auto-approve only read-annotated tools (Codex under
 // approval_policy=never) deny every unannotated call. Writes stay unannotated
@@ -14,8 +14,7 @@ const SERVER_VERSION = '1.0.0';
 const READ_ONLY_TOOLS = new Set([
   'kb_search', 'kb_search_smart', 'kb_context', 'kb_read', 'kb_list', 'kb_tunnels',
   'kb_fact_query', 'kb_fact_timeline', 'kb_check_duplicate', 'kb_supersede_candidates',
-  'kb_wakeup', 'kb_vault_status', 'kb_safety_check', 'kb_classify', 'kb_extract',
-  'bus_read', 'bus_status', 'bus_agents', 'bus_sessions', 'bus_deliveries',
+  'kb_vault_status', 'kb_safety_check',
 ]);
 
 function toolAnnotations(name) {
@@ -27,7 +26,6 @@ function toolAnnotations(name) {
 export function createKbServer({
   name = 'knowledge-base',
   tools = getToolDefinitions,
-  busResources = true,
   wrapHandler,
 } = {}) {
   const server = new McpServer({ name, version: SERVER_VERSION });
@@ -40,17 +38,15 @@ export function createKbServer({
       handler,
     );
   }
-  if (busResources) registerBusResources(server);
 
   return server;
 }
 
-// HTTP is a narrower surface: no admin-only tools, no bus resources, and it
-// announces itself under its own name that remote clients already match on.
+// HTTP is a narrower surface: no admin-only tools, and it announces itself
+// under its own name that remote clients already match on.
 export function createHttpKbServer() {
   return createKbServer({
     name: 'knowledge-base-brain',
     tools: getHttpToolDefinitions,
-    busResources: false,
   });
 }

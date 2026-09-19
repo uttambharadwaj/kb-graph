@@ -15,7 +15,6 @@ const COMMANDS = {
   shim: command(String.raw`\/bin\/kb\.js\s+mcp-shim`),
   supervisor: command(String.raw`\/bin\/kb\.js\s+mcp`),
   worker: command(String.raw`\/src\/mcp\.js`),
-  notifier: command(String.raw`\/(?:bin\/bus-notifier\.js|bin\/kb\.js\s+bus-notifier)`),
 };
 
 const parseStartedAt = value => Date.parse(String(value).replace(/\s+/g, ' ').trim());
@@ -28,7 +27,6 @@ export function summarizeResidentProcesses(raw, { now = new Date() } = {}) {
   const shims = rows.filter(row => COMMANDS.shim.test(row.comm));
   const supervisors = rows.filter(row => COMMANDS.supervisor.test(row.comm));
   const workers = rows.filter(row => COMMANDS.worker.test(row.comm));
-  const busNotifiers = rows.filter(row => COMMANDS.notifier.test(row.comm));
 
   const fallbackShimPids = new Set();
   let orphanWorkers = 0;
@@ -55,7 +53,6 @@ export function summarizeResidentProcesses(raw, { now = new Date() } = {}) {
     oldestFallbackDays,
     legacySupervisors: supervisors.length,
     orphanWorkers,
-    busNotifiers: busNotifiers.length,
   };
 }
 
@@ -85,6 +82,5 @@ export function formatResidentProcessSummary(summary) {
   return `resident topology: ${count(summary.daemons, 'daemon')}`
     + `; shims ${summary.shims} (daemon ${summary.daemonShims}, fallback ${summary.fallbackShims}${fallbackAge})`
     + `; ${count(summary.legacySupervisors, 'legacy supervisor')}`
-    + `; ${count(summary.orphanWorkers, 'orphan worker')}`
-    + `; ${count(summary.busNotifiers, 'bus notifier')}`;
+    + `; ${count(summary.orphanWorkers, 'orphan worker')}`;
 }

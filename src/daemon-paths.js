@@ -21,4 +21,5 @@ export const HOOK_OP = {
   PROMPT_HINT: 'prompt-hint',
   TRIGGER_HOOK: 'trigger-hook',
   WAKEUP_HOOK: 'wakeup-hook',
+  SESSION_CAPTURE: 'session-capture',
 };

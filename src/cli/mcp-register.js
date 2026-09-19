@@ -21,6 +21,10 @@ export function mcpServerConfig(agent = null) {
     // and falls back to a full in-process server when none is — so this default
     // is correct whether or not the machine has the daemon set up.
     args,
+    // Agent hosts may carry private Node preloads in NODE_OPTIONS. The KB
+    // runtime does not depend on them, and a deleted preload would kill Node
+    // before the shim can connect or fall back.
+    env: { NODE_OPTIONS: '' },
   };
 }
 
@@ -92,6 +96,9 @@ export function codexRegistrationSnippet() {
     // Cold start pays for the daemon liveness probe plus a fallback in-process
     // server; Codex's default is short enough to time out on that.
     'startup_timeout_sec = 20.0',
+    '',
+    `[mcp_servers.${KB_MCP_SERVER_NAME}.env]`,
+    'NODE_OPTIONS = ""',
   ].join('\n');
 }
 
@@ -126,7 +133,15 @@ export function registerAgents(agents, homeDir = homedir(), { force = false } = 
 
     mkdirSync(join(path, '..'), { recursive: true });
     if (!config.mcpServers) config.mcpServers = {};
-    config.mcpServers[KB_MCP_SERVER_NAME] = mcpServerConfig(agent);
+    const generated = mcpServerConfig(agent);
+    const existingEnv = config.mcpServers[KB_MCP_SERVER_NAME]?.env;
+    const preservedEnv = existingEnv && typeof existingEnv === 'object' && !Array.isArray(existingEnv)
+      ? existingEnv
+      : {};
+    config.mcpServers[KB_MCP_SERVER_NAME] = {
+      ...generated,
+      env: { ...preservedEnv, ...generated.env },
+    };
     // The file holds every MCP server the agent has, often with API keys in
     // headers, and the agent itself rewrites it: write-then-rename so a crash
     // cannot truncate it, owner-only when we are the one creating it.

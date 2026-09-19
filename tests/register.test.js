@@ -46,6 +46,7 @@ describe('MCP registration', () => {
     assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
       command: stableNodePath(),
       args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
+      env: { NODE_OPTIONS: '' },
     });
   });
 
@@ -68,6 +69,7 @@ describe('MCP registration', () => {
       assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
         command: stableNodePath(),
         args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
+        env: { NODE_OPTIONS: '' },
       });
     }
   });
@@ -118,6 +120,7 @@ describe('codex registration', () => {
     assert.ok(snippet.includes(`args = [${JSON.stringify(KB_ENTRYPOINT_PATH)}, "mcp-shim"]`));
     assert.ok(snippet.includes(`cwd = ${JSON.stringify(join(KB_ENTRYPOINT_PATH, '..', '..'))}`));
     assert.match(snippet, /^startup_timeout_sec = 20\.0$/m);
+    assert.match(snippet, /^\[mcp_servers\.knowledge-base\.env\]\nNODE_OPTIONS = ""$/m);
   });
 });
 
@@ -164,10 +167,18 @@ describe('registering from a second checkout', () => {
   it('moves it when told to', () => {
     const homeDir = makeHome();
     alreadyRegisteredElsewhere(homeDir);
+    const path = getAgentConfigPath('claude', homeDir);
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    config.mcpServers['knowledge-base'].env = { KB_REPO_ROOTS: '/workspace/repos' };
+    writeFileSync(path, JSON.stringify(config, null, 2));
 
     const [result] = registerAgents(['claude'], homeDir, { force: true });
     assert.strictEqual(result.written, true);
     assert.strictEqual(registeredPath(homeDir), KB_ENTRYPOINT_PATH);
+    assert.deepStrictEqual(
+      JSON.parse(readFileSync(path, 'utf8')).mcpServers['knowledge-base'].env,
+      { KB_REPO_ROOTS: '/workspace/repos', NODE_OPTIONS: '' },
+    );
   });
 
   it('is idempotent from the checkout that already owns the config', () => {
@@ -177,6 +188,26 @@ describe('registering from a second checkout', () => {
     const [result] = registerAgents(['claude'], homeDir);
     assert.strictEqual(result.written, true, 're-registering the same path is not a move');
     assert.strictEqual(registeredPath(homeDir), KB_ENTRYPOINT_PATH);
+  });
+
+  it('preserves existing MCP env while replacing inherited NODE_OPTIONS', () => {
+    const homeDir = makeHome();
+    registerAgents(['claude'], homeDir);
+    const path = getAgentConfigPath('claude', homeDir);
+    const config = JSON.parse(readFileSync(path, 'utf8'));
+    config.mcpServers['knowledge-base'].env = {
+      KB_REPO_ROOTS: '/workspace/repos',
+      NODE_OPTIONS: '--require=/deleted/preload.cjs',
+    };
+    writeFileSync(path, JSON.stringify(config, null, 2));
+
+    registerAgents(['claude'], homeDir);
+
+    const updated = JSON.parse(readFileSync(path, 'utf8')).mcpServers['knowledge-base'];
+    assert.deepStrictEqual(updated.env, {
+      KB_REPO_ROOTS: '/workspace/repos',
+      NODE_OPTIONS: '',
+    });
   });
 
   it('reports an outcome for every agent asked for, so a refusal cannot pass for a write', () => {

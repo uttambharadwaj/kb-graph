@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { getDb } from './db.js';
 import { addFact, queryFact, invalidateFact, sqlTimestamp, entityKey } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { hashInput, logExtraction } from './extract-meter.js';
@@ -598,132 +599,134 @@ export function retireContradicted(subject, pred, object, { validFrom } = {}) {
 //   - otherwise -> add
 // Pure over the facts table (no LLM) — this is the deterministic, testable core.
 export function consolidate(facts, { source, observationDate, observedAt } = {}) {
-  const added = [], invalidated = [], skipped = [];
-  const validFrom = observationDate || new Date().toISOString().split('T')[0];
-  const observedAtTs = normalizeObservedAt(observedAt);
-  const conflicts = findSingleValuedConflicts(facts);
-  const contested = new Set(conflicts.map(conflictKey));
+  return getDb().transaction(() => {
+    const added = [], invalidated = [], skipped = [];
+    const validFrom = observationDate || new Date().toISOString().split('T')[0];
+    const observedAtTs = normalizeObservedAt(observedAt);
+    const conflicts = findSingleValuedConflicts(facts);
+    const contested = new Set(conflicts.map(conflictKey));
 
-  for (const raw of facts.flatMap(splitListObject)) {
-    if (!raw?.subject || !raw?.predicate || !raw?.object) {
-      skipped.push({ fact: raw, reason: 'incomplete_triple' });
-      continue;
-    }
-    // Skip reports carry the folded triple, since that is what was attempted.
-    const f = canonicalTriple(raw);
-    const { subject, predicate: pred, object } = f;
-    // The event's own date when the text stated one, the observation date
-    // otherwise. grounding.js keeps a per-fact valid_from only where the text
-    // states it, and isIsoDate is asked again here because a caller can reach
-    // consolidate without going through that filter at all.
-    const factValidFrom = isIsoDate(f.valid_from) ? f.valid_from : validFrom;
+    for (const raw of facts.flatMap(splitListObject)) {
+      if (!raw?.subject || !raw?.predicate || !raw?.object) {
+        skipped.push({ fact: raw, reason: 'incomplete_triple' });
+        continue;
+      }
+      // Skip reports carry the folded triple, since that is what was attempted.
+      const f = canonicalTriple(raw);
+      const { subject, predicate: pred, object } = f;
+      // The event's own date when the text stated one, the observation date
+      // otherwise. grounding.js keeps a per-fact valid_from only where the text
+      // states it, and isIsoDate is asked again here because a caller can reach
+      // consolidate without going through that filter at all.
+      const factValidFrom = isIsoDate(f.valid_from) ? f.valid_from : validFrom;
 
-    // The closed vocabulary, checked after the fold and before anything is
-    // written. Reported rather than coerced: the nearest listed predicate is a
-    // guess, and a guessed edge is indistinguishable from a stated one once it
-    // is a row. The caller gets the candidates and decides — widen the list, or
-    // re-state the fact. Silently dropping it here is the one thing that must
-    // not happen, since a caller with no `skipped` entry has been told the
-    // extraction was complete.
-    const rejection = vocabularyRejection(pred, raw.predicate);
-    if (rejection) {
-      skipped.push({ fact: f, ...rejection });
-      continue;
-    }
+      // The closed vocabulary, checked after the fold and before anything is
+      // written. Reported rather than coerced: the nearest listed predicate is a
+      // guess, and a guessed edge is indistinguishable from a stated one once it
+      // is a row. The caller gets the candidates and decides — widen the list, or
+      // re-state the fact. Silently dropping it here is the one thing that must
+      // not happen, since a caller with no `skipped` entry has been told the
+      // extraction was complete.
+      const rejection = vocabularyRejection(pred, raw.predicate);
+      if (rejection) {
+        skipped.push({ fact: f, ...rejection });
+        continue;
+      }
 
-    // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
-    // canonicalPredicate on the stored predicate too: rows written before an alias was
-    // registered still carry the old spelling, and comparing raw would leave a
-    // merged_as row unmatched by an incoming merged_via — no dedup, no
-    // retirement, two live rows on a single-valued predicate.
-    const held = heldCurrentFacts(subject, pred);
+      // exact: prefix-matched qualifier entities (subject_qualifier) are NOT contradictions.
+      // canonicalPredicate on the stored predicate too: rows written before an alias was
+      // registered still carry the old spelling, and comparing raw would leave a
+      // merged_as row unmatched by an incoming merged_via — no dedup, no
+      // retirement, two live rows on a single-valued predicate.
+      const held = heldCurrentFacts(subject, pred);
 
-    // The currently-valid facts with this subject+predicate that this value
-    // contradicts. Computed before the spelling check below: a live object this
-    // value genuinely contradicts must still be found, even when a variant of
-    // the value is also held — kb_fact_add now shares this exact decision (see
-    // contradictedFacts / retireContradicted above), so both write paths still
-    // coexist rather than one silently under-retiring the other's rows.
-    const contradicted = contradictedFacts(subject, pred, object, held);
+      // The currently-valid facts with this subject+predicate that this value
+      // contradicts. Computed before the spelling check below: a live object this
+      // value genuinely contradicts must still be found, even when a variant of
+      // the value is also held — kb_fact_add now shares this exact decision (see
+      // contradictedFacts / retireContradicted above), so both write paths still
+      // coexist rather than one silently under-retiring the other's rows.
+      const contradicted = contradictedFacts(subject, pred, object, held);
 
-    // An assertion observed before a fact we already hold is older news, not a
-    // contradiction: a caller passing observation_date is replaying text from
-    // the past against whatever the graph has learned since. valid_from is a
-    // date, so it can only order across days — observed_at carries the instant
-    // and catches the same-day case, 10am text replayed against a 4pm
-    // correction. A caller that passes neither is speaking for now and skips
-    // both tests, which is right.
-    // Read from `contradicted`, not from what will actually be retired: a batch
-    // that disagrees with itself still loses to what the graph learned after it,
-    // and gating this on the retirement decision would write a replay of old
-    // text as current the moment the batch happened to be contested.
-    const newer = contradicted.find(r => predatesHeld(r, factValidFrom)
-      || (observedAtTs && r.recorded_at && r.recorded_at > observedAtTs));
-    if (newer) {
-      skipped.push({
-        fact: f,
-        reason: 'stale_observation',
-        existing: newer.object,
-        existing_since: newer.valid_from,
-        existing_recorded_at: newer.recorded_at,
-      });
-      continue;
-    }
-
-    // A pair this batch cannot agree on has no value to supersede anything with,
-    // so it retires nothing at all — not its siblings here, and not what the
-    // graph already holds.
-    const retiring = contested.has(conflictKey(f)) ? [] : contradicted;
-
-    for (const stale of retiring) {
-      // Report the retirement only if it happened. The guard above means
-      // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
-      // subprocesses share one DB, so another can retire it between this read
-      // and this write.
-      const res = invalidateFact(subject, stale.predicate, stale.object, { ended: factValidFrom });
-      if (res.invalidated) {
-        invalidated.push({
-          subject,
-          predicate: pred,
-          object: stale.object,
-          reason: 'single_valued_predicate_took_new_object',
-          superseded_by: object,
-        });
-      } else {
+      // An assertion observed before a fact we already hold is older news, not a
+      // contradiction: a caller passing observation_date is replaying text from
+      // the past against whatever the graph has learned since. valid_from is a
+      // date, so it can only order across days — observed_at carries the instant
+      // and catches the same-day case, 10am text replayed against a 4pm
+      // correction. A caller that passes neither is speaking for now and skips
+      // both tests, which is right.
+      // Read from `contradicted`, not from what will actually be retired: a batch
+      // that disagrees with itself still loses to what the graph learned after it,
+      // and gating this on the retirement decision would write a replay of old
+      // text as current the moment the batch happened to be contested.
+      const newer = contradicted.find(r => predatesHeld(r, factValidFrom)
+        || (observedAtTs && r.recorded_at && r.recorded_at > observedAtTs));
+      if (newer) {
         skipped.push({
           fact: f,
-          reason: `retire_failed: ${res.refused || 'no_current_row'}`,
-          existing: stale.object,
+          reason: 'stale_observation',
+          existing: newer.object,
+          existing_since: newer.valid_from,
+          existing_recorded_at: newer.recorded_at,
         });
+        continue;
       }
+
+      // A pair this batch cannot agree on has no value to supersede anything with,
+      // so it retires nothing at all — not its siblings here, and not what the
+      // graph already holds.
+      const retiring = contested.has(conflictKey(f)) ? [] : contradicted;
+
+      for (const stale of retiring) {
+        // Report the retirement only if it happened. The guard above means
+        // invalidateFact won't refuse, but the row can still be gone: the ~13 MCP
+        // subprocesses share one DB, so another can retire it between this read
+        // and this write.
+        const res = invalidateFact(subject, stale.predicate, stale.object, { ended: factValidFrom });
+        if (res.invalidated) {
+          invalidated.push({
+            subject,
+            predicate: pred,
+            object: stale.object,
+            reason: 'single_valued_predicate_took_new_object',
+            superseded_by: object,
+          });
+        } else {
+          skipped.push({
+            fact: f,
+            reason: `retire_failed: ${res.refused || 'no_current_row'}`,
+            existing: stale.object,
+          });
+        }
+      }
+
+      // The same fact spelled differently. Keep the spelling already in the graph —
+      // writing the variant leaves two live rows that never converge, and every
+      // re-run of the extract churns them again. Byte-identical repeats fall
+      // through to addFact, which reports them as duplicates.
+      // held is predicate-normalised; addFact is not — it looks up the canonical
+      // edge only, so a row written under a pre-alias spelling is invisible to it
+      // and the same fact lands twice, once per spelling. Catch both here.
+      const existing = held.find(r => sameValue(r.object, object));
+      if (existing) {
+        const sameSpelling = normEntity(existing.object) === normEntity(object);
+        skipped.push({
+          fact: f,
+          reason: sameSpelling ? 'duplicate' : 'equivalent_spelling_of_existing',
+          existing: existing.object,
+        });
+        continue;
+      }
+
+      // pred, not predicate: the row must carry the canonical edge, or the alias
+      // only ever applies to the compare and the graph keeps both spellings.
+      const res = addFact(subject, pred, object, { validFrom: factValidFrom, source });
+      if (res.already_exists) skipped.push({ fact: f, reason: 'duplicate' });
+      else added.push(res);
     }
 
-    // The same fact spelled differently. Keep the spelling already in the graph —
-    // writing the variant leaves two live rows that never converge, and every
-    // re-run of the extract churns them again. Byte-identical repeats fall
-    // through to addFact, which reports them as duplicates.
-    // held is predicate-normalised; addFact is not — it looks up the canonical
-    // edge only, so a row written under a pre-alias spelling is invisible to it
-    // and the same fact lands twice, once per spelling. Catch both here.
-    const existing = held.find(r => sameValue(r.object, object));
-    if (existing) {
-      const sameSpelling = normEntity(existing.object) === normEntity(object);
-      skipped.push({
-        fact: f,
-        reason: sameSpelling ? 'duplicate' : 'equivalent_spelling_of_existing',
-        existing: existing.object,
-      });
-      continue;
-    }
-
-    // pred, not predicate: the row must carry the canonical edge, or the alias
-    // only ever applies to the compare and the graph keeps both spellings.
-    const res = addFact(subject, pred, object, { validFrom: factValidFrom, source });
-    if (res.already_exists) skipped.push({ fact: f, reason: 'duplicate' });
-    else added.push(res);
-  }
-
-  return { added, invalidated, skipped, conflicts };
+    return { added, invalidated, skipped, conflicts };
+  })();
 }
 
 // A dry run is only a preview if the commit writes what was previewed. Generation

@@ -12,6 +12,8 @@ const { addFact, queryFact, invalidateFact } = await import('../src/facts.js');
 // the page is <= 200 holds even with the clamp removed.
 const HOT_FACTS = 250;
 const RETIRED_FACTS = 3;
+const { getDb } = await import('../src/db.js');
+const { reviewFactGroup } = await import('../src/fact-reviews.js');
 const { getToolDefinitions, FACT_RESULT_MAX_CHARS } = await import('../src/tools.js');
 const HUGE = 'z'.repeat(80000);
 
@@ -37,12 +39,27 @@ describe('kb_fact_query result cap', () => {
     }
     // Deliberately wide objects: enough rows under the 200 ceiling to still
     // blow a byte budget, which is the case a row cap alone does not catch.
+    const wide = [];
     for (let i = 0; i < 150; i++) {
-      addFact('wide-repo', 'chose', `option-${i}-${'x'.repeat(300)}`, { validFrom: '2026-06-01', source: 'test' });
+      wide.push(addFact('wide-repo', 'chose', `option-${i}-${'x'.repeat(300)}`, { validFrom: '2026-06-01', source: 'test' }));
     }
+    reviewFactGroup(getDb(), {
+      subject: 'wide-repo',
+      predicate: 'chose',
+      reviewer: 'budget test',
+      items: wide.map((fact, index) => index === 0
+        ? { fact_id: fact.id, disposition: 'current' }
+        : { fact_id: fact.id, disposition: 'synonym', target_fact_id: wide[0].id }),
+    });
     // One row wider than the whole budget. Dropping rows cannot rescue this:
     // the loop bottoms out at one row and that row is still over budget.
-    addFact('giant-repo', 'chose', HUGE, { validFrom: '2026-01-01', source: 'test' });
+    const giant = addFact('giant-repo', 'chose', HUGE, { validFrom: '2026-01-01', source: 'test' });
+    reviewFactGroup(getDb(), {
+      subject: 'giant-repo',
+      predicate: 'chose',
+      reviewer: 'oversized projection test',
+      items: [{ fact_id: giant.id, disposition: 'current' }],
+    });
     addFact('quiet-repo', 'chose', 'only-option', { validFrom: '2026-01-01', source: 'test' });
   });
 
@@ -96,6 +113,8 @@ describe('kb_fact_query result cap', () => {
     assert.ok(size <= FACT_RESULT_MAX_CHARS, `response was ${size} chars, over the ${FACT_RESULT_MAX_CHARS} budget`);
     assert.ok(res.facts.length < res.total, 'must report that it dropped rows');
     assert.match(res.truncated, /showing \d+ of/);
+    assert.strictEqual(res.adjudications.length, 1, 'budget shrinking dropped the reviewed projection');
+    assert.strictEqual(res.adjudications[0].projection, 'available');
   });
 
   it('stays in budget when a single fact is wider than the budget', async () => {
@@ -104,6 +123,8 @@ describe('kb_fact_query result cap', () => {
     assert.ok(size <= FACT_RESULT_MAX_CHARS, `response was ${size} chars despite the cap`);
     assert.strictEqual(res.facts.length, 1, 'the fact itself must still be reported');
     assert.match(res.clipped, /exceeded \d+ chars/);
+    assert.strictEqual(res.adjudications[0].current_fact_ids, null);
+    assert.match(res.adjudications[0].projection_omitted, /response-size cap/);
   });
 
   // Consolidation calls queryFact directly and must see every row; a cap there

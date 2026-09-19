@@ -21,7 +21,6 @@ describe('resident KB process census', () => {
       row(400, 12, 'Sun Aug 23 12:00:00 2026', 'node /repo/bin/kb.js mcp'),
       row(401, 400, 'Wed Aug 26 14:02:00 2026', 'node /repo/src/mcp.js'),
       row(500, 1, 'Wed Aug 26 14:03:00 2026', 'node /repo/src/mcp.js'),
-      row(600, 1, 'Wed Aug 26 14:04:00 2026', 'node /repo/bin/bus-notifier.js --serve'),
       row(700, 1, 'Wed Aug 26 14:05:00 2026', 'node /other/bin/kb.js search'),
     );
 
@@ -36,11 +35,10 @@ describe('resident KB process census', () => {
       oldestFallbackDays: 2,
       legacySupervisors: 1,
       orphanWorkers: 1,
-      busNotifiers: 1,
     });
     assert.equal(
       formatResidentProcessSummary(summary),
-      'resident topology: 1 daemon; shims 2 (daemon 1, fallback 1, oldest fallback 2d); 1 legacy supervisor; 1 orphan worker; 1 bus notifier',
+      'resident topology: 1 daemon; shims 2 (daemon 1, fallback 1, oldest fallback 2d); 1 legacy supervisor; 1 orphan worker',
     );
   });
 

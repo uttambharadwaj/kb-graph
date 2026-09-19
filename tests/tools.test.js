@@ -62,8 +62,6 @@ describe('tools', () => {
     assert.ok(!names.includes('kb_synthesize'));
     assert.ok(!names.includes('kb_safety_check'));
     assert.ok(!names.includes('kb_capture_youtube'));
-    assert.ok(!names.includes('bus_send'));
-    assert.ok(!names.includes('bus_read'));
     // Should still include read + limited write tools
     assert.ok(names.includes('kb_search'));
     assert.ok(names.includes('kb_ingest'));

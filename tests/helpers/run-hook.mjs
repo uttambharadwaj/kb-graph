@@ -11,6 +11,7 @@ const HOOKS = {
   'prompt-hint': async () => (await import('../../src/cli/prompt-hint.js')).promptHint,
   'trigger-hook': async () => (await import('../../src/cli/trigger-hook.js')).triggerHook,
   'precompact-hook': async () => (await import('../../src/cli/precompact-hook.js')).precompactHook,
+  'session-capture-hook': async () => (await import('../../src/cli/session-capture-hook.js')).sessionCaptureHook,
 };
 const fn = await HOOKS[name]();
 await fn(args);

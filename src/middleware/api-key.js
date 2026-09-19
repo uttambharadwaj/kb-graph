@@ -1,5 +1,14 @@
 // src/middleware/api-key.js
 
+export function getApiKeyService(key) {
+  // Only configured keys may match, never inherited Object property names.
+  const keyMap = Object.create(null);
+  if (process.env.KB_API_KEY_CLAUDE) keyMap[process.env.KB_API_KEY_CLAUDE] = 'claude';
+  if (process.env.KB_API_KEY_OPENAI) keyMap[process.env.KB_API_KEY_OPENAI] = 'openai';
+  if (process.env.KB_API_KEY_GEMINI) keyMap[process.env.KB_API_KEY_GEMINI] = 'gemini';
+  return keyMap[key];
+}
+
 /**
  * Creates Express middleware that validates API keys from env vars.
  * Checks X-API-Key header or Authorization: Bearer <key>.
@@ -20,13 +29,7 @@ export function createApiKeyMiddleware() {
       return res.status(401).json({ error: 'Missing API key. Provide X-API-Key header or Authorization: Bearer <key>' });
     }
 
-    // Match against configured keys (only add defined keys to prevent undefined match)
-    const keyMap = {};
-    if (process.env.KB_API_KEY_CLAUDE) keyMap[process.env.KB_API_KEY_CLAUDE] = 'claude';
-    if (process.env.KB_API_KEY_OPENAI) keyMap[process.env.KB_API_KEY_OPENAI] = 'openai';
-    if (process.env.KB_API_KEY_GEMINI) keyMap[process.env.KB_API_KEY_GEMINI] = 'gemini';
-
-    const service = keyMap[key];
+    const service = getApiKeyService(key);
     if (!service) {
       return res.status(403).json({ error: 'Invalid API key' });
     }

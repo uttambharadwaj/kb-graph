@@ -6,7 +6,6 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { MIGRATIONS as KB_MIGRATIONS } from '../src/db.js';
-import { MIGRATIONS as BUS_MIGRATIONS } from '../src/bus/db.js';
 import { createMigrationGate, runMigrationCheck } from '../src/migration-gate.js';
 import { seedDb as seed, shortOf as short } from './helpers/migrations.js';
 
@@ -21,24 +20,20 @@ function temp(prefix) {
   return dir;
 }
 
-// A KB_DIR and bus home nothing else shares. Neither database exists until a
-// test seeds it, which is the fresh-install case.
 function install() {
   const dir = temp('kb-gate-');
   return {
     kb: join(dir, 'kb', 'kb.db'),
-    bus: join(dir, 'bus', 'bus.db'),
-    env: { KB_DIR: join(dir, 'kb'), KB_BUS_HOME: join(dir, 'bus'), KB_BUS_DB_PATH: '' },
+    env: { KB_DIR: join(dir, 'kb') },
   };
 }
 
 describe('migration check runner', () => {
   it('summarises a behind database on one line', () => {
-    const { kb, bus, env } = install();
+    const { kb, env } = install();
     const { applied, pending } = short(KB_MIGRATIONS);
     const missing = pending[0];
     seed(kb, applied);
-    seed(bus, BUS_MIGRATIONS);
 
     const restore = { ...process.env };
     Object.assign(process.env, env);

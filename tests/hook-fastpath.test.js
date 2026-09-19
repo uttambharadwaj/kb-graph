@@ -14,6 +14,8 @@ import assert from 'node:assert';
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { connect, createServer } from 'node:net';
+import { once } from 'node:events';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -93,6 +95,55 @@ const BASH = (command, session_id) => ({ session_id, tool_name: 'Bash', tool_inp
 const stripHealthLine = (text) => text.split('\n').filter(l => !l.startsWith('health:')).join('\n');
 
 describe('control-socket round trip: daemon-served output equals the in-process compute', () => {
+  it('preserves UTF-8 characters split across request chunks', { timeout: 5000 }, async () => {
+    const { socketPath, controlSocketPath } = freshSocketPaths();
+    const errors = [];
+    const daemon = await startDaemon({ socketPath, controlSocketPath, onError: err => errors.push(err) });
+    liveDaemons.add(daemon);
+    const socket = connect(controlSocketPath);
+    socket.setEncoding('utf8');
+    let response = '';
+    socket.on('data', chunk => { response += chunk; });
+    const ended = once(socket, 'end');
+    try {
+      await once(socket, 'connect');
+      const op = 'unknown-é中🐟';
+      // Separate every byte so 2-, 3-, and 4-byte characters cross chunks.
+      for (const byte of Buffer.from(`${JSON.stringify({ op, payload: {} })}\n`)) {
+        socket.write(Buffer.of(byte));
+        await delay(2);
+      }
+      await ended;
+      assert.deepStrictEqual(JSON.parse(response), { ok: false, error: `unknown control op "${op}"` });
+      assert.strictEqual(errors[0]?.message, `unknown control op "${op}"`);
+    } finally {
+      socket.destroy();
+    }
+  });
+
+  it('preserves UTF-8 characters split across response chunks in output and plan', { timeout: 5000 }, async () => {
+    const { controlSocketPath } = freshSocketPaths();
+    const expected = { ok: true, output: 'é中🐟', plan: { session: 'é中🐟' } };
+    let peer;
+    const server = createServer(socket => { peer = socket; });
+    server.listen(controlSocketPath);
+    await once(server, 'listening');
+    try {
+      const connected = once(server, 'connection');
+      const result = callDaemonOp(HOOK_OP.PROMPT_HINT, {}, { socketPath: controlSocketPath, timeoutMs: 3000 });
+      const [socket] = await connected;
+      await once(socket, 'data');
+      for (const byte of Buffer.from(`${JSON.stringify(expected)}\n`)) {
+        socket.write(Buffer.of(byte));
+        await delay(2);
+      }
+      assert.deepStrictEqual(await result, expected);
+    } finally {
+      peer?.destroy();
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
   it('prompt-hint: same hint text and structure from the daemon as from computePromptHint directly', async () => {
     insertHintableDoc('Gizmo rotation calibration guide', 'gizmo rotation calibration guide for new hires');
     const prompt = 'gizmo rotation calibration guide walkthrough';

@@ -4,23 +4,25 @@ import assert from 'node:assert';
 import { spawn } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import packageJson from '../package.json' with { type: 'json' };
 
 const SERVER = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'mcp.js');
 
 // Captured by hand-rolled JSON-RPC against public/main (v1 SDK, pre-migration)
 // on a fresh temp KB, before any v2 change landed. This is the byte-for-byte
-// contract the SDK bump must not move: v1's McpServer sets listChanged: true
+// contract the SDK bump must not move except for the deliberate package-major
+// server version and removal of the message-bus resource surface. v1's
+// McpServer sets listChanged: true
 // unconditionally on both capabilities once any tool/resource is registered,
 // which this server always does — so this is not a special case, it is what
 // v1 -> v2 must reproduce with no protocol-era opt-in.
 const REQUEST_PROTOCOL_VERSION = '2025-06-18';
-const V1_BASELINE = {
+const V2_EXPECTED = {
   protocolVersion: REQUEST_PROTOCOL_VERSION,
   capabilities: {
     tools: { listChanged: true },
-    resources: { listChanged: true },
   },
-  serverInfo: { name: 'knowledge-base', version: '1.0.0' },
+  serverInfo: { name: 'knowledge-base', version: packageJson.version },
 };
 
 // Captured against the migrated (v2) server. v1 emitted draft-07 JSON Schema
@@ -162,9 +164,10 @@ function withServer(fn) {
 }
 
 describe('mcp wire identity (v1 -> v2 SDK bump)', () => {
-  it('produces the same initialize response as the v1 server', async () => {
+  it('preserves the v1 initialize response shape except retired resources and the 2.0 version', async () => {
     const result = await probeInitialize();
-    assert.deepStrictEqual(result, V1_BASELINE, 'v2 server must speak byte-identical 2025-era protocol to v1');
+    assert.strictEqual(result.capabilities.resources, undefined, 'retired bus resources must not leave an advertised resource capability');
+    assert.deepStrictEqual(result, V2_EXPECTED, 'v2 server must preserve the 2025-era protocol while reporting its package major and no resource capability');
   });
 
   it('pins kb_read\'s tools/list entry, including the accepted draft-07 -> 2020-12 dialect bump', async () => {

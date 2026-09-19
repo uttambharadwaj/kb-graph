@@ -60,12 +60,14 @@ export function normalizeIngestOptions(options = {}) {
   return options;
 }
 
-export async function ingestFile(filePath) {
+export async function ingestFile(filePath, options = {}) {
+  const { source } = normalizeIngestOptions(options);
   const ext = extname(filePath).toLowerCase();
   const type = TYPE_MAP[ext];
   if (!type) return null;
 
   const filename = basename(filePath);
+  const sourceName = source ? basename(source) : filename;
   let title = basename(filePath, ext);
   let docType = type;
   let tags = '';
@@ -95,7 +97,7 @@ export async function ingestFile(filePath) {
   const doc = insertDocument({
     title,
     content,
-    source: filename,
+    source: sourceName,
     doc_type: docType,
     tags,
     file_path: destPath,

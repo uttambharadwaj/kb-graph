@@ -35,7 +35,7 @@ describe('kb tool fallback', () => {
   });
 
   it('refuses tools outside the capture-recovery allowlist', () => {
-    const result = runTool('bus_send', {});
+    const result = runTool('kb_synthesize', {});
 
     assert.equal(result.status, 2);
     assert.match(result.stderr, /not available through kb tool/);

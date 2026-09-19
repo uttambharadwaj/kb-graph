@@ -33,6 +33,7 @@ describe('runtime node pinning', () => {
         'knowledge-base': {
           command: '/custom/node',
           args: ['/tmp/knowledge-base-server/bin/kb.js', 'mcp'],
+          env: { NODE_OPTIONS: '' },
         },
       },
     });

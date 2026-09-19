@@ -146,7 +146,7 @@ async function extractEpubContent(filePath, filename) {
 - WAL mode is enabled by default for concurrent read performance
 
 **To add a table or column:**
-- Append an entry to `MIGRATIONS` in `db.js` (or `src/bus/db.js` for the bus).
+- Append an entry to `MIGRATIONS` in `db.js`.
   Never edit an entry that has shipped. Adding an object to an existing entry's
   `up` reaches new databases only: every deployed one already satisfies that
   entry's `applied`, so it never re-runs and `kb migrate` reports `up to date`

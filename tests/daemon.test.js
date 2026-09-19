@@ -9,8 +9,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'node:events';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import packageJson from '../package.json' with { type: 'json' };
 import { connectDaemonClient } from '../src/daemon-client.js';
 import { probeSocket, probeSocketDetailed, startDaemon } from '../src/daemon.js';
+import { SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR } from '../src/session-capture.js';
 
 // A listening server holds the event loop open, so a daemon a test failed to
 // close does not fail that test — it hangs the whole file, long after the TAP
@@ -107,7 +109,7 @@ describe('resident daemon', () => {
     const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
     const client = await connectDaemonClient(daemon.socketPath);
     try {
-      assert.deepStrictEqual(client.getServerVersion(), { name: 'knowledge-base', version: '1.0.0' });
+      assert.deepStrictEqual(client.getServerVersion(), { name: 'knowledge-base', version: packageJson.version });
 
       const { tools } = await client.listTools();
       assert.ok(tools.some(tool => tool.name === 'kb_search'), 'kb_search must be registered');
@@ -286,6 +288,26 @@ describe('resident daemon', () => {
     } finally {
       await closeDaemon(daemon);
     }
+  });
+
+  it('creates owner-writable capture directories before attempting the first socket bind', { timeout: CASE_TIMEOUT_MS }, async () => {
+    rmSync(SESSION_CAPTURE_QUEUE_DIR, { recursive: true, force: true });
+    rmSync(SESSION_CAPTURE_RECEIPT_DIR, { recursive: true, force: true });
+
+    const root = mkdtempSync(join(tmpdir(), 'kb-missing-socket-parent-'));
+    scratchDirs.push(root);
+    const socketPath = join(root, 'missing', 'd.sock');
+
+    await assert.rejects(
+      () => startDaemon({
+        socketPath,
+        controlSocketPath: join(root, 'missing', 'ctl.sock'),
+      }),
+      /listen (?:ENOENT|EACCES)/,
+      'the deliberately missing socket parent must stop startup at the first bind',
+    );
+    assert.strictEqual(statSync(SESSION_CAPTURE_QUEUE_DIR).mode & 0o777, 0o700);
+    assert.strictEqual(statSync(SESSION_CAPTURE_RECEIPT_DIR).mode & 0o777, 0o700);
   });
 
   it('reclaims a socket file left behind by a dead daemon', { timeout: CASE_TIMEOUT_MS }, async () => {

@@ -78,8 +78,8 @@ export async function lockPreferredNodeRuntime(scriptUrl, homeDir = homedir()) {
 // deletes that directory out from under every one of them in the same hour —
 // the MCP server fails at spawn, before any of this file can run and re-exec.
 //
-// Not hypothetical: the bus Stop hook on the machine this was found on pins
-// node@22/22.21.1_4, which no longer exists, and has been a silent no-op since.
+// Not hypothetical: an installed hook on the machine this was found on pinned
+// node@22/22.21.1_4 after it no longer existed, becoming a silent no-op.
 const CELLAR_PATH = /^(?<prefix>.*)\/Cellar\/(?<pkg>[^/]+)\/[^/]+\/(?<rest>.+)$/;
 
 // One owner for "this path names a single package version". The hook check asks

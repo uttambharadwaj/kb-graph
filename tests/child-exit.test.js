@@ -7,9 +7,8 @@ const FLUSH_MS = 200;
 
 describe('onChildDone', () => {
   // Once the flush window has answered, the late 'close' must not answer again.
-  // The claude-cli caller resolves a promise, where a second call is swallowed;
-  // the bus caller writes a run row, where it is a duplicate write. The
-  // descendant here outlives the flush and then dies, which is the only
+  // The claude-cli caller resolves a promise, where a second call is swallowed.
+  // The descendant here outlives the flush and then dies, which is the only
   // ordering that reaches the second call at all — on a healthy child the
   // cleared timer hides it.
   it('reports once when the pipes close after the flush window has answered', async () => {
