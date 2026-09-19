@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 242
-- **Total lines:** 47,135
+- **Total lines:** 47,370
 
 ## Architecture Overview
 ```
@@ -96,7 +96,7 @@ bin/
 | retrieval.js | 233 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, isKbNudge... | Read-path telemetry: the write path has always been logged (documents, |
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
 | server.js | 216 | start | - |
-| session-capture.js | 309 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, captureRequest... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
+| session-capture.js | 348 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
 | session-map.js | 97 | SESSION_MAP_DIR, recordSessionMap, resolveMapEntry | harness_pid -> session_id map: the MCP server process is long-lived and one |
 | shim-hello.js | 63 | HELLO_KEY, HELLO_VERSION, MAX_HELLO_LINE_BYTES, encodeHello, parseHelloLine | The one line `kb mcp-shim` writes before any JSON-RPC: which harness owns |
 | shim-path-meter.js | 116 | SHIM_PATH_LOG, SHIM_PATH_WINDOW_MS, recordShimPath, recordShimRecovery, summarizeShimPaths... | One row per mcp-shim startup decision. The fallback deliberately keeps KB |
@@ -312,7 +312,7 @@ bin/
 | safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | schema-migrations.test.js | 298 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | serve-shutdown.test.js | 89 | - | - |
-| session-capture.test.js | 432 | - | - |
+| session-capture.test.js | 628 | - | - |
 | session-map.test.js | 174 | - | Backdates a file's mtime by `days` so the sweeper's age check treats it as |
 | setup-env-preserve.test.js | 10 | - | - |
 | setup-hooks.test.js | 633 | - | tests/setup-hooks.test.js |

@@ -5,8 +5,8 @@
 // wait on the KB database's busy timeout while an agent is trying to stop.
 import { createHash, randomUUID } from 'crypto';
 import {
-  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync,
-  rmSync, statSync, writeFileSync,
+  appendFileSync, chmodSync, closeSync, existsSync, fchmodSync, mkdirSync, openSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'fs';
 import { basename, dirname, join } from 'path';
 import { homedir } from 'os';
@@ -24,6 +24,7 @@ const DELAY_MS = {
 const RETRY_MS = 5 * 60 * 1000;
 const MAX_RETRY_MS = 6 * 60 * 60 * 1000;
 const LEASE_MS = 10 * 60 * 1000;
+const PRIVATE_FILE_MODE = 0o600;
 
 const reasonRank = reason => ({ activity: 1, precompact: 2, session_end: 3 })[reason] || 0;
 const safeReason = reason => Object.hasOwn(DELAY_MS, reason) ? reason : 'activity';
@@ -54,19 +55,38 @@ function atomicJson(path, value) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: PRIVATE_FILE_MODE, flag: 'wx' });
+    chmodSync(tmp, PRIVATE_FILE_MODE);
     renameSync(tmp, path);
   } finally {
     rmSync(tmp, { force: true });
   }
 }
 
-function writeJsonExclusive(path, value) {
+export function writeJsonExclusive(path, value, {
+  chmod = fchmodSync,
+  close = closeSync,
+  open = openSync,
+  remove = rmSync,
+  write = writeFileSync,
+} = {}) {
+  let created = false;
+  let fd;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    fd = open(path, 'wx', PRIVATE_FILE_MODE);
+    created = true;
+    write(fd, `${JSON.stringify(value, null, 2)}\n`);
+    chmod(fd, PRIVATE_FILE_MODE);
+    const closingFd = fd;
+    fd = undefined;
+    close(closingFd);
     return true;
   } catch (err) {
+    if (fd !== undefined) {
+      try { close(fd); } catch { /* preserve the original write or chmod error */ }
+    }
+    if (created) remove(path, { force: true });
     if (err?.code === 'EEXIST') return false;
     throw err;
   }
@@ -74,8 +94,17 @@ function writeJsonExclusive(path, value) {
 
 function captureLog(event) {
   try {
-    mkdirSync(LOGS_DIR, { recursive: true });
-    appendFileSync(SESSION_CAPTURE_LOG, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`);
+    mkdirSync(LOGS_DIR, { recursive: true, mode: 0o700 });
+    chmodSync(LOGS_DIR, 0o700);
+    try {
+      chmodSync(SESSION_CAPTURE_LOG, PRIVATE_FILE_MODE);
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    appendFileSync(SESSION_CAPTURE_LOG, `${JSON.stringify({ at: new Date().toISOString(), ...event })}\n`, {
+      mode: PRIVATE_FILE_MODE,
+    });
+    chmodSync(SESSION_CAPTURE_LOG, PRIVATE_FILE_MODE);
   } catch { /* capture must not fail because telemetry did */ }
 }
 
@@ -190,21 +219,31 @@ function dueQueueFiles(now) {
 function queueFiles() {
   return readdirSync(SESSION_CAPTURE_QUEUE_DIR)
     .filter(name => name.endsWith('.json'))
-    .map(name => ({ name, request: readJson(join(SESSION_CAPTURE_QUEUE_DIR, name)) }))
+    .map(name => {
+      const path = join(SESSION_CAPTURE_QUEUE_DIR, name);
+      try { chmodSync(path, PRIVATE_FILE_MODE); } catch { /* best effort; the 0700 parent remains the privacy boundary */ }
+      return { name, request: readJson(path) };
+    })
     .filter(item => item.request)
     .sort((a, b) => a.request.dueAt - b.request.dueAt);
+}
+
+function legacyLeaseExpiresAt(path) {
+  try { return statSync(path).mtimeMs + LEASE_MS; } catch { return Infinity; }
 }
 
 function recoverExpiredLeases(now) {
   for (const name of readdirSync(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json.working'))) {
     const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, name);
+    try { chmodSync(workingPath, PRIVATE_FILE_MODE); } catch { /* expiry still clears an unrecoverable stale lease */ }
     const leased = readJson(workingPath);
-    if (!leased) continue;
-    const legacyExpiresAt = () => {
-      try { return statSync(workingPath).mtimeMs + LEASE_MS; } catch { return Infinity; }
-    };
-    const expiresAt = leased.lease?.expiresAt ?? legacyExpiresAt();
+    const expiresAt = leased?.lease?.expiresAt ?? legacyLeaseExpiresAt(workingPath);
     if (expiresAt > now) continue;
+    if (!leased) {
+      rmSync(workingPath, { force: true });
+      captureLog({ event: 'discarded', path: workingPath, expiredAt: expiresAt, reason: 'unreadable_lease' });
+      continue;
+    }
     const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, name.slice(0, -'.working'.length));
     const request = { ...leased };
     delete request.lease;
