@@ -3,8 +3,8 @@
 > Generated: 2026-09-19
 
 ## Quick Stats
-- **Files:** 242
-- **Total lines:** 47,370
+- **Files:** 245
+- **Total lines:** 49,302
 
 ## Architecture Overview
 ```
@@ -41,7 +41,7 @@ bin/
 | generate-codemap.js | 170 | - | Generates a token-efficient codebase map for AI agents |
 | init-vault.sh | 36 | - | !/bin/bash |
 | kb-trigger-hook.js | 40 | - | bin/kb-trigger-hook.js — the installed PreToolUse (Bash) hook entry point. |
-| kb.js | 320 | - | bin/kb.js — CLI entry point. |
+| kb.js | 326 | - | bin/kb.js — CLI entry point. |
 | post-sync.sh | 31 | - | !/bin/bash |
 | weekly-synthesis.js | 57 | - | Weekly synthesis job — run via launchd or manually. |
 | weekly-synthesis.sh | 9 | - | !/bin/bash |
@@ -82,6 +82,7 @@ bin/
 | mcp-supervisor.js | 352 | superviseMcpServer | How often a held swap asks again. Short because asking is free unless |
 | mcp.js | 51 | start | Allow direct execution |
 | meters.js | 187 | METER_TABLES, EMPTY_REPLY_CHARS, PRUNE_EXCLUDED, PRUNABLE_TABLES, meterGrowth... | Retention for the five meter tables (retrievals, extractions, tool_calls, |
+| migrate-legacy.js | 902 | SOURCE_KEYS, MIGRATION_ID, MIGRATION_ACTION, MIGRATION_AUDIT_STATUS, MIGRATION_SOURCE... | Chunks that never parsed, so the writer can report them rather than let a |
 | migration-gate.js | 106 | runMigrationCheck, createMigrationGate | Does the code on disk need a migration the databases have not had? |
 | migration-targets.js | 31 | MIGRATION_TARGETS, migrationsFor | Which databases have migrations, and where the lists that define them live. |
 | model-meter.js | 25 | logModelCall | One row per model subprocess call. Logged from the single site every caller |
@@ -147,6 +148,7 @@ bin/
 | mcp-register.js | 154 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, mcpServerConfig, KB_MCP_SERVER_CONFIG... | Absent and unreadable are different answers. Treating both as "empty config" |
 | mcp-shim.js | 461 | PROBE_TIMEOUT_MS, RECONNECT_DELAY_MS, RECONNECT_MAX_DELAY_MS, runMcpShimCli | Per-session stdio shim: connects this process's stdio to the resident |
 | meters-cli.js | 54 | runMetersPruneCli | `kb meters prune` — the only place these five tables lose a row. No |
+| migrate-legacy.js | 75 | parseMigrateLegacyArgs, migrationSummaryLines, runMigrateLegacyCli | - |
 | migrate.js | 91 | runMigrateCli | The only path in the codebase that executes DDL. Everything else verifies. |
 | precompact-hook.js | 270 | COMPACT_HOOK_LOG, snapshotPathFor, buildContinuitySnapshot, writeContinuitySnapshot, findContinuitySnapshot... | PreCompact cannot inject context into Claude Code's summarizer. Its stdout |
 | promotions.js | 269 | PROMOTIONS_LOG_DIR, WOULD_PROMOTE_LOG, computePromotionDecisions, applyDecision, runPromotionsCli | `kb promotions` — applies the promotion the follow-through join can now |
@@ -288,6 +290,7 @@ bin/
 | mcp-supervisor.test.js | 400 | MARKER, MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
 | mcp-wire-identity.test.js | 194 | - | Captured by hand-rolled JSON-RPC against public/main (v1 SDK, pre-migration) |
 | meter-retention.test.js | 217 | - | pruneMeters(table: 'tool_calls') deletes from the whole table, so a test |
+| migrate-legacy.test.js | 949 | - | - |
 | migration-check.test.js | 155 | - | - |
 | migration-gate.test.js | 158 | MIGRATIONS | - |
 | near-neighbors.test.js | 235 | - | The audience for this response is a model, so what it has to parse is what is |
