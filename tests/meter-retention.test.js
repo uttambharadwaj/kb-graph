@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { getDb, insertDocument, MIGRATIONS as KB_MIGRATIONS, supersedeDocument } from '../src/db.js';
 import { applyMigrations, hasTable } from '../src/schema.js';
 import { METER_TABLES, meterGrowth, PRUNABLE_TABLES, PRUNE_EXCLUDED, pruneMeters } from '../src/meters.js';
-import { surfaceReport } from '../src/cli/surface-report.js';
+import { modelCallDemand, surfaceReport } from '../src/cli/surface-report.js';
 import { runMetersPruneCli } from '../src/cli/meters-cli.js';
 import { UsageError } from '../src/cli/flags.js';
 
@@ -73,6 +73,26 @@ describe('meterGrowth — the measurement prune requires', () => {
     assert.strictEqual(row.rows, 0);
     assert.strictEqual(row.oldestAgeDays, null);
     assert.strictEqual(row.rowsPerDay, 0);
+  });
+});
+
+describe('model call phase timing', () => {
+  it('reports response-ready and shutdown-tail p90 independently of legacy rows', () => {
+    const db = freshDb();
+    const insert = db.prepare(`
+      INSERT INTO model_calls (
+        caller, model, ok, duration_ms, prompt_chars, response_chars,
+        response_ready_ms, shutdown_tail_ms
+      ) VALUES ('extract', 'test', 1, ?, 10, 20, ?, ?)
+    `);
+    insert.run(110, 100, 10);
+    insert.run(220, 200, 20);
+    insert.run(330, 300, 30);
+    for (let i = 0; i < 10; i++) insert.run(440, null, null);
+
+    const row = modelCallDemand(db).find(call => call.caller === 'extract');
+    assert.strictEqual(row.readyP90, 300);
+    assert.strictEqual(row.tailP90, 30);
   });
 });
 

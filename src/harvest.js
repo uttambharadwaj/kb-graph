@@ -8,7 +8,12 @@ import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, cl
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { getDb, setMeta } from './db.js';
-import { kbExtract, MAX_EXTRACT_CHARS } from './extract.js';
+import {
+  countExtractionChunkFailures,
+  HARVEST_EXTRACT_CALL_BUDGET_MS,
+  kbExtract,
+  MAX_EXTRACT_CHARS,
+} from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
@@ -424,7 +429,14 @@ function selectHarvestWork(db, recentCandidates, historicalCandidates, wantFacts
 
 // --- per-session harvest ----------------------------------------------------
 
-async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFacts, db = getDb() }) {
+export const harvestExtractOptions = options => ({
+  ...options,
+  callBudgetMs: HARVEST_EXTRACT_CALL_BUDGET_MS,
+});
+
+async function harvestTranscript(path, mtime, {
+  vaultPath, dryRun, facts: wantFacts, db = getDb(), extract = kbExtract,
+}) {
   const text = extractTranscriptText(readFileSync(path, 'utf-8'));
   if (text.length < MIN_TEXT_CHARS) {
     return {
@@ -448,12 +460,22 @@ async function harvestTranscript(path, mtime, { vaultPath, dryRun, facts: wantFa
 
     for (const chunk of chunks) {
       try {
-        const res = await kbExtract(chunk.text, { source, observationDate, observedAt, dryRun });
+        const res = await extract(chunk.text, harvestExtractOptions({
+          source,
+          observationDate,
+          observedAt,
+          dryRun,
+        }));
         facts += dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0);
         // A pair the chunk gave two values for is left unretired for a human to
         // settle. This runs unattended, so the count is the only place it
         // surfaces at all.
         contested += res.conflicts?.length || 0;
+        const partialFailures = countExtractionChunkFailures(res.skipped);
+        if (partialFailures) {
+          chunkErrors += partialFailures;
+          continue;
+        }
         if (!dryRun) recordChunkComplete(db, { transcriptPath: path, pass: 'facts', chunk, facts: dryRun ? (res.candidates?.length || 0) : (res.added?.length || 0) });
       } catch {
         chunkErrors++; // one bad chunk shouldn't sink the transcript
@@ -540,7 +562,19 @@ export function stillPending(db, candidates, wantFacts) {
 export const selectWork = candidates =>
   [...candidates].sort((a, b) => a.mtime - b.mtime).slice(0, MAX_SESSIONS_PER_RUN);
 
-export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = null, facts, searchRoots, sessionId = null, recordOutcomes = null, maintenance = true, runMaintenance = null, harvestOne = harvestTranscript } = {}) {
+export async function runHarvest({
+  sinceHours = 26,
+  dryRun = false,
+  onlyPath = null,
+  facts,
+  searchRoots,
+  sessionId = null,
+  recordOutcomes = null,
+  maintenance = true,
+  runMaintenance = null,
+  harvestOne = harvestTranscript,
+  extract = kbExtract,
+} = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
   const wantFacts = factsRequested({ facts });
@@ -575,7 +609,9 @@ export async function runHarvest({ sinceHours = 26, dryRun = false, onlyPath = n
     notReached: pending - work.length, printModeCalls, inFlight };
   for (const { path, mtime, sessionId: candidateSessionId = null } of work) {
     try {
-      const r = await harvestOne(path, mtime, { vaultPath, dryRun, facts: wantFacts, db });
+      const r = await harvestOne(path, mtime, {
+        vaultPath, dryRun, facts: wantFacts, db, extract,
+      });
       if (r.skipped) {
         summary.tooShort++;
         // Watermark short sessions too — no point re-reading them nightly.

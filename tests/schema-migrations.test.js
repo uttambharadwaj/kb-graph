@@ -68,10 +68,31 @@ describe('bootstrapping a fresh database', () => {
     const kb = new Database(':memory:');
     assert.deepStrictEqual(
       applyMigrations(kb, KB_MIGRATIONS).map(m => m.version),
-      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24, 25, 26],
+      [1, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15, 16, 17, 20, 24, 25, 26, 27],
       'the base tables already carry the vault_files summary columns, so 2 is skipped; '
       + '10 only deletes rows a fresh database does not have',
     );
+  });
+
+  it('adds model phase timing columns without losing existing calls', () => {
+    const kb = new Database(':memory:');
+    applyMigrations(kb, KB_MIGRATIONS.filter(migration => migration.version <= 26));
+    kb.prepare(`
+      INSERT INTO model_calls (
+        caller, model, ok, duration_ms, prompt_chars, response_chars
+      ) VALUES ('extract', 'test-model', 1, 42, 10, 20)
+    `).run();
+
+    applyMigrations(kb, KB_MIGRATIONS);
+
+    const row = kb.prepare(`
+      SELECT caller, response_ready_ms, shutdown_tail_ms FROM model_calls
+    `).get();
+    assert.deepStrictEqual(row, {
+      caller: 'extract',
+      response_ready_ms: null,
+      shutdown_tail_ms: null,
+    });
   });
 
   it('is one transaction, so no other connection sees a half-built schema', () => {

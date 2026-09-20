@@ -16,6 +16,14 @@ chmodSync(fakeSleep, 0o755);
 const fakeFail = join(tmp, 'fake-fail.sh');
 writeFileSync(fakeFail, '#!/bin/sh\necho "bad input" >&2\nexit 1\n');
 chmodSync(fakeFail, 0o755);
+const fakeDelayedExit = join(tmp, 'fake-delayed-exit.sh');
+writeFileSync(fakeDelayedExit, `#!/bin/sh
+printf '{"result":'
+sleep 0.5
+printf '"{}"}'
+sleep 0.2
+`);
+chmodSync(fakeDelayedExit, 0o755);
 // Exits at once but leaves a descendant holding stdout — the shape that hung
 // for 1800s in a debrief, because nothing was left for the timeout to kill.
 const fakeOrphan = join(tmp, 'fake-orphan.sh');
@@ -108,6 +116,17 @@ describe('model call metering', () => {
     assert.strictEqual(row.prompt_chars, 'hello there'.length);
     assert.strictEqual(row.response_chars, out.length);
     assert.ok(row.duration_ms >= 0);
+  });
+
+  it('separates response-ready latency from process shutdown tail', async () => {
+    process.env.CLAUDE_PATH = fakeDelayedExit;
+    const mod = await import('../src/claude-cli.js?bin=meter-tail');
+    await mod.runClaude('ignored', { caller: 'meter-tail' });
+    const row = modelCalls().at(-1);
+    assert.ok(row.response_ready_ms >= 400);
+    assert.ok(row.response_ready_ms < row.duration_ms);
+    assert.ok(row.shutdown_tail_ms >= 150);
+    assert.strictEqual(row.duration_ms, row.response_ready_ms + row.shutdown_tail_ms);
   });
 
   it('records a failure row for a clean nonzero exit, and rethrows the same error', async () => {

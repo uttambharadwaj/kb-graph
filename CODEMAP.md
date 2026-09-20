@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 251
-- **Total lines:** 50,030
+- **Total lines:** 50,293
 
 ## Architecture Overview
 ```
@@ -59,21 +59,21 @@ bin/
 | auth-oauth.js | 24 | createOAuthAuth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 151 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | child-exit.js | 40 | onChildDone | When a spawned child is finished, for callers that need its output. |
-| claude-cli.js | 129 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| claude-cli.js | 151 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | context-packet.js | 465 | buildContextPacket | These are useful words in a question but not a useful entity match on their |
 | daemon-client.js | 82 | connectDaemonClient | Client side of the daemon socket. The SDK's stdio client transport spawns |
 | daemon-hook-ops.js | 37 | HOOK_OPS | Maps control-socket op names to the same compute cores the CLI hooks fall |
 | daemon-paths.js | 26 | DAEMON_SOCKET_PATH, CONTROL_SOCKET_PATH, HOOK_OP | Socket path constants, split out of daemon.js so they can be imported by |
 | daemon.js | 396 | probeSocketDetailed, probeSocket, startDaemon | The resident KB service: one process, one unix socket, one MCP connection |
-| db.js | 1568 | DEFAULT_BUSY_TIMEOUT_MS, MIGRATIONS, insertDocument, updateDocument, deleteDocument... | better-sqlite3's own default when no `timeout` option is passed — made |
+| db.js | 1581 | DEFAULT_BUSY_TIMEOUT_MS, MIGRATIONS, insertDocument, updateDocument, deleteDocument... | better-sqlite3's own default when no `timeout` option is passed — made |
 | doc-version.js | 24 | snapshotDocumentVersion | Stable per-retrieval content identity. Prefer the vault index hash because it |
 | extract-meter.js | 93 | hashInput, logExtraction, EXTRACTION_SUMMARY_WINDOW_MS, summarizeExtractions, formatExtractionSummary | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
-| extract.js | 884 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 897 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | fact-reviews.js | 457 | FACT_REVIEW_POLICY, FACT_REVIEW_DISPOSITIONS, FactReviewError, reviewSubjectId, normalizeReviewItems... | Tool reads start with display-shaped facts, not database rows with ids. Load |
 | facts.js | 338 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
 | grounding.js | 334 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate... | Grounding: the extractor asserts things its source text never states — |
-| harvest.js | 688 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, buildLessonsPrompt, isPrintModeTranscript... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
+| harvest.js | 724 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, buildLessonsPrompt, isPrintModeTranscript... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
 | hint-relevance.js | 290 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | http-bind.js | 60 | DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolveHttpHost, resolveHttpPort, resolveHttpBind... | - |
 | ingest.js | 195 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
@@ -86,7 +86,7 @@ bin/
 | migrate-legacy.js | 902 | SOURCE_KEYS, MIGRATION_ID, MIGRATION_ACTION, MIGRATION_AUDIT_STATUS, MIGRATION_SOURCE... | Chunks that never parsed, so the writer can report them rather than let a |
 | migration-gate.js | 106 | runMigrationCheck, createMigrationGate | Does the code on disk need a migration the databases have not had? |
 | migration-targets.js | 31 | MIGRATION_TARGETS, migrationsFor | Which databases have migrations, and where the lists that define them live. |
-| model-meter.js | 25 | logModelCall | One row per model subprocess call. Logged from the single site every caller |
+| model-meter.js | 48 | logModelCall | One row per model subprocess call. Logged from the single site every caller |
 | outcome-ranking.js | 56 | OUTCOME, HELPED_OUTCOME_ADJUSTMENT, CORRECTED_OUTCOME_ADJUSTMENT, FTS_OUTCOME_TIE_BUCKET, HINT_OUTCOME_TIE_BUCKET... | Outcome evidence is deliberately a tie-break, not a rank delta. SQLite FTS |
 | paths.js | 40 | KB_DIR, FILES_DIR, LOGS_DIR, HOOK_ERROR_LOG, DB_PATH... | tests/helpers/tmp-kb.js checks this to prove it ran before we did. |
 | predicates.js | 362 | VOCABULARY_FILE, canonicalPredicate, SINGLE_VALUED, PREDICATE_INVERSES, inverseTargetOf... | The predicate registry and the one canonicaliser every write path folds |
@@ -170,7 +170,7 @@ bin/
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
-| surface-report.js | 247 | surfaceReport, runSurfaceReportCli | What the newest meters have to say: which tools anyone actually calls, |
+| surface-report.js | 263 | modelCallDemand, surfaceReport, runSurfaceReportCli | What the newest meters have to say: which tools anyone actually calls, |
 | tags-cli.js | 75 | tagsReport, runTagsCli | - |
 | tier-cli.js | 29 | runTierCli | `kb tier` — the standing of what is stored, and the backfill that derives it |
 | tool-cli.js | 99 | FALLBACK_TOOL_NAMES, runToolCli | - |
@@ -248,7 +248,7 @@ bin/
 | api-key.test.js | 97 | - | tests/api-key.test.js |
 | bus-removal.test.js | 91 | - | - |
 | child-exit.test.js | 32 | - | - |
-| claude-cli.test.js | 161 | - | Fake claude binaries so these tests need no network and run in ms. |
+| claude-cli.test.js | 180 | - | Fake claude binaries so these tests need no network and run in ms. |
 | cli-inert.test.js | 234 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
 | context-truth-packet.test.js | 293 | - | - |
 | daemon-shim-identity.test.js | 350 | - | Drives the daemon's MCP socket with hand-written bytes rather than the SDK |
@@ -261,7 +261,7 @@ bin/
 | extract-corpus.test.js | 77 | - | - |
 | extract-eval.test.js | 263 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract-meter.test.js | 227 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract.test.js | 1054 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 1085 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extraction-grounding-migration.test.js | 138 | - | - |
 | extraction-summary.test.js | 51 | - | - |
 | fact-add-retirement.test.js | 203 | - | - |
@@ -275,7 +275,7 @@ bin/
 | from-preview-migration.test.js | 60 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | grounding.test.js | 654 | - | Points KB_DIR and the vault at throwaway dirs — must come before anything |
 | harvest-eval.test.js | 32 | - | Slow behavioral coverage against the real model: |
-| harvest.test.js | 1060 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| harvest.test.js | 1109 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | health-backlog.test.js | 211 | - | The briefing carried "202 notes missing summaries" unchanged for weeks. A |
 | hint-live-regressions.test.js | 91 | - | - |
 | hint-probe.test.js | 56 | - | - |
@@ -292,7 +292,7 @@ bin/
 | mcp-shim.test.js | 402 | - | Drives `kb mcp-shim` as a real child process against a real in-process |
 | mcp-supervisor.test.js | 400 | MARKER, MARKER, MARKER | Same shape as tests/restart-on-change.test.js: a fixed sleep long enough for |
 | mcp-wire-identity.test.js | 194 | - | Captured by hand-rolled JSON-RPC against public/main (v1 SDK, pre-migration) |
-| meter-retention.test.js | 217 | - | pruneMeters(table: 'tool_calls') deletes from the whole table, so a test |
+| meter-retention.test.js | 237 | - | pruneMeters(table: 'tool_calls') deletes from the whole table, so a test |
 | migrate-legacy.test.js | 949 | - | - |
 | migration-check.test.js | 155 | - | - |
 | migration-gate.test.js | 158 | MIGRATIONS | - |
@@ -317,7 +317,7 @@ bin/
 | retrieval.test.js | 397 | - | The ancestry walk itself (ps-backed) is process-ancestry.test.js's job; |
 | runtime-node.test.js | 96 | - | Homebrew's Cellar path names one patch release. Persisting it into a job, |
 | safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
-| schema-migrations.test.js | 298 | - | The meter logged the system's own subprocesses alongside real sessions, and |
+| schema-migrations.test.js | 319 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | serve-shutdown.test.js | 89 | - | - |
 | server-bind.test.js | 258 | - | - |
 | session-capture.test.js | 628 | - | - |

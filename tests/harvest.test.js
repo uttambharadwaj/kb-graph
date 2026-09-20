@@ -42,6 +42,15 @@ writeFileSync(stub, [
   "  reply(retryN === 1 ? { notes: [{}] } : { notes: [validNote] });",
   "  process.exit(0);",
   "}",
+  `const partialPath = ${JSON.stringify(`${counter}.partial`)};`,
+  "const ownTranscript = prompt.slice(prompt.lastIndexOf('# Transcript'));",
+  "if (ownTranscript.includes('HARVEST_PARTIAL_FAIL')) {",
+  "  let priorPartial = '0';",
+  "  try { priorPartial = readFileSync(partialPath, 'utf8'); } catch {}",
+  "  const partialN = Number.parseInt(priorPartial || '0', 10) + 1;",
+  "  writeFileSync(partialPath, `${partialN}`);",
+  "  if (partialN <= 2) process.exit(3);",
+  "}",
   "const malformed = [",
   "  ['HARVEST_BAD_OBJECT_EMPTY', {}],",
   "  ['HARVEST_BAD_ARRAY', []],",
@@ -65,6 +74,7 @@ chmodSync(stub, 0o755);
 process.env.CLAUDE_PATH = stub;
 
 const { extractTranscriptText, chunkText, chunkTextWithIdentity, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, findTranscripts, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
+const { HARVEST_EXTRACT_CALL_BUDGET_MS } = await import('../src/extract.js');
 const { getDb, getHealth } = await import('../src/db.js');
 
 describe('harvest transcript parsing', () => {
@@ -1002,6 +1012,20 @@ describe('harvest fact extraction', () => {
   };
   const factCount = () => getDb().prepare('SELECT COUNT(*) AS n FROM facts').get().n;
 
+  it('passes the unattended extraction budget through the harvest path', async () => {
+    const budgets = [];
+    await runHarvest({
+      onlyPath: write('budget.jsonl'),
+      facts: true,
+      extract: async (_text, options) => {
+        budgets.push(options.callBudgetMs);
+        return { added: [], skipped: [], conflicts: [] };
+      },
+    });
+    assert.ok(budgets.length > 1);
+    assert.ok(budgets.every(budget => budget === HARVEST_EXTRACT_CALL_BUDGET_MS));
+  });
+
   it('is off by default', async () => {
     const summary = await runHarvest({ onlyPath: write('default.jsonl') });
 
@@ -1015,6 +1039,31 @@ describe('harvest fact extraction', () => {
 
     assert.ok(summary.facts > 1, `expected the chunks to add up, got ${summary.facts}`);
     assert.strictEqual(summary.facts, factCount(), 'the reported count must be the total written, not the last chunk');
+  });
+
+  it('does not checkpoint a partially failed fact chunk', async () => {
+    const path = join(tmp, 'partial-facts.jsonl');
+    const text = Array.from({ length: 8 }, (_, index) =>
+      `${index === 4 ? 'HARVEST_PARTIAL_FAIL ' : ''}${String.fromCharCode(65 + index).repeat(520)}.`
+    ).join(' ');
+    writeFileSync(path, JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+    }));
+
+    const first = await runHarvest({ onlyPath: path, facts: true });
+    assert.ok(first.chunkErrors > 0);
+    assert.strictEqual(
+      getDb().prepare("SELECT COUNT(*) AS n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'facts'").get(path).n,
+      0,
+    );
+
+    const second = await runHarvest({ onlyPath: path, facts: true });
+    assert.strictEqual(second.chunkErrors, 0);
+    assert.strictEqual(
+      getDb().prepare("SELECT COUNT(*) AS n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'facts'").get(path).n,
+      1,
+    );
   });
 
   it('takes the last fact flag on the command line', async () => {

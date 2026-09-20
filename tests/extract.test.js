@@ -101,6 +101,7 @@ process.env.CLAUDE_PATH = fakeClaude;
 const {
   consolidate, kbExtract, chunkForExtract, extractFacts, canonicalTriple,
   reconcileSkipped, MAX_EXTRACT_CHARS,
+  EXTRACT_CALL_BUDGET_MS, HARVEST_EXTRACT_CALL_BUDGET_MS,
 } = await import('../src/extract.js');
 const callCount = () => (existsSync(join(tmp, 'calls')) ? readFileSync(join(tmp, 'calls'), 'utf-8').trim().split('\n').length : 0);
 const { addFact, queryFact, invalidateFact, mergeEntity, entityKey } = await import('../src/facts.js');
@@ -354,6 +355,36 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(res.attemptCount, 1);
     assert.strictEqual(res.modelDurationMs, 1000);
     assert.match(res.skipped[0].reason, /^chunk_failed: model timed out after 1000ms$/);
+  });
+
+  it('keeps interactive extraction below 90s without shrinking the harvest budget', () => {
+    assert.strictEqual(EXTRACT_CALL_BUDGET_MS, 85000);
+    assert.strictEqual(HARVEST_EXTRACT_CALL_BUDGET_MS, 105000);
+  });
+
+  it('applies the interactive budget to the model call by default', async () => {
+    const timeouts = [];
+    await kbExtract('interactive-service depends_on target-service.', {
+      dryRun: true,
+      runModel: async (_prompt, { timeout }) => {
+        timeouts.push(timeout);
+        return { facts: [], skipped: [] };
+      },
+    });
+    assert.deepStrictEqual(timeouts, [EXTRACT_CALL_BUDGET_MS]);
+  });
+
+  it('passes an explicit harvest budget through kbExtract to the model', async () => {
+    const timeouts = [];
+    await kbExtract('harvest-service depends_on target-service.', {
+      dryRun: true,
+      callBudgetMs: HARVEST_EXTRACT_CALL_BUDGET_MS,
+      runModel: async (_prompt, { timeout }) => {
+        timeouts.push(timeout);
+        return { facts: [], skipped: [] };
+      },
+    });
+    assert.deepStrictEqual(timeouts, [HARVEST_EXTRACT_CALL_BUDGET_MS]);
   });
 
   it('still retries a fast model failure while shared budget remains', async () => {

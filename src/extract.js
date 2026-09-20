@@ -246,11 +246,14 @@ export function chunkForExtract(text) {
 }
 
 // A chunk may use the model helper's full ceiling, but the extraction as a
-// whole may not. MCP callers background a tool at 120s; leaving 15s for child
-// pipe cleanup, grounding, consolidation, telemetry and transport makes a
-// timeout an ordinary caller-visible result instead of a late notification.
+// whole may not. MCP callers background a tool at 120s; leaving 35s for child
+// pipe cleanup, grounding, consolidation, telemetry and transport keeps the
+// measured interactive p90 below 90s instead of turning it into a late
+// notification. Unattended harvest has no interactive deadline and retains
+// the older budget so it does not mark a partly examined chunk complete.
 const CHUNK_TIMEOUT_MS = 120000;
-export const EXTRACT_CALL_BUDGET_MS = 105000;
+export const EXTRACT_CALL_BUDGET_MS = 85000;
+export const HARVEST_EXTRACT_CALL_BUDGET_MS = 105000;
 
 // A second attempt, as the lessons pass in harvest.js already does. It cannot
 // rescue the interactive contract — a retry only starts once the first attempt
@@ -263,6 +266,9 @@ const CHUNK_ATTEMPTS = 2;
 // same prefix to count chunks that died for good — one spelling so the two
 // can't drift apart.
 const CHUNK_FAILED_REASON_PREFIX = 'chunk_failed: ';
+
+export const countExtractionChunkFailures = skipped =>
+  (skipped || []).filter(entry => entry?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)).length;
 
 const totalChunkFailure = failures => {
   const noun = failures.length === 1 ? 'chunk' : 'chunks';
@@ -767,7 +773,14 @@ function recallPreview(key) {
 // produced it. The metered fields are seeded before the try so a call that
 // fails before extraction even starts (e.g. non-string input) still logs
 // what it can, rather than going dark.
-export async function kbExtract(text, { source, observationDate, observedAt, dryRun = false } = {}) {
+export async function kbExtract(text, {
+  source,
+  observationDate,
+  observedAt,
+  dryRun = false,
+  callBudgetMs = EXTRACT_CALL_BUDGET_MS,
+  runModel = runClaudeJSON,
+} = {}) {
   const started = Date.now();
   let inputHash = null, inputChars = 0, chunkChars = [];
   let emittedCount = 0, skippedCount = 0, chunkFailures = 0, failed = false, fromPreview = false;
@@ -787,7 +800,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // the text never mentions, or dated a day the text never states, is filtered
     // here (see grounding.js) rather than in consolidation, so the preview
     // remembered below and the row eventually written are the same triple.
-    const extracted = previewed || await extractFacts(text);
+    const extracted = previewed || await extractFacts(text, { callBudgetMs, runModel });
     attemptCount = extracted.attemptCount ?? 0;
     modelDurationMs = extracted.modelDurationMs ?? 0;
     // Seed the meter before grounding or consolidation can throw. In
@@ -799,7 +812,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     const failedChunks = extracted.skipped.filter(s =>
       s?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)
     );
-    chunkFailures = failedChunks.length;
+    chunkFailures = countExtractionChunkFailures(extracted.skipped);
     if (!previewed && chunkChars.length > 0 && chunkFailures === chunkChars.length) {
       throw totalChunkFailure(failedChunks);
     }
@@ -818,7 +831,7 @@ export async function kbExtract(text, { source, observationDate, observedAt, dry
     // A chunk that died and stayed dead after CHUNK_ATTEMPTS retries — visible
     // here even when the call as a whole reports facts added, which is exactly
     // the silent-partial-failure shape this meter exists to catch.
-    chunkFailures = skipped.filter(s => s?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)).length;
+    chunkFailures = countExtractionChunkFailures(skipped);
     entityRejections = skipped.filter(s => s?.reason?.startsWith(UNGROUNDED_REASON_PREFIX)).length;
     claimRejections = skipped.filter(s => s?.reason?.startsWith(CLAIM_UNGROUNDED_REASON_PREFIX)).length;
     dateOverrides = skipped.filter(s => s?.reason?.startsWith(DATE_OVERRIDE_REASON_PREFIX)).length;

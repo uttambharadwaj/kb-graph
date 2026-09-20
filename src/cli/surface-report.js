@@ -77,8 +77,12 @@ function percentile(sortedDurations, p) {
 // Per caller — not per model — because a caller is a code path someone can
 // fix; the model behind it is just one of its parameters, and it already
 // tags every row for whoever needs to slice by that instead.
-function modelCallDemand(db) {
-  const rows = db.prepare('SELECT caller, ok, duration_ms, prompt_chars, response_chars FROM model_calls').all();
+export function modelCallDemand(db) {
+  const rows = db.prepare(`
+    SELECT caller, ok, duration_ms, prompt_chars, response_chars,
+           response_ready_ms, shutdown_tail_ms
+    FROM model_calls
+  `).all();
   const byCaller = new Map();
   for (const r of rows) {
     if (!byCaller.has(r.caller)) byCaller.set(r.caller, []);
@@ -86,12 +90,22 @@ function modelCallDemand(db) {
   }
   return [...byCaller.entries()].map(([caller, calls]) => {
     const durations = calls.map(c => c.duration_ms).sort((a, b) => a - b);
+    const responseReady = calls
+      .map(c => c.response_ready_ms)
+      .filter(value => value !== null)
+      .sort((a, b) => a - b);
+    const shutdownTail = calls
+      .map(c => c.shutdown_tail_ms)
+      .filter(value => value !== null)
+      .sort((a, b) => a - b);
     return {
       caller,
       calls: calls.length,
       failed: calls.filter(c => !c.ok).length,
       p50: percentile(durations, 0.5),
       p90: percentile(durations, 0.9),
+      readyP90: responseReady.length ? percentile(responseReady, 0.9) : null,
+      tailP90: shutdownTail.length ? percentile(shutdownTail, 0.9) : null,
       // response_chars is null on a failed call — nothing came back to count.
       charsIn: calls.reduce((n, c) => n + c.prompt_chars, 0),
       charsOut: calls.reduce((n, c) => n + (c.response_chars || 0), 0),
@@ -199,11 +213,13 @@ export function runSurfaceReportCli() {
     console.log('  No calls recorded yet.');
   } else {
     const width = Math.max(...model.map(r => r.caller.length));
-    console.log(`  ${'caller'.padEnd(width)}  calls  failed     p50     p90  chars in  chars out`);
+    console.log(`  ${'caller'.padEnd(width)}  calls  failed     p50     p90  ready90  tail90  chars in  chars out`);
     for (const r of model) {
       console.log(
         `  ${r.caller.padEnd(width)}  ${String(r.calls).padStart(5)}  ` +
         `${pct(r.failed, r.calls).padStart(6)}  ${`${r.p50}ms`.padStart(6)}  ${`${r.p90}ms`.padStart(6)}  ` +
+        `${(r.readyP90 === null ? 'n/a' : `${r.readyP90}ms`).padStart(7)}  ` +
+        `${(r.tailP90 === null ? 'n/a' : `${r.tailP90}ms`).padStart(6)}  ` +
         `${String(r.charsIn).padStart(8)}  ${String(r.charsOut).padStart(9)}`
       );
     }

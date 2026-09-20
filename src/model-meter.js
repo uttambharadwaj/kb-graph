@@ -13,11 +13,34 @@ const ERROR_MAX_CHARS = 200;
 // caller still gets its result (or its error), but logged loudly since a
 // silent failure here means the meter quietly goes blind -- same contract as
 // tool-meter.js and retrieval.js.
-export function logModelCall({ caller, model, ok, durationMs, promptChars, responseChars = null, error = null }) {
+export function logModelCall({
+  caller,
+  model,
+  ok,
+  durationMs,
+  promptChars,
+  responseChars = null,
+  responseReadyMs = null,
+  shutdownTailMs = null,
+  error = null,
+}) {
   try {
     getDb().prepare(
-      'INSERT INTO model_calls (caller, model, ok, duration_ms, prompt_chars, response_chars, error) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(caller, model, ok ? 1 : 0, Math.round(durationMs), promptChars, responseChars, error?.slice(0, ERROR_MAX_CHARS) ?? null);
+      `INSERT INTO model_calls (
+        caller, model, ok, duration_ms, prompt_chars, response_chars,
+        response_ready_ms, shutdown_tail_ms, error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      caller,
+      model,
+      ok ? 1 : 0,
+      Math.round(durationMs),
+      promptChars,
+      responseChars,
+      responseReadyMs === null ? null : Math.round(responseReadyMs),
+      shutdownTailMs === null ? null : Math.round(shutdownTailMs),
+      error?.slice(0, ERROR_MAX_CHARS) ?? null,
+    );
   } catch (err) {
     console.error(`[KB] model call log failed (caller=${caller}): ${err.message}`);
   }

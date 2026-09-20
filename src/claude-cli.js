@@ -64,7 +64,16 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = CLAUDE_CALL
 
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', d => { stdout += d; });
+    let responseReadyAt = null;
+    proc.stdout.on('data', d => {
+      stdout += d;
+      if (responseReadyAt === null) {
+        try {
+          JSON.parse(stdout);
+          responseReadyAt = Date.now();
+        } catch {}
+      }
+    });
     proc.stderr.on('data', d => { stderr += d; });
 
     // One place every settle path (success, non-zero exit, timeout, the
@@ -77,7 +86,20 @@ export function runClaude(prompt, { model = DEFAULT_MODEL, timeout = CLAUDE_CALL
     const finish = (ok, { responseChars = null, error = null } = {}) => {
       if (logged) return;
       logged = true;
-      logModelCall({ caller, model, ok, durationMs: Date.now() - started, promptChars, responseChars, error });
+      const finishedAt = Date.now();
+      const responseReadyMs = responseReadyAt === null ? null : responseReadyAt - started;
+      const shutdownTailMs = responseReadyMs === null ? null : finishedAt - responseReadyAt;
+      logModelCall({
+        caller,
+        model,
+        ok,
+        durationMs: finishedAt - started,
+        promptChars,
+        responseChars,
+        responseReadyMs,
+        shutdownTailMs,
+        error,
+      });
     };
 
     onChildDone(proc, (code, signal) => {

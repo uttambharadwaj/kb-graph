@@ -818,6 +818,19 @@ export const MIGRATIONS = [{
         ON retrieval_outcomes(retrieval_id);
     `);
   },
+}, {
+  version: 27,
+  // A complete JSON envelope can arrive before the CLI process exits. Keeping
+  // that instant separate from close() identifies hook/process-shutdown tail
+  // without storing prompts or responses.
+  name: 'model response and shutdown phase timing',
+  applied: db => !hasTable(db, 'model_calls') || [
+    'response_ready_ms', 'shutdown_tail_ms',
+  ].every(column => hasColumn(db, 'model_calls', column)),
+  up: db => {
+    addColumn(db, 'model_calls', 'response_ready_ms', 'INTEGER');
+    addColumn(db, 'model_calls', 'shutdown_tail_ms', 'INTEGER');
+  },
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
