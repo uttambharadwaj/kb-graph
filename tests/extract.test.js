@@ -364,27 +364,31 @@ describe('kb_extract consolidation', () => {
 
   it('applies the interactive budget to the model call by default', async () => {
     const timeouts = [];
+    const times = [1000, 1007, 1007];
     await kbExtract('interactive-service depends_on target-service.', {
       dryRun: true,
+      now: () => times.shift() ?? 1007,
       runModel: async (_prompt, { timeout }) => {
         timeouts.push(timeout);
         return { facts: [], skipped: [] };
       },
     });
-    assert.deepStrictEqual(timeouts, [EXTRACT_CALL_BUDGET_MS]);
+    assert.deepStrictEqual(timeouts, [EXTRACT_CALL_BUDGET_MS - 7]);
   });
 
   it('passes an explicit harvest budget through kbExtract to the model', async () => {
     const timeouts = [];
+    const times = [2000, 2011, 2011];
     await kbExtract('harvest-service depends_on target-service.', {
       dryRun: true,
       callBudgetMs: HARVEST_EXTRACT_CALL_BUDGET_MS,
+      now: () => times.shift() ?? 2011,
       runModel: async (_prompt, { timeout }) => {
         timeouts.push(timeout);
         return { facts: [], skipped: [] };
       },
     });
-    assert.deepStrictEqual(timeouts, [HARVEST_EXTRACT_CALL_BUDGET_MS]);
+    assert.deepStrictEqual(timeouts, [HARVEST_EXTRACT_CALL_BUDGET_MS - 11]);
   });
 
   it('still retries a fast model failure while shared budget remains', async () => {

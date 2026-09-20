@@ -3,33 +3,59 @@ let pipelinePromise = null; // Mutex: prevents concurrent model loads
 
 export const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
 export const EMBEDDING_DIMENSIONS = 384;
+export const DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS = 60000;
+const MAX_EMBEDDING_LOAD_TIMEOUT_MS = 300000;
 
-async function getEmbedder() {
+export function resolveEmbeddingLoadTimeoutMs(raw) {
+  if (raw == null || String(raw).trim() === '') return DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS;
+  const value = String(raw).trim();
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error('embedding load timeout must be a positive decimal integer');
+  }
+  const timeoutMs = Number(value);
+  if (timeoutMs > MAX_EMBEDDING_LOAD_TIMEOUT_MS) {
+    throw new Error(`embedding load timeout must be at most ${MAX_EMBEDDING_LOAD_TIMEOUT_MS}ms`);
+  }
+  return timeoutMs;
+}
+
+export async function withEmbeddingLoadTimeout(load, loadTimeoutMs) {
+  let timeout;
+  try {
+    return await Promise.race([
+      load(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Embedding model load timed out after ${loadTimeoutMs}ms`)),
+          loadTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getEmbedder(loadTimeoutMs = DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS, {
+  importTransformers = () => import('@huggingface/transformers'),
+} = {}) {
   if (pipeline) return pipeline;
 
   // If another call is already loading, wait for it instead of starting a second load
   if (pipelinePromise) return pipelinePromise;
 
   pipelinePromise = (async () => {
-    const { env, pipeline: createPipeline } = await import('@huggingface/transformers');
+    const { env, pipeline: createPipeline } = await importTransformers();
     const cacheDir = process.env.KB_EMBEDDING_CACHE_DIR?.trim();
     if (cacheDir) env.cacheDir = cacheDir;
 
-    // Race model load against a 60s timeout. Promise.race does not cancel the
-    // loser, so the timer must be cleared explicitly — left pending it holds
-    // the event loop open and every short-lived process that embeds anything
-    // sits there for a minute after its work is done.
-    let timeout;
-    try {
-      pipeline = await Promise.race([
-        createPipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true }),
-        new Promise((_, reject) => {
-          timeout = setTimeout(() => reject(new Error('Embedding model load timed out after 60s')), 60000);
-        }),
-      ]);
-    } finally {
-      clearTimeout(timeout);
-    }
+    // Race model load against the caller's timeout. Promise.race does not
+    // cancel the loser, so the timer must be cleared explicitly — left pending
+    // it holds the event loop open after the embedding work is done.
+    pipeline = await withEmbeddingLoadTimeout(
+      () => createPipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true }),
+      loadTimeoutMs,
+    );
 
     return pipeline;
   })().catch((err) => {
@@ -76,10 +102,18 @@ export async function storeEmbedding(documentId, content, vaultPath = null) {
   return 1;
 }
 
-export async function generateEmbedding(text) {
-  const embedder = await getEmbedder();
+async function generateEmbeddingWithTimeout(text, loadTimeoutMs, loaderOptions) {
+  const embedder = await getEmbedder(loadTimeoutMs, loaderOptions);
   const result = await embedder(text, { pooling: 'mean', normalize: true });
   return new Float32Array(result.data);
+}
+
+export async function generateEmbedding(text) {
+  return generateEmbeddingWithTimeout(text, DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS);
+}
+
+export async function generatePreflightEmbedding(text, loadTimeoutMs, loaderOptions) {
+  return generateEmbeddingWithTimeout(text, loadTimeoutMs, loaderOptions);
 }
 
 // Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON)

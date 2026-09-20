@@ -1,7 +1,8 @@
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
-  generateEmbedding,
+  generatePreflightEmbedding,
+  resolveEmbeddingLoadTimeoutMs,
 } from '../src/embeddings/embed.js';
 
 const runtime = {
@@ -23,8 +24,12 @@ try {
   db.close();
 
   const probeStartedAt = Date.now();
-  const vector = await generateEmbedding(
+  const loadTimeoutMs = resolveEmbeddingLoadTimeoutMs(
+    process.env.KB_EMBEDDING_PREFLIGHT_TIMEOUT_MS,
+  );
+  const vector = await generatePreflightEmbedding(
     'Embedding runtime preflight: one complete cache write precedes parallel test processes.',
+    loadTimeoutMs,
   );
   const embeddingProbeMs = Date.now() - probeStartedAt;
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
@@ -47,6 +52,7 @@ try {
     dimensions: vector.length,
     norm: Number(norm.toFixed(6)),
     embeddingProbeMs,
+    loadTimeoutMs,
     cacheDir,
   }));
 } catch (err) {

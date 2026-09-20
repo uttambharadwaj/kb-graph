@@ -780,6 +780,7 @@ export async function kbExtract(text, {
   dryRun = false,
   callBudgetMs = EXTRACT_CALL_BUDGET_MS,
   runModel = runClaudeJSON,
+  now = Date.now,
 } = {}) {
   const started = Date.now();
   let inputHash = null, inputChars = 0, chunkChars = [];
@@ -800,7 +801,7 @@ export async function kbExtract(text, {
     // the text never mentions, or dated a day the text never states, is filtered
     // here (see grounding.js) rather than in consolidation, so the preview
     // remembered below and the row eventually written are the same triple.
-    const extracted = previewed || await extractFacts(text, { callBudgetMs, runModel });
+    const extracted = previewed || await extractFacts(text, { callBudgetMs, runModel, now });
     attemptCount = extracted.attemptCount ?? 0;
     modelDurationMs = extracted.modelDurationMs ?? 0;
     // Seed the meter before grounding or consolidation can throw. In

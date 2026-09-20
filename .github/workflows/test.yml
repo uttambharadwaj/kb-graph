@@ -1,16 +1,29 @@
 name: test
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
+    name: test (${{ matrix.node }})
     runs-on: ubuntu-latest
     env:
-      # A fresh job-owned cache is warmed once before Node fans test files out
-      # to child processes. Transformers.js writes directly to final cache
-      # paths, so concurrent cold downloads can interleave or expose a partial
-      # ONNX file that every embedding suite then fails to parse.
+      # A shared cache is restored before one warm-up in each matrix job.
+      # Transformers.js writes directly to final cache paths, so concurrent
+      # cold downloads inside one job can expose a partial ONNX file.
       KB_EMBEDDING_CACHE_DIR: .cache/ci-embedding
+      # CI starts from a cold network cache. Production keeps the 60s default;
+      # only this preflight gets enough time to download and validate the model.
+      KB_EMBEDDING_PREFLIGHT_TIMEOUT_MS: 120000
     # The suite runs in well under a minute. Anything approaching this is a
     # hang, and the default six-hour ceiling burns a runner for all of it.
     timeout-minutes: 10
@@ -19,12 +32,18 @@ jobs:
       matrix:
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/ci-embedding
+          key: kb-embedding-${{ runner.os }}-all-MiniLM-L6-v2-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            kb-embedding-${{ runner.os }}-all-MiniLM-L6-v2-
       - name: Validate native runtime and warm embedding model
         run: npm run test:preflight
       - name: Run test suite
