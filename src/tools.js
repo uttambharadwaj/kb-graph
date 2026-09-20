@@ -253,7 +253,7 @@ function defineTools() {
     },
 
     {
-      name: 'kb_ingest',
+      name: MAINTENANCE_TOOL.INGEST,
       description: 'Ingest a new document into the knowledge base from text content. Writes a vault file (inbox) — files are the source of truth; the DB is a derived index.',
       schema: {
         title: z.string().describe('Document title'),
@@ -264,7 +264,15 @@ function defineTools() {
         try {
           // Files-first invariant: no DB-only writes. Every historical
           // vault/DB divergence traced back to this tool bypassing the vault.
-          const result = await writeNote(getVaultPath(), { title, content, type: 'capture', tags });
+          const result = await writeNote(
+            getVaultPath(),
+            { title, content, type: 'capture', tags },
+            {
+              writeAttribution: {
+                source: resolveCallSource() ?? WRITE_DECISION_SOURCE.MCP,
+              },
+            },
+          );
           if (result.skipped) return writeRefusal(result);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {

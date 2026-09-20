@@ -72,7 +72,7 @@ describe('checkpoint replay evaluation', () => {
         Object.values(vocabulary).length,
       );
     }
-    assert.equal(Object.values(MAINTENANCE_TOOL).length, 4);
+    assert.equal(Object.values(MAINTENANCE_TOOL).length, 5);
   });
 
   it('keeps the corpus synthetic and never returns fixture tokens or raw payloads', () => {

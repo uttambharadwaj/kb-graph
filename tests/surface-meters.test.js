@@ -8,6 +8,7 @@ import { metered, readToolResult } from '../src/tool-meter.js';
 import { logWriteDecision, WRITE_DECISION_SOURCE } from '../src/write-meter.js';
 import { storeEmbedding } from '../src/embeddings/embed.js';
 import { callIdentity } from '../src/retrieval.js';
+import { MAINTENANCE_TOOL } from '../src/tool-names.js';
 import v1Router from '../src/routes/v1.js';
 
 const calls = () => getDb().prepare('SELECT * FROM tool_calls ORDER BY id').all();
@@ -140,7 +141,7 @@ describe('write decision meter', () => {
   // of the table, and a direct call to the logger proves only that the logger
   // works. Nothing else here would notice if writeNote stopped calling it.
   it('records a row when a real write is accepted', async () => {
-    const kbWrite = getToolDefinitions().find(t => t.name === 'kb_write');
+    const kbWrite = getToolDefinitions().find(t => t.name === MAINTENANCE_TOOL.WRITE);
     const before = getDb().prepare('SELECT COUNT(*) c FROM write_decisions').get().c;
     const res = await kbWrite.handler({
       title: 'A note written through the tool to prove the meter is wired',
@@ -152,6 +153,20 @@ describe('write decision meter', () => {
     const row = getDb().prepare('SELECT * FROM write_decisions ORDER BY id DESC').get();
     assert.strictEqual(row.refused, 0);
     assert.ok(row.doc_id, 'an accepted write records the note it produced');
+    assert.strictEqual(row.source, WRITE_DECISION_SOURCE.MCP);
+  });
+
+  it('attributes the public ingest tool to MCP', async () => {
+    const ingest = getToolDefinitions().find(t => t.name === MAINTENANCE_TOOL.INGEST);
+    const res = await ingest.handler({
+      title: 'A public ingest note with explicit source attribution',
+      content: 'Public ingest attribution content distinct from every other meter fixture.',
+    });
+    assert.notStrictEqual(res.isError, true, res.content[0].text);
+
+    const row = getDb().prepare(
+      'SELECT source FROM write_decisions ORDER BY id DESC',
+    ).get();
     assert.strictEqual(row.source, WRITE_DECISION_SOURCE.MCP);
   });
 

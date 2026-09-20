@@ -1,6 +1,7 @@
 // Canonical names for maintenance tools that can satisfy a capture checkpoint.
 // Tool registration, fallback routing, and reporting all import this vocabulary.
 export const MAINTENANCE_TOOL = Object.freeze({
+  INGEST: 'kb_ingest',
   WRITE: 'kb_write',
   CAPTURE_FIX: 'kb_capture_fix',
   SUPERSEDE: 'kb_supersede',
