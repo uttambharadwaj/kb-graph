@@ -1067,11 +1067,23 @@ describe('harvest fact extraction', () => {
   });
 
   it('takes the last fact flag on the command line', async () => {
-    await runHarvestCli(['--no-facts', `--path=${write('cli-off.jsonl')}`]);
-    const before = factCount();
-    await runHarvestCli(['--no-facts', '--facts', `--path=${write('cli-on.jsonl')}`]);
+    const received = [];
+    async function run(options) {
+      received.push(options);
+      return 'internal result';
+    }
 
-    assert.ok(factCount() > before, '--facts last must win over an earlier --no-facts');
+    const results = [
+      await runHarvestCli(['--facts', '--no-facts'], { run }),
+      await runHarvestCli(['--no-facts', '--facts'], { run }),
+    ];
+
+    assert.deepStrictEqual(
+      received.map(({ facts }) => facts),
+      [false, true],
+      'the last explicit fact flag must reach runHarvest',
+    );
+    assert.deepStrictEqual(results, [undefined, undefined], 'CLI wrapper must not expose internal results');
   });
 
   // Turning the flag on must not be a no-op for everything already swept for

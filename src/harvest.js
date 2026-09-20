@@ -707,14 +707,14 @@ export async function runHarvest({
   return summary;
 }
 
-export async function runHarvestCli(args) {
+export async function runHarvestCli(args, { run = runHarvest } = {}) {
   const dryRun = args.includes('--dry-run');
   const sinceFlag = args.find(a => a.startsWith('--since-hours='));
   const pathFlag = args.find(a => a.startsWith('--path='));
   // Both spellings, so a single run can override the env var either way; last one wins.
   const factFlags = args.filter(a => a === '--facts' || a === '--no-facts');
   const facts = factFlags.length ? factFlags.at(-1) === '--facts' : undefined;
-  await runHarvest({
+  await run({
     sinceHours: sinceFlag ? parseInt(sinceFlag.split('=')[1], 10) : 26,
     dryRun,
     facts,
