@@ -7,3 +7,8 @@ export const MAINTENANCE_TOOL = Object.freeze({
   SUPERSEDE: 'kb_supersede',
   PROMOTE: 'kb_promote',
 });
+
+export const WRITE_BACKED_MAINTENANCE_TOOLS = Object.freeze([
+  MAINTENANCE_TOOL.INGEST,
+  MAINTENANCE_TOOL.WRITE,
+]);

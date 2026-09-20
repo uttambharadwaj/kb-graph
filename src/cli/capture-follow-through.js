@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { getDb } from '../db.js';
 import { AGENT } from '../process-ancestry.js';
 import { isTestSession } from '../retrieval.js';
-import { MAINTENANCE_TOOL } from '../tool-names.js';
+import {
+  MAINTENANCE_TOOL,
+  WRITE_BACKED_MAINTENANCE_TOOLS,
+} from '../tool-names.js';
 import { WRITE_DECISION_SOURCE } from '../write-meter.js';
 import {
   CHECKPOINT_DECLINE_REASON,
@@ -238,7 +241,7 @@ function classifyCandidate(candidate, evidence, throughMs) {
   const writes = evidence.writesByIdentity.get(key) ?? [];
   const immediateTools = tools.filter(row =>
     row.ok
-    && row.tool !== MAINTENANCE_TOOL.WRITE
+    && !WRITE_BACKED_MAINTENANCE_TOOLS.includes(row.tool)
     && inRange(row, candidate.at, immediateEnd));
   const immediateWrites = writes.filter(row =>
     inRange(row, candidate.at, immediateEnd));

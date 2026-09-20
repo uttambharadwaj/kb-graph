@@ -131,10 +131,11 @@ Measure the default-off rollout with
 The aggregate report separates emitted and log-only cohorts, waits for each
 30-minute immediate-capture window to mature, and reports delayed harvest
 salvage separately. Claude and Codex use exact agent/session correlation;
-Cursor stays agent-level. Test sessions and unattributable candidates never
-enter the rate denominator. Session IDs, commands, prompts, output, and note
-bodies are never printed. The same report evaluates the shipped synthetic
-checkpoint replay corpus for precision, recall, and unsafe captures.
+Cursor candidates are counted by agent only and excluded from all correlation
+denominators. Test sessions and other unattributable candidates are excluded
+too. Session IDs, commands, prompts, output, and note bodies are never printed.
+The same report evaluates the shipped synthetic checkpoint replay corpus for
+precision, recall, and unsafe captures.
 
 ### Consolidate and review
 

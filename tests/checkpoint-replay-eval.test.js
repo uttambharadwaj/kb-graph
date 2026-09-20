@@ -17,7 +17,10 @@ import {
   evaluateCheckpointReplay,
   printCaptureFollowThroughReport,
 } from '../src/cli/capture-follow-through.js';
-import { MAINTENANCE_TOOL } from '../src/tool-names.js';
+import {
+  MAINTENANCE_TOOL,
+  WRITE_BACKED_MAINTENANCE_TOOLS,
+} from '../src/tool-names.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(HERE, '..', 'eval', 'checkpoint-replay-v1.json');
@@ -65,6 +68,7 @@ describe('checkpoint replay evaluation', () => {
       CAPTURE_STATE,
       CHECKPOINT_REPLAY_LABEL,
       MAINTENANCE_TOOL,
+      WRITE_BACKED_MAINTENANCE_TOOLS,
     ]) {
       assert.equal(Object.isFrozen(vocabulary), true);
       assert.equal(
