@@ -49,7 +49,7 @@ const COMMANDS = {
     run: a => import('../src/cli/migrate.js').then(m => m.runMigrateCli(a)),
   },
   register: {
-    summary: 'Register MCP server with Claude/Gemini, and print the block to paste for Codex (--force to move an existing registration)',
+    summary: 'Register MCP server with Claude/Gemini/Cursor, and print the block to paste for Codex (--force to move an existing registration)',
     valueEq: ['--agents'],
     boolean: ['--force'],
     run: a => import('../src/cli/register.js').then(m => m.register(a)),
