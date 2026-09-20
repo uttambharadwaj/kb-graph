@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 251
-- **Total lines:** 50,293
+- **Total lines:** 50,368
 
 ## Architecture Overview
 ```
@@ -319,7 +319,7 @@ bin/
 | safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | schema-migrations.test.js | 319 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | serve-shutdown.test.js | 89 | - | - |
-| server-bind.test.js | 258 | - | - |
+| server-bind.test.js | 333 | - | - |
 | session-capture.test.js | 628 | - | - |
 | session-map.test.js | 174 | - | Backdates a file's mtime by `days` so the sweeper's age check treats it as |
 | setup-env-preserve.test.js | 10 | - | - |

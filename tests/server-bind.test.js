@@ -2,7 +2,8 @@ import './helpers/tmp-kb.js';
 import { fork, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import {
-  mkdirSync, mkdtempSync, rmSync,
+  copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
+  rmSync, symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,9 +26,68 @@ import {
   resolvePersistedHttpPort,
 } from '../src/cli/setup.js';
 
+const LIVE_PROJECT_ENV = fileURLToPath(new URL('../.env', import.meta.url));
+const SOURCE_BIN = fileURLToPath(new URL('../bin', import.meta.url));
+const SOURCE_MODULES = fileURLToPath(new URL('../node_modules', import.meta.url));
+const SOURCE_PACKAGE_JSON = fileURLToPath(new URL('../package.json', import.meta.url));
+const SOURCE_SRC = fileURLToPath(new URL('../src', import.meta.url));
+
 async function close(server) {
   server.close();
   await once(server, 'close');
+}
+
+function createSetupCliSandbox(prefix) {
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  const project = join(home, 'package');
+  mkdirSync(project);
+  cpSync(SOURCE_BIN, join(project, 'bin'), { recursive: true });
+  cpSync(SOURCE_SRC, join(project, 'src'), { recursive: true });
+  copyFileSync(SOURCE_PACKAGE_JSON, join(project, 'package.json'));
+  symlinkSync(SOURCE_MODULES, join(project, 'node_modules'), 'dir');
+  const liveProjectEnvSnapshot = existsSync(LIVE_PROJECT_ENV)
+    ? readFileSync(LIVE_PROJECT_ENV)
+    : null;
+
+  return {
+    projectEnv: join(project, '.env'),
+    run(args) {
+      return spawnSync(
+        process.execPath,
+        [
+          join(project, 'bin', 'kb.js'),
+          'setup',
+          '--auto',
+          ...args,
+          '--deploy=manual',
+          '--agents=claude',
+          '--vault=none',
+          '--no-load-jobs',
+        ],
+        {
+          cwd: home,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: home,
+            KB_DIR: join(home, 'kb-data'),
+            KB_SKIP_NODE_REEXEC: '1',
+            OBSIDIAN_VAULT_PATH: join(home, 'vault'),
+          },
+        },
+      );
+    },
+    assertLiveProjectEnvUnchanged() {
+      const expectedToExist = liveProjectEnvSnapshot !== null;
+      assert.strictEqual(existsSync(LIVE_PROJECT_ENV), expectedToExist);
+      if (expectedToExist) {
+        assert.deepStrictEqual(readFileSync(LIVE_PROJECT_ENV), liveProjectEnvSnapshot);
+      }
+    },
+    cleanup() {
+      rmSync(home, { recursive: true, force: true });
+    },
+  };
 }
 
 test('HTTP bind defaults to loopback and the standard port', () => {
@@ -186,20 +246,35 @@ test('generated containers expose HTTP only on host loopback', () => {
   assert.match(compose, /KB_HOST: 0\.0\.0\.0/);
 });
 
-test('the setup CLI accepts --host and rejects unsafe values before writing', () => {
-  const kbBin = fileURLToPath(new URL('../bin/kb.js', import.meta.url));
-  const result = spawnSync(
-    process.execPath,
-    [kbBin, 'setup', '--auto', '--host=http://0.0.0.0'],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, KB_SKIP_NODE_REEXEC: '1' },
-    },
-  );
+test('the setup CLI rejects unsafe hosts without touching live configuration', () => {
+  const sandbox = createSetupCliSandbox('kb-setup-bind-');
+  try {
+    const result = sandbox.run(['--host=http://0.0.0.0']);
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /KB_HOST/);
-  assert.doesNotMatch(result.stderr, /Unknown flag/);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /KB_HOST/);
+    assert.doesNotMatch(result.stderr, /Unknown flag/);
+    assert.strictEqual(existsSync(sandbox.projectEnv), false);
+    sandbox.assertLiveProjectEnvUnchanged();
+  } finally {
+    sandbox.cleanup();
+  }
+});
+
+test('the setup CLI round-trips a bind host entirely inside a test sandbox', () => {
+  const sandbox = createSetupCliSandbox('kb-setup-roundtrip-');
+  try {
+    const result = sandbox.run([
+      '--host=0.0.0.0',
+      '--password=test-password',
+    ]);
+
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.match(readFileSync(sandbox.projectEnv, 'utf8'), /^KB_HOST=0\.0\.0\.0$/m);
+    sandbox.assertLiveProjectEnvUnchanged();
+  } finally {
+    sandbox.cleanup();
+  }
 });
 
 test('the production server binds to loopback by default', async () => {
