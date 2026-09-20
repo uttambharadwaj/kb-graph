@@ -1,547 +1,243 @@
 # kb-graph
 
-**A memory that tends itself, for AI agents that forget.**
+**Shared memory for coding agents, stored in Markdown and SQLite.**
 
-kb-graph gives every AI agent you run — Claude Code, Codex, Cursor, Gemini, anything speaking MCP — one shared brain that compounds. The difference from other memory systems is the loop: your agents' session transcripts are **harvested automatically every night** into lessons and decisions (and facts, if you turn that on); per-workstream **state notes** are folded so "where is X?" always has one current answer; a **weekly synthesis** surfaces themes and contradictions; and hooks **push the relevant slice back into every new session** before you type a word. You don't have to remember to save anything, and your agents don't have to remember to search.
+[![CI](https://github.com/uttambharadwaj/kb-graph/actions/workflows/test.yml/badge.svg)](https://github.com/uttambharadwaj/kb-graph/actions/workflows/test.yml)
+[![GitHub release](https://img.shields.io/github/v/release/uttambharadwaj/kb-graph)](https://github.com/uttambharadwaj/kb-graph/releases/latest)
+[![Node 22, 24, 26](https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-339933?logo=node.js&logoColor=white)](package.json)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> kb-graph began as a fork of [knowledge-base-server](https://github.com/willynikes2/knowledge-base-server)
-> by Shawn Daniel — the engine behind [Memstalker](https://memstalker.com) — and has
-> since been substantially rebuilt around transcript harvesting, per-workstream state
-> notes, and synthesis loops.
+kb-graph gives Claude Code, Codex, Cursor, Gemini, and other MCP clients one
+searchable knowledge base. Notes remain files you own. SQLite adds full-text
+search, local embeddings add semantic retrieval, and agent hooks can put current
+context into a session before work starts.
 
-## Quickstart
+Storage and retrieval are local. AI curation is not: harvesting,
+classification, extraction, reconciliation, safety review, and synthesis invoke
+your authenticated Claude CLI and may send selected transcript or note content
+to its configured provider. The embedding model is downloaded on first use,
+then runs locally.
+
+## Install from source
+
+kb-graph is not currently published on npm. Clone it into a stable location:
+generated registrations and scheduled jobs contain the checkout's absolute
+path.
 
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
 cd kb-graph
-npm install
+npm ci
 node bin/kb.js setup
+node bin/kb.js status
 ```
 
-Setup registers the MCP server with your agents, installs the agent hooks
-(a KB briefing at session start, knowledge hints on every prompt) for Claude
-Code and Codex, the briefing alone for Cursor, schedules
-the nightly harvest / reindex / weekly synthesis jobs, installs the bundled
-`/debrief` and `kb-workflow` skills, and creates a markdown vault at
-`~/kb-vault` if you don't have one. Obsidian is an optional viewer — the
-vault is plain markdown.
+Requirements:
 
-Open a new Claude Code session: you should see your first **KB BRIEFING**.
+- macOS or Linux
+- Node.js 22, 24, or 26
+- an installed, authenticated `claude` CLI for AI curation
+- network access on first embedding use to download the model
 
-Onboarding a teammate? Send them [docs/ONBOARDING.md](docs/ONBOARDING.md).
-Coming from 1.x? Read [Upgrading to 2.0](docs/UPGRADING-2.0.md) before replacing
-your installed hooks or removing the retired message bus.
+After `.env` is written, setup treats later integrations as best-effort and
+reports each result. Review its summary, then open a new configured agent
+session. Claude Code, Codex, and Cursor should receive a **KB BRIEFING** at
+session start.
 
----
+For a teammate checklist, see [Onboarding](docs/ONBOARDING.md). Existing 1.x
+users should read [Upgrading to 2.0](docs/UPGRADING-2.0.md).
 
-## Why
+## What setup changes
 
-AI agents are stateless. Every session starts from zero: re-explaining the architecture, re-discovering the gotcha that cost you three hours last month, watching a second agent repeat the first one's mistake.
+Depending on your answers, `node bin/kb.js setup`:
 
-Most memory systems fix this with discipline — *remember to save notes, remember to search them*. Discipline doesn't survive a deadline. kb-graph is built on the opposite bet: **the loop must run even when nobody remembers to run it**. Capture is a scheduled job reading transcripts you already produced. Retrieval is a hook that fires before your prompt is even answered. The human's only job is to occasionally read what the system wrote.
+- creates or updates this checkout's owner-only `.env`;
+- creates a Markdown vault (Obsidian is optional);
+- registers MCP for Claude Code, Gemini, and Cursor;
+- tells Codex users to run `node bin/kb.js register --agents=codex`, which
+  prints the hand-managed `config.toml` block;
+- installs supported hooks for Claude Code, Codex, and Cursor;
+- installs four launchd or systemd-user jobs;
+- copies bundled skills into `~/.claude/skills` without overwriting existing
+  customizations; and
+- optionally configures the HTTP server as a service.
+
+Moving the clone later breaks paths embedded in those integrations. Re-run
+`setup` for hooks/jobs and `node bin/kb.js register --force` for MCP from the
+new checkout.
+
+## What each agent gets
+
+- **Claude Code:** MCP, session briefing, prompt hints, trigger checks,
+  pre-compaction continuity, daemon-backed lifecycle capture, and nightly
+  transcript discovery.
+- **Codex:** MCP after you paste the printed registration, session briefing,
+  prompt hints, trigger checks, daemon-backed activity/pre-compaction capture,
+  and nightly transcript discovery.
+- **Cursor:** MCP, session-start briefing, and nightly transcript discovery.
+  Cursor's current prompt/tool hooks have no context-output channel, so kb-graph
+  does not install prompt hints, trigger warnings, or lifecycle capture there.
+- **Gemini:** MCP registration. Gemini transcripts are not automatically
+  harvested and kb-graph does not install Gemini hooks.
+- **Other clients:** point any MCP client at
+  `node /absolute/path/to/kb-graph/bin/kb.js mcp-shim`.
+
+Bundled `/debrief` and `kb-workflow` skills are installed only for Claude's
+skill directory. Other agents can call the underlying MCP tools directly.
+Lifecycle hooks enqueue capture requests; the optional `kb serve` daemon is
+what drains that queue. Without it, the nightly transcript sweep remains the
+automatic capture path.
 
 ## The loop
 
-### 1. Push, not pull
+### Retrieve
 
-Hooks installed by `kb setup` into Claude Code's `settings.json`, Codex's
-`hooks.json`, and Cursor's `hooks.json` (briefing only there: Cursor's prompt
-and tool hooks cannot inject context) mean your agent never starts cold:
+Pull context with `kb_search`, `kb_search_smart`, or `kb_context`. Claude Code
+and Codex also receive sparse, precision-first hints when a prompt clearly
+matches a note. Cursor receives the session briefing but not per-prompt hints.
 
-- **Session start — the briefing.** Every new session opens with a KB BRIEFING: active workstreams (with pointers to their state notes), recently captured knowledge, and a health heartbeat so you know the loops behind the scenes are actually running.
+### Capture
 
-- **Every prompt — hints.** A `UserPromptSubmit` hook checks whether your prompt is actually *about* something the KB holds, and if so injects hint lines:
+Use `/debrief`, `kb_write`, `kb_capture_session`, or `kb_capture_fix` for
+deliberate capture. This is the high-quality path: the agent can name the lesson
+and preserve its evidence while the session is still fresh.
 
-  ```
-  KB HINT: the knowledge base has entries relevant to this prompt:
-  #412 "Pydantic Settings rejects extra env vars from .env" (lesson);
-  #367 "Why we moved auth to per-request tokens" (decision).
-  Check them with kb_read(id) before exploring from scratch.
-  ```
+Nightly harvest is a safety net, not guaranteed capture. By default it scans
+Claude Code, Codex, and Cursor transcripts, but skips short, still-active,
+subagent, and print-mode sessions. Work is capped per run and long transcripts
+are processed in bounded chunks. Set `KB_HARVEST_SDK_SESSIONS=1` if print-mode
+sessions are genuine work you want harvested during a manual
+`node bin/kb.js harvest` run. Setup-generated scheduled jobs do not currently
+carry that flag. Fact extraction remains opt-in with `KB_HARVEST_FACTS=1`;
+scheduled jobs snapshot that setting, so rerun setup after changing it.
 
-  The agent reads two short notes instead of re-deriving context from the codebase.
+### Consolidate and review
 
-  Most prompts get no hint at all, which is the point: a line that appears on
-  every prompt is one nobody reads. Relevance is scored on how much of a note's
-  own title and tags the prompt covers, weighted by how distinctive those words
-  are across the store — a measure that does not grow just because the prompt is
-  long.
-
-- **Before compaction — continuity capture.** Claude Code's `PreCompact` hook
-  silently saves a bounded snapshot of recent session context and git state.
-  The compact session-start hook restores it after compaction, then consumes the
-  snapshot. Capture and recovery outcomes are recorded in
-  `~/.knowledge-base/logs/compact-hooks.jsonl`.
-
-- **Before shell commands — action triggers.** Notes can carry vetted command
-  patterns in `triggers`. Advisory matches are log-only until
-  `KB_DIR/trigger-hook-enabled` exists. A one-way command can instead be made
-  an enforceable policy by setting both `triggers_pinned: true` and
-  `triggers_block: true` on an `observed` or `verified` note. That explicit
-  combination makes the PreToolUse hook deny every matching attempt; inferred
-  notes, model-proposed triggers, advisory caps, and prior warnings cannot gain
-  or consume blocking authority.
-
-Pull still works — `kb_search` (BM25), `kb_search_smart` (hybrid keyword + semantic), `kb_context` (a bounded truth packet that separates live note summaries, reviewed current state, raw evidence, superseded history, and unresolved claims) — and when ranking misses, the vault is plain markdown on disk: grep it directly.
-
-### 2. Capture that doesn't rely on discipline
-
-- **Nightly harvest (03:30).** A scheduled job reads your agents' session transcripts and extracts the durable parts — lessons, decisions, fixes — as structured notes, deduplicated against what the KB already knows (`kb_check_duplicate` runs before every write). You debugged something gnarly at 2am and told no one? The harvest caught it. It does not extract *facts* unless you ask it to (`KB_HARVEST_FACTS=1`, or `kb harvest --facts`): unattended triple extraction runs a model call per chunk of every transcript, which is where nearly all the token cost of this system lives, and against an open predicate vocabulary most of what it writes is entities mentioned once that no later fact ever matches. Left off, facts come from `/debrief` and `kb_extract` — chosen rather than swept.
-
-- **Deliberate capture — `/debrief`.** At the end of a substantial session, run the bundled `/debrief` skill (installed to `~/.claude/skills/` by setup): it scans the conversation for lessons, decisions, workflows, and state changes, checks each against what the KB already knows, and writes the survivors with you approving the list. Deliberate capture is higher quality — better titles, richer context, immediately available; the nightly harvest is the safety net for everything you didn't capture deliberately. The companion `kb-workflow` skill teaches agents the retrieval-then-capture pattern for use mid-session, and `kb_capture_session` / `kb_capture_fix` / `kb_write` are the direct tools underneath both.
-
-  If an agent loses its MCP transport mid-session, `kb tool` invokes the same
-  validated handlers from JSON on stdin. `/debrief` uses that automatically;
-  it does not leave a pending markdown file for a later human to ingest.
-
-- **Entity facts.** Alongside prose notes, a fact ledger tracks provenance-bearing `(subject, predicate, object)` assertions and validity windows. `kb_fact_query` returns that raw history separately from append-only reviewed projections. Only a fresh, complete, non-abstained review supplies current state; a missing, stale, or abstained projection is unresolved rather than latest-wins. `kb_fact_invalidate` is reserved for erroneous evidence, not duplication, synonymy, contest, or semantic supersession. Use `kb fact-adjudicate` to record a complete per-fact review without rewriting raw facts or earlier reviews.
-
-### 3. State notes, not stale sessions
-
-Session notes pile up; the truth about a workstream drifts across twenty of them. Every night, the consolidation pass **folds recent session notes into one mutable state note per workstream** and retypes the absorbed sessions to `archive` (still searchable, no longer masquerading as current). Asking "where is the auth work?" reads one note that is current as of last night — not an archaeology dig.
-
-### 4. Weekly synthesis (Sunday 04:00)
-
-A synthesis job reads the week's knowledge and writes what a good tech lead would notice: recurring themes, **contradictions** (two notes claiming different things about the same system), and merge candidates (near-duplicate clusters worth folding together). The KB doesn't just accumulate — it argues with itself and flags where it disagrees. It also lists the week's strongest **cross-domain tunnels** (see [Tunnels](#tunnels)).
-
-## A day with kb-graph
-
-- **9:00** — You open Claude Code. The briefing lists your active workstreams and notes last night's harvest ran clean.
-- **9:05** — You ask about a login bug. A KB HINT points at a three-week-old lesson: this exact failure was a stale credential cache. Twenty minutes saved.
-- **11:30** — Your agent fixes something subtle and captures it with `kb_capture_fix` on its way out.
-- **03:30** — The harvest reads today's transcripts, extracts two lessons and a decision you never explicitly saved, and folds today's sessions into the workstream's state note.
-- **Sunday 04:00** — The synthesis flags that Tuesday's note contradicts what March-you decided about retry behavior. You resolve it in one line.
-
-Every agent you run shares all of it. What Claude learns at 2am, Codex knows at 9am.
-
-## Tunnels
-
-Everything above files knowledge by domain. Tunnels walk *between* domains. Ask `kb_tunnels` about one tag and it ranks the neighboring domains that most often co-occur with it — scored by **lift** (co-occurrence weighted against how common each tag is on its own), so a catch-all tag never floats to the top just by being everywhere. Ask about two tags and it returns the bridge itself: the notes tagged with **both**, plus the fact-store entities **mentioned in both** domains' notes, ranked by how specific each name is to the bridge (corpus-common names that show up everywhere are downweighted, the same way lift discounts catch-all tags) — the shared services, people, and systems that quietly connect two areas of work you thought were separate. Tags are canonicalized first — lowercased and deduped on every write, with `kb tags alias <alias> <canonical>` to fold synonyms like `auth` and `authentication` into one domain — so the graph isn't fragmented by spelling. The weekly synthesis lists the strongest tunnels each week; `kb tags` reports the raw tag landscape and suggests aliases worth adding.
-
-## Design principles
-
-- **Files first.** Every note is plain markdown with frontmatter in a directory you own. Obsidian renders it beautifully but is optional. When search ranking fails, `grep` is the fallback — an agent can always inspect the raw store.
-- **No LLM in the read path.** Retrieval is SQLite FTS5 (BM25) + local embeddings (all-MiniLM-L6-v2, runs on your machine) fused at query time. LLM calls are spent at write time — classification, extraction, synthesis — where latency doesn't hurt.
-- **Self-tending, and honest about it.** Embeddings, harvest, consolidation, and synthesis run on schedules. The briefing carries a health heartbeat; if a loop stops running, you see ⚠ at your next session start instead of discovering silent rot months later.
-- **No external services.** SQLite, local embeddings, your filesystem. Nothing leaves your machine unless you expose the REST API yourself.
+Harvest folds recent sessions into current workstream state notes. Entity facts
+retain provenance and history; reviewed projections represent current state
+without rewriting raw evidence. Weekly synthesis reports themes,
+contradictions, and cross-domain links.
 
 ## Architecture
 
-```
-                    +----------------------------+
-                    |         AI Agents          |
-                    |  Claude Code | Codex       |
-                    |  Gemini      | any MCP/HTTP|
-                    +-------------+--------------+
-        hooks: briefing + hints   |   MCP (stdio/HTTP) · REST /api/v1/
-                                  |
-                    +-------------+--------------+
-                    | kb mcp-shim (per session)  |
-                    | session relay + reconnect, |
-                    | in-process startup fallback|
-                    +-------------+--------------+
-                                  |  unix socket (hooks use a second
-                                  |  control socket, same fallback)
-                    +-------------+--------------+
-                    |  kb serve — one resident   |
-                    |  daemon for every session  |
-                    |  (optional; see            |
-                    |  docs/daemon-setup.md)     |
-                    |  Dashboard: Express :3838  |
-                    +-------------+--------------+
-                                  |
-          +-----------------------+----------------------+
-          |                       |                      |
- +--------+--------+   +---------+---------+   +--------+--------+
- | SQLite + FTS5   |   | Local embeddings  |   | Markdown vault  |
- | documents/facts |   | all-MiniLM-L6-v2  |   | (Obsidian-      |
- | doc_links       |   | hybrid ranking    |   |  compatible)    |
- +-----------------+   +-------------------+   +-----------------+
+```text
+Claude Code / Codex / Cursor / Gemini / MCP clients
+                    |
+             kb mcp-shim
+         (one per client session)
+              /           \
+  optional kb serve      in-process fallback
+  Unix-socket daemon      when daemon is absent
+              \           /
+               SQLite + FTS5
+               local embeddings
+               Markdown vault
 
- Scheduled jobs (installed by kb setup):
-   harvest    nightly 03:30  — transcript lessons + state-note folding (facts opt-in)
-   reindex    every 5 min    — vault → index + embeddings
-   synthesis  Sunday 04:00   — themes, contradictions, merge candidates
+Browser / remote clients
+          |
+       kb start
+ dashboard + REST + HTTP MCP
+          |
+  same SQLite and vault
 ```
 
-Data directory: `~/.knowledge-base/` (`kb.db`, ingested file copies, config).
+`kb serve` is the optional resident MCP and hook daemon. It does not host the
+dashboard. `kb start` is the separate HTTP process. The HTTP server binds to
+`127.0.0.1` by default; intentional remote access requires an explicit
+`KB_HOST`, authentication, and a TLS-terminating reverse proxy.
 
-Without the daemon, every piece still works: `kb mcp-shim` probes the daemon
-socket for ~2s and runs a full server in-process when nothing answers, and the
-hooks do the same over the control socket. If a connected daemon restarts, the
-shim preserves the initialized MCP session, retries the socket, and invalidates
-the client's cached tool and resource lists after recovery. The daemon collapses
-N per-session server processes into one and puts hook latency on a warm path —
-worth setting up once you run more than a couple of concurrent agent sessions
-([docs/daemon-setup.md](docs/daemon-setup.md)).
+See [Resident daemon setup](docs/daemon-setup.md) for restart behavior and
+service definitions.
 
----
+## Scheduled maintenance
 
-## Detailed setup
+Setup installs these four jobs:
 
-### Prerequisites
+- **03:30 daily — harvest:** extract durable lessons and fold state notes;
+- **every 5 minutes — reindex:** sync vault Markdown into FTS and embeddings;
+- **04:00 Sunday — synthesis:** surface themes, contradictions, and merge
+  candidates; and
+- **04:15 daily — reconcile:** revisit supported fact/retrieval decisions
+  against their source evidence.
 
-- Node.js 22, 24, or 26. `.node-version` pins 22 for local development; CI runs all three supported majors.
-- That's it. No external databases, no Docker, no cloud dependencies.
+On macOS, job logs live under `~/.knowledge-base/logs/`; Linux jobs use the
+systemd journal. These jobs may mutate indexed state or vault notes. The
+session briefing reports loop health; inspect the logs for per-run details.
 
-### Install
+## Everyday commands
 
 ```bash
-git clone https://github.com/uttambharadwaj/kb-graph.git
-cd kb-graph
-npm install
-npm link        # optional: makes `kb` available on PATH
+node bin/kb.js search "credential cache" # terminal search
+node bin/kb.js status                    # store and HTTP server status
+node bin/kb.js harvest --dry-run         # preview transcript work
+node bin/kb.js serve --status            # probe the optional daemon
+node bin/kb.js start                     # local dashboard/API
+node bin/kb.js migrate --check           # read-only schema gate
 ```
 
-### First run (interactive wizard)
-
-```bash
-kb setup
-```
-
-The wizard detects your environment, asks which AI agents you use, writes `.env`, registers MCP, installs the hooks and scheduled jobs, and creates your vault. About 60 seconds.
-
-Agent-driven installation (no prompts):
-
-```bash
-kb setup --auto --password=yourpass --vault=~/kb-vault --agents=claude,codex
-```
-
-Re-running setup is safe: existing secrets (password, auth secret, API keys) are preserved, and hooks are never duplicated. Note that `.env` is rewritten from its template — if you hand-added custom variables, back them up first.
-
-### Manual pieces
-
-```bash
-KB_PASSWORD=yourpassword kb start    # dashboard + REST API on 127.0.0.1:3838
-kb register                          # MCP registration only
-kb ingest ~/kb-vault                 # ingest a directory
-kb search "docker networking"        # search from the terminal
-kb status                            # stats and server status
-```
-
----
-
-## MCP tools
-
-All 26 core tools are available over stdio. Seven of them — `kb_classify`,
-`kb_promote`, `kb_synthesize`, `kb_safety_check`, `kb_extract`,
-`kb_capture_youtube`, `kb_supersede_candidates` — are admin-only and stay off
-HTTP; the other 19 are exposed there. The description says when to reach for
-each one, because an agent picks a tool from that line and nothing else:
-
-| Tool | Description |
-|------|-------------|
-| `kb_search` | Full-text search, BM25 ranking, highlighted snippets |
-| `kb_search_smart` | Hybrid keyword + semantic search for conceptual queries |
-| `kb_context` | Provenance-aware truth packet — live summaries, reviewed current state, raw evidence, history, and unresolved claims; use before `kb_read` |
-| `kb_read` | Read a document by ID (returns a `related:` neighborhood) |
-| `kb_list` | List documents by type or tag |
-| `kb_tunnels` | Cross-domain bridges: neighboring domains for one tag, or the shared notes + entities between two |
-| `kb_write` | Write a note to the vault |
-| `kb_ingest` | Ingest raw text |
-| `kb_check_duplicate` | Similarity check before writing a **note** — prevents near-duplicates on `kb_write`, `kb_ingest`, `POST /api/v1/ingest` and the harvest. Bulk file import is deliberately exempt, see `kb ingest <path>` below |
-| `kb_supersede` | Retire a note that has been meaningfully replaced (still readable, out of recall) |
-| `kb_supersede_candidates` | Notes the fact graph says may be stale — suggestions only, when a briefing contradicts what you see |
-| `kb_classify` | Type, tag and summarise notes sitting unclassified in `inbox/` and `Clippings/` |
-| `kb_extract` | Extract structured facts/lessons from raw text or transcripts |
-| `kb_promote` | Raise a note's tier when a later session confirms it, recording what did the confirming |
-| `kb_synthesize` | A review brief over recent notes — for the "what have we learned lately" pass, not a lookup |
-| `kb_fact_add` | Add an entity fact (subject/predicate/object + validity) |
-| `kb_fact_query` | Query raw fact history plus any reviewed current-state projection |
-| `kb_fact_timeline` | How an entity's facts evolved over time |
-| `kb_fact_invalidate` | End erroneous evidence by exact fact ID, preserving the raw row and provenance; not a current-state selection tool |
-| `kb_capture_session` | Record a coding/debugging session (redacts secrets from pasted output; `kb_write` does not) |
-| `kb_capture_fix` | Record a bug fix: symptom, cause, resolution — searching the symptom later finds the cause |
-| `kb_capture_web` | File a page you fetched, with its URL as provenance |
-| `kb_capture_youtube` | File a transcript you already have (does not fetch the video) |
-| `kb_wakeup` | The session briefing (what the SessionStart hook calls) |
-| `kb_vault_status` | Vault indexing stats |
-| `kb_safety_check` | Review a destructive action against KB history |
-
-## CLI commands
-
-```
-kb setup               Setup wizard (--auto for agent mode)
-kb start / stop        Dashboard + REST API server (default 127.0.0.1:3838)
-kb serve               Resident MCP daemon on a unix socket, shared by every
-                       session (--status probes a running one). Optional —
-                       see docs/daemon-setup.md
-kb mcp-shim            What `kb register` points agents at: pipes the session
-                       to the daemon, or runs a full server in-process when
-                       no daemon answers
-kb mcp                 Plain per-session MCP stdio server (the shim's fallback,
-                       still available as a direct registration)
-kb tool <name>         End-of-session recovery path: invoke an allowlisted KB
-                       handler with one JSON object on stdin (or --input FILE)
-kb migrate             Apply pending schema migrations (--dry-run to preview,
-                       --check to exit 3 when a database is behind)
-kb register            Register MCP with Claude Code / Gemini / Cursor; prints the
-                       config.toml block to paste for Codex
-kb harvest             Run the transcript harvest now (normally nightly; --facts to extract facts too)
-kb migrate-legacy      One-shot copy of Claude memory, gstack, openspec, and
-                       spec files into the vault as native notes; originals
-                       untouched. --dry-run previews; follow with `kb vault reindex`
-kb consolidate-state   Fold session notes into workstream state notes
-kb vault reindex       Reindex the vault (embeddings included). A concurrent
-                       note write is preserved and recorded in
-                       ~/.knowledge-base/logs/vault-index-races.jsonl
-kb ingest <path>       Ingest a file or directory. Skips files it has already
-                       ingested by name; does NOT similarity-check contents,
-                       so importing the same text under two names keeps both.
-                       That is on purpose — see "Two kinds of write" below
-kb search <query>      Search from the terminal
-kb classify            Auto-classify unprocessed vault notes
-kb summarize           Generate summaries for unsummarized notes (one model call
-                       and ~11s per note; rewrites vault note frontmatter, and
-                       the graph picks it up on the next reindex. Try
-                       --limit=N --dry-run first)
-kb entity-merge        Merge two entity aliases in the fact store
-kb fact-conflicts      List current multi-object groups and their review state
-kb fact-adjudicate     Append a complete per-fact current-state review
-kb canonicalize-entities  Back-fill entities split across case/separator spellings (--apply, --verbose)
-kb tags                Tag report; 'tags alias <a> <b>' / 'tags aliases' to manage aliases
-kb status              Stats and server status
-kb meters prune        Delete old meter rows (--keep-days N required, --dry-run to preview)
-```
-
-`kb tool` is intentionally narrower than MCP. It permits the retrieval,
-capture, correction, promotion, and fact tools needed by `/debrief` and
-`/wrap`; it refuses administrative tools. For example:
-
-```bash
-printf '%s\n' '{"query":"resident daemon restart"}' | kb tool kb_search
-printf '%s\n' '{"title":"Restart recovery","type":"lesson","content":"The shim reconnects after a resident daemon replacement."}' | kb tool kb_write
-printf '%s\n' '{"id":42,"replacement_id":57,"reason":"confirmed replacement"}' | kb tool kb_supersede
-```
-
-The CLI reuses the MCP tools' Zod schemas and handlers, including indexing,
-deduplication, redaction, and per-tool meters. Do not create a vault markdown
-file and run `kb ingest`: that stores a second detached copy instead of
-indexing the vault file. Direct fallback attempts are recorded without their
-arguments or error text in
-`~/.knowledge-base/logs/direct-tool-fallbacks.jsonl`; `kb serve --status`
-reports the 24-hour success denominator and per-tool counts.
-
-That is the set you reach for by hand. `kb --help` lists every command, including the
-hook entrypoints the installed hooks call and the maintenance passes (`tier`,
-`link-backfill`, `fold-inverses`, `stale-servers`, `retrieval-report`,
-`follow-through`, `hint-probe`, `surface-report`, `meters prune`).
-
-`kb surface-report` answers four questions the store could not answer about
-itself. Which tools does anyone actually call — including the ones nobody has
-called at all, named rather than counted, because the case for removing a tool
-is which one it is. Which model subprocess calls underneath them are slow or
-failing, broken down by caller (extraction, classification, summarization,
-safety review, harvest, state, weekly synthesis) with failure rate, p50/p90
-duration, and characters in/out — the calls are the expensive, hang-prone
-surface, and until this section every one of them but extraction was dark.
-Where the duplicate threshold really sits: every write records its nearest
-existing note and that note's score, accepted or refused. And, in METER
-GROWTH, how fast each of the five meter tables itself is growing — row count,
-age of the oldest row, rows/day over the trailing week, and estimated bytes —
-because none of them is ever pruned automatically and two are too new to have
-a defensible retention window yet.
-
-```
-kb surface-report
-```
-
-The refusals were never the blind spot — a refusal announces itself to the
-caller who has to deal with it. The accepts are. A note written at a hair under
-the threshold looks exactly like one written into empty space, so the report
-buckets accepted writes by how close they came and shows how many in each band
-were later superseded. A band that was mostly retired is a band the threshold
-should have caught.
-
-`kb meters prune --keep-days N` deletes meter rows older than N days, and
-refuses to run without `--keep-days` — the point of METER GROWTH above is to
-measure a rate before anyone picks a window, so there is no built-in default
-to fall back on. `--dry-run` prints per-table would-delete counts and deletes
-nothing; `--table <name>` scopes a run to one table. There is no scheduler —
-pruning is an operator action, on purpose, until the growth numbers justify
-turning it into a routine one.
-
-Two of the five meter tables, `tool_calls` and `write_decisions`, delete
-safely: some of their readers (`kb surface-report`'s tool demand and
-write-decision bands) aggregate over all time, so a prune folds the rows it is
-about to delete into a `meter_rollups` table first, in the same transaction as
-the delete, and those readers merge raw and rolled-up rows back together —
-the numbers they print are identical before and after a prune. `extractions`
-has no reader anywhere in the codebase today, so it deletes with nothing to
-preserve. `retrievals` and `model_calls` are refused outright, including with
-an explicit `--table`: `retrieval-report`/`hint-probe` need raw prompt text
-and per-document history over all time, and `surface-report`'s model-call
-p50/p90 need the full duration distribution — neither fits in a compact
-day-bucketed rollup, and there is no safe way to prune around that.
-
-`kb hint-probe` is the one to reach for before changing how the prompt hint
-scores. It replays every prompt the hint has really been asked about — the meter
-already stores them — and prints one stable line per prompt, so two runs diff:
-
-```
-kb hint-probe > before.txt
-# change the scorer
-kb hint-probe > after.txt
-diff before.txt after.txt
-```
-
-A fixture cannot settle this on its own. Its off-topic probes are topical misses;
-the prompts that must decline in real use are conversational filler, which shares
-vocabulary with note prose and with nothing in note titles.
-
-Every command answers `--help` by printing usage and doing nothing else, and
-rejects a flag it does not recognize rather than running with defaults.
-
-## Two kinds of write
-
-Writing a **note** and importing a **file** are different operations, and only
-one of them is duplicate-checked.
-
-| | surfaces | duplicate check |
-|---|---|---|
-| Note | `kb_write`, `kb_ingest`, `POST /api/v1/ingest`, the nightly harvest | content similarity, before the write |
-| File | `kb ingest <path>`, the dashboard uploader | filename only — same name, already imported, skipped |
-
-A note is something you decided to record, so a near-duplicate is almost always
-a mistake worth refusing. An import is somebody else's corpus, and refusing a
-file because it resembles a note you already have would silently drop real
-content in the middle of a bulk run — losing data you asked to keep is worse
-than storing something twice. The asymmetry is deliberate; the count of skipped
-files comes back in the result.
-
-Surviving the check does not mean landing on new ground. When an accepted note
-lands close to a live one — nearer than a note merely worth linking to, still
-under the line that would have refused it — the write reports the neighbours it
-found (`near_notes`: id, title, score, at most three) with one instruction: if
-the new note contradicts or replaces one, call `kb_supersede` with that note's
-id and a reason. Nothing is classified here and no model runs; at write time a
-contradiction and an agreement look identical, and the caller is the one
-holding both notes. Contradictions used to sit side by side unresolved because
-nobody knew there was anything to resolve. `kb_check_duplicate` reports the
-same neighbours on a not-a-duplicate verdict, so the pre-check and the write
-still agree.
-
-## Schema changes
-
-`kb migrate` is the only command that changes the knowledge-base schema.
-Everything else verifies on connect and refuses to run when the database
-is behind the code, naming `kb migrate` in the error. A database with no schema
-yet is created on first connect — that has nothing to damage — but an existing
-one is never altered as a side effect of being opened. (`auth.db` is the
-exception: it belongs to better-auth, which manages its own tables.)
-
-Upgrading is therefore: pull, `kb migrate`, restart. Running `kb migrate` when
-nothing is pending prints `up to date` and writes nothing, so it is safe to keep
-in a deploy script unconditionally. Skipping it when a migration *is* pending
-costs you a startup failure that names the fix, not a half-migrated database.
-
-`kb migrate --check` answers the same question read-only and says so in its exit
-code: `0` when every database is current, `3` when one is behind, and it prints
-which migrations are missing. For gating a script, prefer it over `kb status` —
-that also exits non-zero when the knowledge base is behind, but with the plain
-`1` it uses for any other failure.
-
-An MCP session picks up new code without a restart, and that includes new code
-carrying a migration: the supervisor checks before it replaces its child, and if
-the database is behind it keeps the running server answering rather than swapping
-in one that cannot open the database. It says so once, on stderr, and finishes
-the reload by itself once you have run `kb migrate` — no reconnect. Pull, then
-migrate whenever you get to it; the session is not waiting on you.
-
----
-
-## Multi-agent setup
-
-### Claude Code, Codex, Cursor, Gemini (MCP)
-
-```bash
-kb register    # writes to ~/.claude.json, ~/.gemini/mcp.json and ~/.cursor/mcp.json
-```
-
-Codex is the exception: it reads MCP servers from `[mcp_servers.*]` in
-`~/.codex/config.toml`, which is hand-curated (`enabled_tools`, per-tool
-approval blocks). `kb register` prints the block for that file instead of
-writing it — paste it in and restart Codex.
-
-Any other MCP client — point it at the stdio transport:
-
-```json
-{
-  "mcpServers": {
-    "knowledge-base": {
-      "command": "node",
-      "args": ["/path/to/kb-graph/bin/kb.js", "mcp-shim"]
-    }
-  }
-}
-```
-
-`mcp-shim` uses the resident daemon when one is running, preserves the client
-session across daemon restarts, and falls back to a full in-process server when
-none is reachable at startup. The same registration is correct on both kinds
-of machine. (`"mcp"` still works as a daemon-free direct registration.)
-
-### ChatGPT and remote agents (REST)
-
-The HTTP server binds to `127.0.0.1` by default. This is the local trust
-boundary: dashboard cookies, OAuth discovery, health, and the OpenAPI document
-are reachable only from the same machine. To accept remote connections,
-explicitly set `KB_HOST=0.0.0.0` (or a specific interface address).
-
-The server does not terminate TLS. Remote binding must sit behind a
-TLS-terminating reverse proxy such as Caddy or nginx, with firewall/network
-access restricted to intended clients. Set `BETTER_AUTH_URL` to the public
-HTTPS origin and use API-key or OAuth authentication for protected endpoints.
-Containers with a published HTTP port also need `KB_HOST=0.0.0.0`; otherwise
-the process remains loopback-only inside the container.
-
-1. Import the OpenAPI spec from your server's `/openapi.json`
-2. Authenticate with an `X-API-Key` header (keys live in `.env`)
-
-Endpoints under `/api/v1/`: `search`, `search/smart`, `context`, `documents`, `ingest`, `capture/session`, `capture/fix`, `capture/web`.
-
-All agents share one brain: what one learns in a session, the others have in their next.
-
----
-
-## Environment variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `KB_PASSWORD` | Yes (first run) | — | Dashboard login password |
-| `KB_HOST` | No | `127.0.0.1` | HTTP bind host. Set `0.0.0.0` only for intentional remote access behind a TLS reverse proxy |
-| `KB_PORT` | No | 3838 | HTTP server port |
-| `OBSIDIAN_VAULT_PATH` | No | — | Vault path (any markdown directory) |
-| `CLAUDE_PATH` | No | `claude` on PATH | Claude CLI binary, used by harvest/classification |
-| `CLASSIFY_MODEL` | No | claude-haiku-4-5-20251001 | Model for write-time AI work |
-| `KB_HARVEST_FACTS` | No | off | `1`/`true`/`yes` makes the nightly harvest extract facts as well as lessons. Off because it is the expensive half and writes an open vocabulary unattended. Scheduled jobs inherit no environment, so `kb setup` copies this into the job definition — set it *before* setup, or re-run setup after changing it |
-| `KB_HARVEST_SDK_SESSIONS` | No | off | `1`/`true`/`yes` harvests print-mode (SDK) transcripts too. Off because the harvest's own `claude -p` calls look like sessions — 98% of candidates on a busy install. Turn on if you drive Claude Code headlessly and want that work captured |
-| `KB_API_KEY_CLAUDE` / `_OPENAI` / `_GEMINI` | No | — | API keys for remote REST access |
-| `BETTER_AUTH_SECRET` / `BETTER_AUTH_URL` | No | — | OAuth for remote access |
-| `KB_REPO_ROOTS` | No | `process.cwd()` | Colon-separated absolute paths searched to verify a `verified`-tier commit sha or file-path reference. The server's cwd is often a workspace directory sitting one level above every git repo, where nothing ever resolves — set this to that workspace and each immediate subdirectory that is a git repo is searched too |
-
-## Running as a service
-
-`kb setup` installs the scheduled jobs automatically (launchd on macOS, systemd user timers on Linux). To run the dashboard/API server itself as a Linux service, use `kb-server.service.example` or pick "systemd" in the wizard. Logs: `journalctl -u kb-server -f` (server) and `journalctl --user -u kb-harvest.service` or `~/.knowledge-base/logs/*.log` on macOS (jobs). Job logs live beside the data rather than in `/tmp`, where a weekly job's log is reaped before its next run.
-
-## Workflow templates
-
-`docs/workflow/` contains the operating contracts this system was built with — `CLAUDE.md.template`, `AGENTS.md.template`, and `SELF-LEARNING.md` (the full methodology). Copy them into your projects and customize: they tell your agents when to search the KB, when to capture, and how the compounding loop works.
-
----
-
-## Lineage & credits
-
-The storage engine, dashboard, REST/MCP surface, and setup wizard come from [knowledge-base-server](https://github.com/willynikes2/knowledge-base-server) by [Shawn Daniel](https://github.com/willynikes2), who runs the hosted [Memstalker](https://memstalker.com) on the same foundation — if you want this as a managed service, that's where to look. This fork rebuilds the intelligence layer around automatic transcript harvesting, per-workstream state consolidation, entity-fact timelines, weekly synthesis, and push-retrieval hooks, and was itself built by the agents it serves.
-
-*"You gotta 100-shot 10 apps before you can 1-shot 10 apps."* — Shawn Daniel
-
-## Roadmap
-
-- [ ] Entity-boosted retrieval ranking (fact-store entities as a fusion signal)
-- [ ] Bi-temporal facts: track "when it stopped being true" separately from "when we learned that"
-- [ ] Novelty-gated writes: embedding pre-filter before LLM classification
-
-## License
+`node bin/kb.js --help` lists maintenance and migration commands. `npm link`
+is optional if you prefer the shorter `kb ...` form.
+
+All 26 stdio tools are documented here so clients and maintainers can audit the
+surface:
+
+- retrieval: `kb_search`, `kb_search_smart`, `kb_context`, `kb_read`,
+  `kb_list`, `kb_tunnels`;
+- notes: `kb_write`, `kb_ingest`, `kb_check_duplicate`, `kb_supersede`,
+  `kb_supersede_candidates`, `kb_classify`, `kb_extract`, `kb_promote`,
+  `kb_synthesize`;
+- facts: `kb_fact_add`, `kb_fact_query`, `kb_fact_timeline`,
+  `kb_fact_invalidate`;
+- capture: `kb_capture_session`, `kb_capture_fix`, `kb_capture_web`,
+  `kb_capture_youtube`; and
+- operations: `kb_wakeup`, `kb_vault_status`, `kb_safety_check`.
+
+Nineteen non-admin tools, including mutating write and capture tools, are also
+available over HTTP; seven administrative tools remain local-only. See
+[Skills vs MCP](docs/SKILL-VS-MCP.md) for the complete surface and
+[llms.txt](llms.txt) for agent-oriented reference.
+
+`kb_ingest` and the other note-writing surfaces similarity-check content before
+writing. The bulk CLI command `node bin/kb.js ingest <path>` instead skips only
+filenames it has already imported; it does not silently drop a requested file
+because its content resembles an existing note.
+
+## Data, privacy, and backups
+
+- Primary application data lives in `~/.knowledge-base/`.
+- The vault path is configured by `OBSIDIAN_VAULT_PATH`; it is plain Markdown.
+- Retrieval uses SQLite FTS5 and `all-MiniLM-L6-v2` locally.
+- Claude-backed write-time operations can send selected content to your Claude
+  provider and can consume provider quota.
+- The local HTTP boundary is loopback by default. Remote binding is an operator
+  decision, not a setup default.
+- Back up both the SQLite data directory and the vault. One is not a complete
+  replacement for the other.
+
+## More documentation
+
+- [Onboarding and verification](docs/ONBOARDING.md)
+- [Upgrading from 1.x](docs/UPGRADING-2.0.md)
+- [Resident daemon](docs/daemon-setup.md)
+- [Obsidian and vault layout](docs/OBSIDIAN-SETUP.md)
+- [Skills vs MCP](docs/SKILL-VS-MCP.md)
+- [Extending tools, schema, and HTTP](EXTENDING.md)
+- [Contributing](CONTRIBUTING.md)
+
+CI validates Node 22, 24, and 26. Green CI is not deployment proof: releases,
+deploy-line reconciliation, database migration, and daemon rollout are manual
+operator steps.
+
+For an update: pull, run `node bin/kb.js migrate --check`, apply pending changes
+with `node bin/kb.js migrate`, then restart `kb start` and `kb serve`. Existing
+databases fail loudly rather than auto-migrating when opened by newer code.
+
+## Lineage and license
+
+kb-graph began as a fork of
+[knowledge-base-server](https://github.com/willynikes2/knowledge-base-server)
+by Shawn Daniel, the engine behind [Memstalker](https://memstalker.com). This
+fork adds transcript harvesting, state consolidation, fact timelines,
+synthesis, push retrieval, and a resident multi-client daemon.
 
 MIT — see [LICENSE](LICENSE). Copyright Shawn Daniel and Uttam Bharadwaj.
