@@ -1,10 +1,10 @@
 # Codebase Map
 > Auto-generated. Do NOT edit manually. Regenerate with: `node bin/generate-codemap.js`
-> Generated: 2026-09-19
+> Generated: 2026-09-20
 
 ## Quick Stats
-- **Files:** 245
-- **Total lines:** 49,302
+- **Files:** 248
+- **Total lines:** 49,627
 
 ## Architecture Overview
 ```
@@ -57,7 +57,7 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
-| auth.js | 149 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
+| auth.js | 151 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | child-exit.js | 40 | onChildDone | When a spawned child is finished, for callers that need its output. |
 | claude-cli.js | 129 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | context-packet.js | 465 | buildContextPacket | These are useful words in a question but not a useful entity match on their |
@@ -89,6 +89,7 @@ bin/
 | outcome-ranking.js | 56 | OUTCOME, HELPED_OUTCOME_ADJUSTMENT, CORRECTED_OUTCOME_ADJUSTMENT, FTS_OUTCOME_TIE_BUCKET, HINT_OUTCOME_TIE_BUCKET... | Outcome evidence is deliberately a tie-break, not a rank delta. SQLite FTS |
 | paths.js | 40 | KB_DIR, FILES_DIR, LOGS_DIR, HOOK_ERROR_LOG, DB_PATH... | tests/helpers/tmp-kb.js checks this to prove it ran before we did. |
 | predicates.js | 362 | VOCABULARY_FILE, canonicalPredicate, SINGLE_VALUED, PREDICATE_INVERSES, inverseTargetOf... | The predicate registry and the one canonicaliser every write path folds |
+| private-file.js | 41 | PRIVATE_FILE_MODE, writePrivateFile | - |
 | process-ancestry.js | 149 | AGENT, AGENTS, AGENT_FLAG, harnessAgent, findHarnessAncestor... | Identifies "the agent harness process" (Claude Code or Codex CLI) by |
 | reconciliation.js | 612 | RECONCILIATION_LOG_DIR, RECONCILIATION_LOG, RECONCILE_REVIEWER, DEFAULT_RECONCILE_LIMIT, supersessionEvidenceCandidates... | Only bounded source excerpts and review metadata leave this module. Full |
 | resident-census.js | 87 | summarizeResidentProcesses, inspectResidentProcesses, formatResidentProcessSummary | Live topology census for the resident-service rollout. Startup-event meters |
@@ -96,6 +97,7 @@ bin/
 | retrieval-outcomes.js | 421 | OUTCOME_SEMANTICS, retrievalOutcomesReady, parseTranscriptEvents, recordRetrievalOutcomesForSession, outcomeAdjustment | - |
 | retrieval.js | 233 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, isKbNudge... | Read-path telemetry: the write path has always been logged (documents, |
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
+| secret-prompt.js | 34 | askHidden | - |
 | server.js | 216 | start | - |
 | session-capture.js | 348 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
 | session-map.js | 97 | SESSION_MAP_DIR, recordSessionMap, resolveMapEntry | harness_pid -> session_id map: the MCP server process is long-lived and one |
@@ -145,7 +147,7 @@ bin/
 | hook-io.js | 230 | readAgentFlag, hookJsonEnvelope, hookOutput, recordHookFailure, deliver... | Shared plumbing for agent hooks (Claude Code, Codex, Cursor): never let a hook |
 | ingest-cli.js | 39 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
-| mcp-register.js | 154 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, mcpServerConfig, KB_MCP_SERVER_CONFIG... | Absent and unreadable are different answers. Treating both as "empty config" |
+| mcp-register.js | 153 | SUPPORTED_AGENTS, KB_MCP_SERVER_NAME, KB_ENTRYPOINT_PATH, mcpServerConfig, KB_MCP_SERVER_CONFIG... | Absent and unreadable are different answers. Treating both as "empty config" |
 | mcp-shim.js | 461 | PROBE_TIMEOUT_MS, RECONNECT_DELAY_MS, RECONNECT_MAX_DELAY_MS, runMcpShimCli | Per-session stdio shim: connects this process's stdio to the resident |
 | meters-cli.js | 54 | runMetersPruneCli | `kb meters prune` — the only place these five tables lose a row. No |
 | migrate-legacy.js | 75 | parseMigrateLegacyArgs, migrationSummaryLines, runMigrateLegacyCli | - |
@@ -163,7 +165,7 @@ bin/
 | session-capture-hook.js | 45 | sessionCaptureHook | Lifecycle hook entry: enqueue only. No extraction, summarization, indexing, |
 | setup-hooks.js | 362 | HOOK_FILES, PUSH_AGENTS, mergeAgentHooks, installAgentHooks, unresolvableHookCommands... | src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook con |
 | setup-jobs.js | 153 | renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
-| setup.js | 645 | parseEnvFile, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| setup.js | 656 | parseEnvFile, askSecret, writeSetupEnv, formatSetupSummary, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
@@ -298,13 +300,14 @@ bin/
 | predicate-closed-vocabulary.test.js | 275 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | predicate-fold-migration.test.js | 182 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | predicate-vocabulary.test.js | 294 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| private-files.test.js | 220 | - | - |
 | process-ancestry.test.js | 179 | - | This runs on a hook's critical path (every UserPromptSubmit) — a hung `ps` |
 | promotions.test.js | 594 | - | Push at t0, read (follows it) at t0 + 5min — well inside the 30min window. |
 | qualifier-prefix.test.js | 78 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | reconciliation-review-regressions.test.js | 200 | - | - |
 | reconciliation.test.js | 432 | - | - |
 | rediscoveries.test.js | 254 | - | Rediscovery telemetry: duplicate detection catching an agent re-deriving a |
-| register.test.js | 237 | - | Codex CLI (0.148) reads [mcp_servers. ] from config.toml and never loads |
+| register.test.js | 255 | - | Codex CLI (0.148) reads [mcp_servers. ] from config.toml and never loads |
 | resident-census.test.js | 71 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | retrieval-outcomes.test.js | 456 | - | - |

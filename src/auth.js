@@ -1,8 +1,10 @@
 import bcryptjs from 'bcryptjs';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { createInterface } from 'readline';
 import { CONFIG_PATH } from './paths.js';
+import { writePrivateFile } from './private-file.js';
+import { askHidden } from './secret-prompt.js';
 
 const sessions = new Map(); // token -> { expiresAt }
 const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
@@ -29,12 +31,12 @@ export function setPassword(plaintext) {
   if (existsSync(CONFIG_PATH)) {
     try {
       config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
-    } catch {
-      // start fresh if corrupt
+    } catch (err) {
+      throw new Error(`Cannot parse ${CONFIG_PATH}; refusing to replace it`, { cause: err });
     }
   }
   config.passwordHash = hash;
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+  writePrivateFile(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
 }
 
 /**
@@ -59,18 +61,18 @@ export function checkPassword(plaintext) {
  * Interactive CLI prompt — ask user to set a dashboard password.
  * Returns the plaintext password.
  */
-export function promptPassword() {
-  return new Promise((resolve) => {
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    rl.question('Set dashboard password: ', (answer) => {
-      rl.close();
-      setPassword(answer);
-      resolve(answer);
-    });
+export async function promptPassword() {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
   });
+  try {
+    const answer = await askHidden(rl, 'Set dashboard password: ', '', { trim: false });
+    setPassword(answer);
+    return answer;
+  } finally {
+    rl.close();
+  }
 }
 
 /**

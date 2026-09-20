@@ -9,6 +9,8 @@ import { SUPPORTED_AGENTS, registerAgents } from './mcp-register.js';
 import { HOOK_FILES, PUSH_AGENTS, installAgentHooks } from './setup-hooks.js';
 import { installJobs } from './setup-jobs.js';
 import { stableNodePath } from './runtime-node.js';
+import { writePrivateFile } from '../private-file.js';
+import { askHidden } from '../secret-prompt.js';
 
 const HOME = homedir();
 // fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication)
@@ -75,6 +77,14 @@ function ask(rl, question, defaultVal = '') {
       resolve(answer.trim() || defaultVal);
     });
   });
+}
+
+export function askSecret(rl, question, defaultVal) {
+  return askHidden(
+    rl,
+    `  ${question} [leave blank to keep or generate]: `,
+    defaultVal,
+  );
 }
 
 async function askChoice(rl, question, choices, defaultIdx = 0) {
@@ -293,6 +303,10 @@ function loadConfigFile() {
   } catch { return null; }
 }
 
+export function writeSetupEnv(path, content) {
+  writePrivateFile(path, content);
+}
+
 // ---------------------------------------------------------------------------
 // Interactive wizard
 // ---------------------------------------------------------------------------
@@ -325,7 +339,7 @@ async function runInteractive(env) {
   outln(prior.KB_PASSWORD
     ? '  Press Enter to keep the existing password, or type a new one.'
     : '  Press Enter to generate a random one, or type your own.');
-  cfg.password = await ask(rl, 'Dashboard password', randomPw);
+  cfg.password = await askSecret(rl, 'Dashboard password', randomPw);
 
   // 4. Server port
   outln();
@@ -419,7 +433,7 @@ function applyConfig(cfg) {
   const envContent = buildEnvContent(cfg);
   const envPath = join(PROJECT_ROOT, '.env');
   const envExisted = existsSync(envPath);
-  writeFileSync(envPath, envContent);
+  writeSetupEnv(envPath, envContent);
   results.steps.push({
     action: envExisted ? 'Updated .env' : 'Created .env',
     path: envPath,
@@ -537,55 +551,52 @@ function applyConfig(cfg) {
 // Print summary
 // ---------------------------------------------------------------------------
 
-function printSummary(results) {
-  outln();
-  outln('========================================');
-  outln('  Setup Complete');
-  outln('========================================');
-  outln();
+export function formatSetupSummary(results) {
+  const lines = [
+    '',
+    '========================================',
+    '  Setup Complete',
+    '========================================',
+    '',
+  ];
 
   for (const step of results.steps) {
-    outln(`  [done] ${step.action}`);
-    if (step.path) outln(`         ${step.path}`);
-    if (step.hint) outln(`         ${step.hint}`);
-    if (step.error) outln(`         Error: ${step.error}`);
+    lines.push(`  [done] ${step.action}`);
+    if (step.path) lines.push(`         ${step.path}`);
+    if (step.hint) lines.push(`         ${step.hint}`);
+    if (step.error) lines.push(`         Error: ${step.error}`);
   }
 
   const cfg = results.cfg;
-  outln();
-  outln('  SENSITIVE — do not share or log the following values:');
-  outln('  Configuration summary:');
-  outln(`    Port:      ${cfg.port}`);
-  outln(`    Password:  ${cfg.password}`);
-  outln(`    Vault:     ${cfg.vaultPath || '(none)'}`);
-  outln(`    Agents:    ${(cfg.agents || []).join(', ') || '(none)'}`);
-  outln(`    Deploy:    ${cfg.deploy || 'manual'}`);
+  lines.push('');
+  lines.push('  Configuration summary:');
+  lines.push(`    Port:        ${cfg.port}`);
+  lines.push('    Credentials: stored in .env');
+  lines.push(`    Vault:       ${cfg.vaultPath || '(none)'}`);
+  lines.push(`    Agents:      ${(cfg.agents || []).join(', ') || '(none)'}`);
+  lines.push(`    Deploy:      ${cfg.deploy || 'manual'}`);
   if (cfg.brainApi) {
-    outln(`    Brain API: https://${cfg.brainDomain}`);
+    lines.push(`    Brain API:   https://${cfg.brainDomain}`);
   }
 
-  if (cfg.apiKeys && Object.keys(cfg.apiKeys).length > 0) {
-    outln();
-    outln('  SENSITIVE — do not share or log the following values:');
-    outln('  API keys (save these — they are not stored elsewhere):');
-    for (const [agent, key] of Object.entries(cfg.apiKeys)) {
-      outln(`    ${agent}: ${key}`);
-    }
-  }
-
-  outln();
-  outln('  Next steps:');
-  outln('    1. Review .env and adjust if needed');
+  lines.push('');
+  lines.push('  Next steps:');
+  lines.push('    1. Review .env and adjust if needed');
   if (results.ingestPath) {
-    outln(`    2. Run: kb ingest ${results.ingestPath}`);
-    outln('    3. Run: kb start');
+    lines.push(`    2. Run: kb ingest ${results.ingestPath}`);
+    lines.push('    3. Run: kb start');
   } else {
-    outln('    2. Run: kb start');
+    lines.push('    2. Run: kb start');
   }
-  outln(`    Dashboard: http://localhost:${cfg.port}`);
-  outln();
+  lines.push(`    Dashboard: http://localhost:${cfg.port}`);
+  lines.push('');
   const hooked = (cfg.agents || []).filter(a => HOOK_FILES[a]).map(a => AGENT_LABELS[a] || a);
-  if (hooked.length) outln(`Open a new ${hooked.join(' or ')} session — your first KB BRIEFING should appear at startup.`);
+  if (hooked.length) lines.push(`Open a new ${hooked.join(' or ')} session — your first KB BRIEFING should appear at startup.`);
+  return `${lines.join('\n')}\n`;
+}
+
+function printSummary(results) {
+  out(formatSetupSummary(results));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 import { afterEach, describe, it } from 'node:test';
 import { stableNodePath } from '../src/cli/runtime-node.js';
 import assert from 'node:assert';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -54,6 +56,22 @@ describe('MCP registration', () => {
     const homeDir = makeHome();
     const [r] = registerAgents(['cursor'], homeDir);
     assert.strictEqual(statSync(r.path).mode & 0o777, 0o600);
+  });
+
+  it('repairs broad config permissions and removes a stale legacy temp file', () => {
+    const homeDir = makeHome();
+    const path = getAgentConfigPath('cursor', homeDir);
+    const legacyTemp = `${path}.kb-tmp`;
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, '{"mcpServers":{}}\n');
+    chmodSync(path, 0o666);
+    writeFileSync(legacyTemp, '{"headers":{"Authorization":"old-secret"}}\n');
+    chmodSync(legacyTemp, 0o644);
+
+    registerAgents(['cursor'], homeDir);
+
+    assert.strictEqual(statSync(path).mode & 0o777, 0o600);
+    assert.strictEqual(existsSync(legacyTemp), false);
   });
 
   it('writes config files for the agents whose configs it owns', () => {

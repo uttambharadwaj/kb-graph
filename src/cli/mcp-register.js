@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
+import { writePrivateFile } from '../private-file.js';
 
 export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini', 'cursor'];
 export const KB_MCP_SERVER_NAME = 'knowledge-base';
@@ -142,12 +143,10 @@ export function registerAgents(agents, homeDir = homedir(), { force = false } = 
       ...generated,
       env: { ...preservedEnv, ...generated.env },
     };
-    // The file holds every MCP server the agent has, often with API keys in
-    // headers, and the agent itself rewrites it: write-then-rename so a crash
-    // cannot truncate it, owner-only when we are the one creating it.
-    const tmp = `${path}.kb-tmp`;
-    writeFileSync(tmp, JSON.stringify(config, null, 2), { mode: 0o600 });
-    renameSync(tmp, path);
+    // Remove the fixed-name temp file used before private writes gained
+    // collision-resistant, ignored names.
+    rmSync(`${path}.kb-tmp`, { force: true });
+    writePrivateFile(path, JSON.stringify(config, null, 2));
     return { agent, path, written: true, from, to: KB_ENTRYPOINT_PATH };
   });
 }

@@ -1,0 +1,219 @@
+import './helpers/tmp-kb.js';
+import {
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  statSync, symlinkSync, writeFileSync,
+} from 'fs';
+import { execFileSync } from 'child_process';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { CONFIG_PATH } from '../src/paths.js';
+import { setPassword } from '../src/auth.js';
+import * as setup from '../src/cli/setup.js';
+import { writePrivateFile } from '../src/private-file.js';
+
+const REPO_ROOT = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
+
+function modeOf(path) {
+  return statSync(path).mode & 0o777;
+}
+
+test('setup writes new and existing secret env files with owner-only permissions', () => {
+  assert.equal(typeof setup.writeSetupEnv, 'function');
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-env-'));
+  const path = join(dir, '.env');
+
+  const previousUmask = process.umask(0o000);
+  try {
+    setup.writeSetupEnv(path, 'KB_PASSWORD=first-secret\n');
+    assert.equal(readFileSync(path, 'utf8'), 'KB_PASSWORD=first-secret\n');
+    assert.equal(modeOf(path), 0o600);
+
+    chmodSync(path, 0o666);
+    setup.writeSetupEnv(path, 'KB_PASSWORD=new-secret\n');
+  } finally {
+    process.umask(previousUmask);
+  }
+
+  assert.equal(readFileSync(path, 'utf8'), 'KB_PASSWORD=new-secret\n');
+  assert.equal(modeOf(path), 0o600);
+
+  const restrictedPath = join(dir, '.env-restrictive-umask');
+  const beforeRestrictedWrite = process.umask(0o277);
+  try {
+    setup.writeSetupEnv(restrictedPath, 'KB_PASSWORD=restricted-secret\n');
+  } finally {
+    process.umask(beforeRestrictedWrite);
+  }
+  assert.equal(modeOf(restrictedPath), 0o600);
+});
+
+test('password provisioning creates and repairs config.json with owner-only permissions', () => {
+  const previousUmask = process.umask(0o000);
+  try {
+    setPassword('initial-dashboard-secret');
+    assert.equal(modeOf(CONFIG_PATH), 0o600);
+
+    writeFileSync(CONFIG_PATH, '{"other":"preserved"}\n');
+    chmodSync(CONFIG_PATH, 0o666);
+    setPassword('dashboard-secret');
+  } finally {
+    process.umask(previousUmask);
+  }
+
+  assert.equal(modeOf(CONFIG_PATH), 0o600);
+  const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+  assert.equal(config.other, 'preserved');
+  assert.match(config.passwordHash, /^\$2[aby]\$/);
+});
+
+test('setup summary never renders passwords or API keys', () => {
+  assert.equal(typeof setup.formatSetupSummary, 'function');
+  const text = setup.formatSetupSummary({
+    steps: [],
+    cfg: {
+      port: 3838,
+      password: 'dashboard-secret',
+      vaultPath: '/tmp/vault',
+      agents: ['claude'],
+      deploy: 'manual',
+      apiKeys: { claude: 'agent-api-secret' },
+    },
+  });
+
+  assert.doesNotMatch(text, /dashboard-secret|agent-api-secret/);
+  assert.match(text, /Credentials:\s+stored in \.env/);
+});
+
+test('interactive secret prompts do not render their default value', async () => {
+  assert.equal(typeof setup.askSecret, 'function');
+  let renderedQuestion = '';
+  const rl = {
+    question(question, answer) {
+      renderedQuestion = question;
+      answer('');
+    },
+  };
+
+  assert.equal(await setup.askSecret(rl, 'Dashboard password', 'generated-secret'), 'generated-secret');
+  assert.doesNotMatch(renderedQuestion, /generated-secret/);
+  assert.match(renderedQuestion, /leave blank to keep or generate/i);
+});
+
+test('interactive secret prompts suppress typed input and restore output', async () => {
+  const writes = [];
+  let submit;
+  const originalWrite = function originalWrite(value) {
+    writes.push(value);
+  };
+  const rl = {
+    _writeToOutput: originalWrite,
+    question(question, answer) {
+      this._writeToOutput(question);
+      submit = answer;
+    },
+  };
+
+  const result = setup.askSecret(rl, 'Dashboard password', 'generated-secret');
+  rl._writeToOutput('typed-dashboard-secret');
+  submit('typed-dashboard-secret');
+
+  assert.equal(await result, 'typed-dashboard-secret');
+  assert.doesNotMatch(writes.join(''), /typed-dashboard-secret/);
+  assert.equal(rl._writeToOutput, originalWrite);
+});
+
+test('private-write crash artifacts are excluded from Git and package contents', () => {
+  const gitignore = readFileSync(fileURLToPath(new URL('../.gitignore', import.meta.url)), 'utf8');
+  assert.match(gitignore, /^\*\.kb-private-\*\.tmp$/m);
+
+  const artifact = join(REPO_ROOT, `.env.kb-private-${process.pid}-test.tmp`);
+  writeFileSync(artifact, 'KB_PASSWORD=must-not-ship\n', { mode: 0o600 });
+  try {
+    const gitStatus = execFileSync(
+      'git',
+      ['status', '--short', '--untracked-files=all', '--', artifact],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    );
+    assert.equal(gitStatus, '');
+
+    const packed = JSON.parse(execFileSync(
+      'npm',
+      ['pack', '--dry-run', '--json'],
+      { cwd: REPO_ROOT, encoding: 'utf8' },
+    ));
+    assert.equal(packed.length, 1);
+    assert.ok(Array.isArray(packed[0].files));
+    const files = packed[0].files.map(file => file.path);
+    assert.ok(!files.includes(artifact.slice(REPO_ROOT.length + 1)));
+  } finally {
+    rmSync(artifact, { force: true });
+  }
+});
+
+test('setup production paths use the private writer and redacted output', () => {
+  const source = readFileSync(fileURLToPath(new URL('../src/cli/setup.js', import.meta.url)), 'utf8');
+  assert.match(source, /writeSetupEnv\(envPath, envContent\)/);
+  assert.match(source, /askSecret\(rl, 'Dashboard password', randomPw\)/);
+  assert.match(source, /out\(formatSetupSummary\(results\)\)/);
+
+  const authSource = readFileSync(fileURLToPath(new URL('../src/auth.js', import.meta.url)), 'utf8');
+  assert.match(authSource, /await askHidden\(rl, 'Set dashboard password: ', '', \{ trim: false \}\)/);
+});
+
+test('private writes refuse to replace a symbolic link silently', {
+  skip: process.platform === 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-symlink-'));
+  const target = join(dir, 'target.env');
+  const path = join(dir, '.env');
+  writeFileSync(target, 'KB_PASSWORD=old-secret\n');
+  chmodSync(target, 0o644);
+  symlinkSync(target, path);
+
+  assert.throws(
+    () => setup.writeSetupEnv(path, 'KB_PASSWORD=new-secret\n'),
+    /symbolic link/,
+  );
+  assert.equal(lstatSync(path).isSymbolicLink(), true);
+  assert.equal(readFileSync(target, 'utf8'), 'KB_PASSWORD=old-secret\n');
+  assert.equal(modeOf(target), 0o644);
+});
+
+test('private writes also refuse dangling symbolic links', {
+  skip: process.platform === 'win32',
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-dangling-symlink-'));
+  const target = join(dir, 'missing-target.env');
+  const path = join(dir, '.env');
+  symlinkSync(target, path);
+
+  assert.throws(
+    () => setup.writeSetupEnv(path, 'KB_PASSWORD=new-secret\n'),
+    /symbolic link/,
+  );
+  assert.equal(lstatSync(path).isSymbolicLink(), true);
+});
+
+test('password updates preserve malformed config instead of replacing it', () => {
+  const malformed = '{"other":"must-survive"';
+  writeFileSync(CONFIG_PATH, malformed);
+
+  assert.throws(() => setPassword('dashboard-secret'), /parse|JSON|config/i);
+  assert.equal(readFileSync(CONFIG_PATH, 'utf8'), malformed);
+});
+
+test('failed private-file commits remove temporary secret files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-failed-commit-'));
+  const destination = join(dir, 'destination');
+  mkdirSync(destination);
+
+  assert.throws(() => writePrivateFile(destination, 'secret'));
+  assert.deepEqual(
+    readdirSync(dir).filter(name => name.includes('.kb-private-')),
+    [],
+  );
+  assert.equal(statSync(destination).isDirectory(), true);
+});
