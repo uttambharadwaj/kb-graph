@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { getDb } from '../db.js';
 import { AGENT } from '../process-ancestry.js';
+import { isTestSession } from '../retrieval.js';
 import { MAINTENANCE_TOOL } from '../tool-names.js';
 import { WRITE_DECISION_SOURCE } from '../write-meter.js';
 import {
@@ -66,6 +67,18 @@ const REPLAY_PATH = fileURLToPath(
 const FOLLOW_WINDOW_MINUTES = 30;
 const FOLLOW_WINDOW_MS = FOLLOW_WINDOW_MINUTES * 60 * 1000;
 const USAGE = 'Usage: kb capture-follow-through [--json] [--since <ISO-8601>] [--through <ISO-8601>] [--log-dir <path>]';
+const REPLAY_UNAVAILABLE = Object.freeze({
+  available: false,
+  version: null,
+  cases: 0,
+  tp: 0,
+  fp: 0,
+  fn: 0,
+  tn: 0,
+  precision: null,
+  recall: null,
+  unsafe_capture: 0,
+});
 
 function emptyPartition(vocabulary) {
   return Object.fromEntries(Object.values(vocabulary).map(value => [value, 0]));
@@ -170,7 +183,10 @@ function harvestBasenameMatches(source, session) {
 }
 
 function loadEvidence(db, candidates, throughMs) {
-  const firstAt = Math.min(...candidates.map(row => row.at));
+  const firstAt = candidates.reduce(
+    (earliest, row) => Math.min(earliest, row.at),
+    Number.POSITIVE_INFINITY,
+  );
   const since = new Date(firstAt).toISOString();
   const through = new Date(throughMs).toISOString();
   const tools = Object.values(MAINTENANCE_TOOL);
@@ -306,9 +322,13 @@ function finalizeCohort(cohort) {
   };
 }
 
-function summarizeEvidence(loaded) {
+function summarizeEvidence(loaded, {
+  toolTestExcluded = 0,
+  writeTestExcluded = 0,
+} = {}) {
   const maintenanceToolCalls = {
     total: loaded.toolRows.length,
+    testExcluded: toolTestExcluded,
     byAgent: emptyPartition(CAPTURE_AGENT),
   };
   for (const row of loaded.toolRows) {
@@ -317,6 +337,7 @@ function summarizeEvidence(loaded) {
 
   const writeDecisions = {
     total: loaded.writeRows.length,
+    testExcluded: writeTestExcluded,
     byAgent: emptyPartition(CAPTURE_AGENT),
     bySource: emptyPartition(EVIDENCE_SOURCE),
   };
@@ -329,6 +350,16 @@ function summarizeEvidence(loaded) {
 
 function emptyEvidence() {
   return summarizeEvidence({ toolRows: [], writeRows: [] });
+}
+
+function excludeTestEvidence(loaded) {
+  const toolRows = loaded.toolRows.filter(row => !isTestSession(row.session));
+  const writeRows = loaded.writeRows.filter(row => !isTestSession(row.session));
+  return {
+    filtered: { ...loaded, toolRows, writeRows },
+    toolTestExcluded: loaded.toolRows.length - toolRows.length,
+    writeTestExcluded: loaded.writeRows.length - writeRows.length,
+  };
 }
 
 export function evaluateCheckpointReplay(path = REPLAY_PATH) {
@@ -369,6 +400,14 @@ export function evaluateCheckpointReplay(path = REPLAY_PATH) {
   };
 }
 
+function reportReplay(path) {
+  try {
+    return evaluateCheckpointReplay(path);
+  } catch {
+    return { ...REPLAY_UNAVAILABLE };
+  }
+}
+
 export function captureFollowThroughReport(db = getDb(), {
   logDir = CHECKPOINT_LOG_DIR,
   since = null,
@@ -380,8 +419,10 @@ export function captureFollowThroughReport(db = getDb(), {
   const inWindow = rows.filter(row =>
     (window.sinceMs === null || row.at >= window.sinceMs)
     && row.at <= window.throughMs);
-  const eligible = inWindow.filter(row => row.at <= window.eligibleEventThroughMs);
-  const immature = inWindow.length - eligible.length;
+  const mature = inWindow.filter(row => row.at <= window.eligibleEventThroughMs);
+  const testExcluded = mature.filter(row => isTestSession(row.session));
+  const eligible = mature.filter(row => !isTestSession(row.session));
+  const immature = inWindow.length - mature.length;
 
   const partitions = {
     reason: emptyPartition(CAPTURE_REASON),
@@ -402,14 +443,22 @@ export function captureFollowThroughReport(db = getDb(), {
 
   let duplicateAttempts = 0;
   let evidenceSummary = emptyEvidence();
-  if (eligible.length > 0) {
-    const loaded = loadEvidence(db, eligible, window.throughMs);
-    evidenceSummary = summarizeEvidence(loaded);
+  if (mature.length > 0) {
+    const loaded = loadEvidence(db, mature, window.throughMs);
+    const {
+      filtered,
+      toolTestExcluded,
+      writeTestExcluded,
+    } = excludeTestEvidence(loaded);
+    evidenceSummary = summarizeEvidence(filtered, {
+      toolTestExcluded,
+      writeTestExcluded,
+    });
     const evidence = {
-      toolsByIdentity: groupByIdentity(loaded.toolRows),
-      writesByIdentity: groupByIdentity(loaded.writeRows),
-      documentsById: new Map(loaded.documentRows.map(row => [row.id, row])),
-      harvestDocuments: loaded.documentRows.filter(row =>
+      toolsByIdentity: groupByIdentity(filtered.toolRows),
+      writesByIdentity: groupByIdentity(filtered.writeRows),
+      documentsById: new Map(filtered.documentRows.map(row => [row.id, row])),
+      harvestDocuments: filtered.documentRows.filter(row =>
         typeof row.source === 'string' && row.source.startsWith('harvest:')),
     };
     for (const candidate of eligible) {
@@ -442,17 +491,18 @@ export function captureFollowThroughReport(db = getDb(), {
       inWindow: inWindow.length,
       outsideWindow: rows.length - inWindow.length,
       eligible: eligible.length,
+      testExcluded: testExcluded.length,
       immature,
     },
     cohorts,
     partitions,
     evidence: evidenceSummary,
     signals: { duplicateAttempts },
-    replay: evaluateCheckpointReplay(replayPath),
+    replay: reportReplay(replayPath),
   };
 }
 
-function printReport(report) {
+export function printCaptureFollowThroughReport(report) {
   console.log('KB Capture Follow-Through Report');
   console.log('================================');
   console.log(
@@ -464,6 +514,7 @@ function printReport(report) {
   console.log(report.attribution.cursor);
   console.log(
     `candidates: ${report.candidates.eligible} eligible, `
+    + `${report.candidates.testExcluded} test excluded, `
     + `${report.candidates.immature} immature, ${report.malformedLines} malformed lines`,
   );
   for (const [name, cohort] of Object.entries(report.cohorts)) {
@@ -480,22 +531,27 @@ function printReport(report) {
   }
   console.log(
     `evidence maintenance tool calls: ${report.evidence.maintenanceToolCalls.total}; `
+    + `${report.evidence.maintenanceToolCalls.testExcluded} test excluded; `
     + `by agent ${Object.entries(report.evidence.maintenanceToolCalls.byAgent)
       .map(([agent, n]) => `${agent}=${n}`).join(', ')}`,
   );
   console.log(
     `evidence write decisions: ${report.evidence.writeDecisions.total}; `
+    + `${report.evidence.writeDecisions.testExcluded} test excluded; `
     + `by agent ${Object.entries(report.evidence.writeDecisions.byAgent)
       .map(([agent, n]) => `${agent}=${n}`).join(', ')}; `
     + `by source ${Object.entries(report.evidence.writeDecisions.bySource)
       .map(([source, n]) => `${source}=${n}`).join(', ')}`,
   );
   const replay = report.replay;
-  console.log(
-    `replay v${replay.version}: TP=${replay.tp} FP=${replay.fp} FN=${replay.fn} `
-    + `TN=${replay.tn} precision=${replay.precision ?? 'n/a'} `
-    + `recall=${replay.recall ?? 'n/a'} unsafe_capture=${replay.unsafe_capture}`,
-  );
+  if (replay.available === false) console.log('replay: unavailable');
+  else {
+    console.log(
+      `replay v${replay.version}: TP=${replay.tp} FP=${replay.fp} FN=${replay.fn} `
+      + `TN=${replay.tn} precision=${replay.precision ?? 'n/a'} `
+      + `recall=${replay.recall ?? 'n/a'} unsafe_capture=${replay.unsafe_capture}`,
+    );
+  }
 }
 
 export function runCaptureFollowThroughCli(args = []) {
@@ -510,5 +566,5 @@ export function runCaptureFollowThroughCli(args = []) {
     logDir: readFlagValue(args, '--log-dir') ?? CHECKPOINT_LOG_DIR,
   });
   if (args.includes('--json')) console.log(JSON.stringify(report, null, 2));
-  else printReport(report);
+  else printCaptureFollowThroughReport(report);
 }

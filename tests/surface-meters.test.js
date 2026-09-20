@@ -83,8 +83,8 @@ describe('write decision meter', () => {
 
   it('exports a frozen closed source vocabulary', () => {
     assert.ok(Object.isFrozen(WRITE_DECISION_SOURCE));
-    assert.deepStrictEqual(Object.keys(WRITE_DECISION_SOURCE), ['MCP', 'REST', 'HARVEST']);
-    assert.strictEqual(new Set(Object.values(WRITE_DECISION_SOURCE)).size, 3);
+    assert.deepStrictEqual(Object.keys(WRITE_DECISION_SOURCE), ['MCP', 'REST', 'HARVEST', 'CLI']);
+    assert.strictEqual(new Set(Object.values(WRITE_DECISION_SOURCE)).size, 4);
   });
 
   it('persists explicit nullable attribution overrides exactly', () => {

@@ -34,9 +34,8 @@ function insertExtraction(db, { inputHash, createdAt }) {
   `).run(inputHash, createdAt);
 }
 
-// pruneMeters(table: 'tool_calls') deletes from the whole table, so a test
-// asserting an exact deleted count needs a database no other test's rows can
-// land in — this repo's tmp-kb.js gives one temp DB per *file*, not per test.
+// Isolated databases keep retention assertions independent from meter rows
+// other tests in this file may write.
 function freshDb() {
   const db = new Database(':memory:');
   applyMigrations(db, KB_MIGRATIONS);
@@ -48,7 +47,7 @@ describe('migration 14 — meter_rollups', () => {
     assert.ok(hasTable(getDb(), 'meter_rollups'));
   });
 
-  it('is what applying migration 14 to a pre-14 fixture adds, with the bucket columns prune folds into', () => {
+  it('preserves the historical bucket schema when upgrading a pre-14 fixture', () => {
     const fixture = new Database(':memory:');
     applyMigrations(fixture, KB_MIGRATIONS.filter(m => m.version < 14));
     assert.ok(!hasTable(fixture, 'meter_rollups'), 'fixture must not already have it');
@@ -63,6 +62,31 @@ describe('migration 14 — meter_rollups', () => {
       'id', 'later_superseded', 'n', 'no_neighbour', 'refused', 'table_name',
     ]);
     fixture.close();
+  });
+
+  it('keeps historical tool and write rollups readable without writing new ones', () => {
+    const db = freshDb();
+    const insert = db.prepare(`
+      INSERT INTO meter_rollups (
+        table_name, day, dim, n, failed, empty, duration_sum, duration_max,
+        refused, no_neighbour, later_superseded
+      ) VALUES (?, '2026-01-01', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run('tool_calls', 'kb_historical', 2, 1, 1, 400, 300, 0, 0, 0);
+    insert.run('write_decisions', '__all__', 3, 0, 0, 0, 0, 1, 1, 0);
+    insert.run('write_decisions', 'band:0.7', 2, 0, 0, 0, 0, 0, 0, 1);
+
+    const report = surfaceReport(db);
+    assert.deepStrictEqual(
+      report.tool.rows.find(row => row.tool === 'kb_historical'),
+      { tool: 'kb_historical', calls: 2, failed: 1, empty: 1, avg_ms: 200, max_ms: 300 },
+    );
+    assert.deepStrictEqual(report.write.totals, { n: 3, refused: 1, no_neighbour: 1 });
+    assert.deepStrictEqual(
+      report.write.bands.find(row => row.band === 0.7),
+      { band: 0.7, n: 2, later_superseded: 1 },
+    );
+    db.close();
   });
 });
 
@@ -123,7 +147,7 @@ describe('kb meters prune — flag gate', () => {
     assert.throws(() => runMetersPruneCli(['--keep-days', '7', '--table', 'nope']), UsageError);
   });
 
-  it('refuses a table with no preservable rollup, even named explicitly', () => {
+  it('refuses every raw-history table, even when named explicitly', () => {
     for (const table of Object.keys(PRUNE_EXCLUDED)) {
       assert.throws(
         () => runMetersPruneCli(['--keep-days', '7', '--table', table]),
@@ -195,9 +219,8 @@ describe('attribution meters retain raw rows', () => {
     insertToolCall(db, { tool: 'kb_probe_preserve', ok: 1, durationMs: 100, resultChars: 500, createdAt: timestampDaysAgo(30) });
     insertToolCall(db, { tool: 'kb_probe_preserve', ok: 0, durationMs: 900, resultChars: 10, createdAt: timestampDaysAgo(29) });
     insertToolCall(db, { tool: 'kb_probe_preserve', ok: 1, durationMs: 300, resultChars: 500, createdAt: timestampDaysAgo(1) });
-    // A tool with ONLY old rows: after the prune it has zero raw rows left, so
-    // it must still show up in the merged report, sourced entirely from the
-    // rollup, and must not land in the "never called" list.
+    // A tool with only old rows remains raw because attribution tables are no
+    // longer prunable, and must not land in the "never called" list.
     insertToolCall(db, { tool: 'kb_probe_preserve_gone', ok: 1, durationMs: 50, resultChars: 500, createdAt: timestampDaysAgo(30) });
 
     const neighbour = insertDocument({ title: 'Preservation test: neighbour note', content: 'x', doc_type: 'lesson', tags: '' });

@@ -253,12 +253,14 @@ describe('captureFollowThroughReport', () => {
     });
     assert.deepEqual(report.evidence.maintenanceToolCalls, {
       total: 3,
+      testExcluded: 0,
       byAgent: { claude: 1, codex: 0, cursor: 1, unknown: 1 },
     });
     assert.deepEqual(report.evidence.writeDecisions, {
       total: 5,
+      testExcluded: 0,
       byAgent: { claude: 2, codex: 2, cursor: 0, unknown: 1 },
-      bySource: { mcp: 2, rest: 1, harvest: 1, unknown: 1 },
+      bySource: { mcp: 2, rest: 1, harvest: 1, cli: 0, unknown: 1 },
     });
     assert.equal(
       sum(report.evidence.maintenanceToolCalls.byAgent),
@@ -336,6 +338,54 @@ describe('captureFollowThroughReport', () => {
     assert.equal(report.cohorts[CAPTURE_COHORT.LOG_ONLY].total, 4);
     assert.equal(report.cohorts[CAPTURE_COHORT.LOG_ONLY].attributable, 0);
     assert.equal(report.cohorts[CAPTURE_COHORT.LOG_ONLY].immediateCorrelationRate, null);
+  });
+
+  it('excludes mature smoke and verification sessions plus their evidence', () => {
+    const db = freshDb();
+    const logDir = join(process.env.KB_DIR, 'report-test-sessions');
+    writeCandidates(logDir, [
+      candidate({ ts: '2026-09-01T08:00:00Z', session: 'smoke-test' }),
+      candidate({ ts: '2026-09-01T08:01:00Z', session: 'test-checkpoint' }),
+      candidate({ ts: '2026-09-01T08:02:00Z', session: 'live-verify' }),
+      candidate({ ts: '2026-09-01T08:03:00Z', session: 'real-session' }),
+    ]);
+    for (const session of ['smoke-test', 'test-checkpoint', 'live-verify', 'real-session']) {
+      insertTool(db, {
+        session,
+        agent: AGENT.CLAUDE,
+        at: '2026-09-01T08:10:00Z',
+      });
+      insertWrite(db, {
+        refused: 0,
+        session,
+        agent: AGENT.CLAUDE,
+        at: '2026-09-01T08:11:00Z',
+      });
+    }
+
+    const report = captureFollowThroughReport(db, {
+      logDir,
+      through: '2026-09-01T10:00:00Z',
+    });
+
+    assert.equal(report.candidates.inWindow, 4);
+    assert.equal(report.candidates.testExcluded, 3);
+    assert.equal(report.candidates.eligible, 1);
+    assert.equal(report.candidates.immature, 0);
+    assert.equal(sum(report.partitions.state), 1);
+    assert.equal(report.cohorts[CAPTURE_COHORT.REMINDER_EMITTED].total, 1);
+    assert.equal(report.evidence.maintenanceToolCalls.total, 1);
+    assert.equal(report.evidence.maintenanceToolCalls.testExcluded, 3);
+    assert.equal(report.evidence.writeDecisions.total, 1);
+    assert.equal(report.evidence.writeDecisions.testExcluded, 3);
+    assert.equal(
+      sum(report.evidence.maintenanceToolCalls.byAgent),
+      report.evidence.maintenanceToolCalls.total,
+    );
+    assert.equal(
+      sum(report.evidence.writeDecisions.byAgent),
+      report.evidence.writeDecisions.total,
+    );
   });
 
   it('uses exact agent/session/time joins and includes the exact 30-minute edge', () => {

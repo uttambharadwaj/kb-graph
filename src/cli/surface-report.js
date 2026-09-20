@@ -13,10 +13,9 @@ import { EMPTY_REPLY_CHARS, meterGrowth, PRUNE_EXCLUDED } from '../meters.js';
 
 const pct = (n, of) => (of ? `${Math.round((n / of) * 100)}%` : '—');
 
-// tool_calls' per-tool aggregate reads GROUP BY tool over ALL TIME, so a
-// pruned history has to come back through meter_rollups (folded there by
-// src/meters.js's foldToolCalls, same grouping) to keep printing the same
-// calls/failed/empty/avg/max it would have without the prune. avg_ms uses
+// tool_calls' per-tool aggregate reads GROUP BY tool over ALL TIME. Raw rows
+// are retained now for session attribution, while historical rows rolled up
+// before that requirement still come back through meter_rollups. avg_ms uses
 // Math.trunc to match SQLite's CAST(... AS INTEGER), which truncates rather
 // than rounds -- duration_ms is never negative, so trunc and floor agree.
 function toolDemand(db) {
@@ -117,11 +116,9 @@ export function modelCallDemand(db) {
 // they came to being refused. A threshold is only defensible if the notes
 // just under it turned out to be worth keeping.
 //
-// Both totals and bands read write_decisions over all time, so both merge
-// meter_rollups back in (folded by src/meters.js's foldWriteDecisions, same
-// two groupings: '__all__' for totals, 'band:X.X' for the per-band rows) to
-// keep printing the same numbers after a prune that it would have without
-// one.
+// Both totals and bands read write_decisions over all time. Raw rows are
+// retained now for session/source attribution; the two historical rollup
+// shapes ('__all__' and 'band:X.X') remain merged so prior data stays visible.
 function writeDecisions(db) {
   const totalsRaw = db.prepare(
     'SELECT COUNT(*) AS n, SUM(refused) AS refused, SUM(nearest_score IS NULL) AS no_neighbour FROM write_decisions'

@@ -25,7 +25,7 @@ import { processNewClippings } from './classify/processor.js';
 import { reviewDestructiveAction } from './safety/review.js';
 import { tunnel, tagNeighbors, strongestTunnels } from './tunnels.js';
 import { canonicalTag, getTagAliasMap } from './tags.js';
-import { SURFACE, logRetrievalResults } from './retrieval.js';
+import { SURFACE, logRetrievalResults, resolveCallSource } from './retrieval.js';
 import { reviewedFactGroupStates } from './fact-reviews.js';
 import { buildContextPacket } from './context-packet.js';
 import { MAINTENANCE_TOOL } from './tool-names.js';
@@ -302,7 +302,11 @@ function defineTools() {
           const result = await writeNote(
             getVaultPath(),
             { title, content, type, tags, project, tier, tier_ref, excludeId: supersedes },
-            { writeAttribution: { source: WRITE_DECISION_SOURCE.MCP } },
+            {
+              writeAttribution: {
+                source: resolveCallSource() ?? WRITE_DECISION_SOURCE.MCP,
+              },
+            },
           );
           if (result.skipped) return writeRefusal(result);
 

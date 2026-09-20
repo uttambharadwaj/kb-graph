@@ -490,19 +490,12 @@ export const MIGRATIONS = [{
   `),
 }, {
   version: 14,
-  // Five meter tables, none ever pruned, on a shared SQLite file -- tool_calls
-  // grows per call to any of 26 tools and model_calls per model subprocess
-  // call, both faster than the older per-result tables. `kb meters prune`
-  // (see src/meters.js) deletes rows older than an operator-chosen window, but
-  // some reports (surface-report's tool demand and write-decision bands) read
-  // those tables over all time, so a naive delete would silently change the
-  // numbers they print. This table is where the rows about to be deleted get
-  // folded first, in the same transaction as the delete, so those reports read
-  // identical before and after a prune. One row per (table_name, day, dim)
-  // bucket; `dim` means something different per table_name (see foldToolCalls
-  // / foldWriteDecisions in src/meters.js). Two of the five tables
-  // (retrievals, model_calls) have no rollup shape that preserves what reads
-  // them, so prune refuses to touch them -- see PRUNE_EXCLUDED.
+  // Historical schema note: this migration introduced day-bucketed rollups
+  // when tool_calls and write_decisions were considered prunable. Migration 29
+  // later added session/agent/source attribution that these buckets cannot
+  // preserve, so current pruning retains those raw tables. Keep the table and
+  // its existing data: surface-report still merges historical rollups with raw
+  // rows, but src/meters.js no longer writes new rollups.
   name: 'meter rollups for prune coverage preservation',
   applied: db => hasTable(db, 'meter_rollups'),
   up: db => db.exec(`

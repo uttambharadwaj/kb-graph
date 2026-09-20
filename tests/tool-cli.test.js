@@ -4,7 +4,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { getDb } from '../src/db.js';
 import { FALLBACK_TOOL_LOG, formatFallbackToolSummary, summarizeFallbackTools } from '../src/fallback-tool-meter.js';
+import { MAINTENANCE_TOOL } from '../src/tool-names.js';
+import { getToolDefinitions } from '../src/tools.js';
+import { WRITE_DECISION_SOURCE } from '../src/write-meter.js';
 
 const KB_BIN = fileURLToPath(new URL('../bin/kb.js', import.meta.url));
 
@@ -80,6 +84,31 @@ describe('kb tool fallback', () => {
     const read = runTool('kb_read', { id: firstId });
     assert.equal(read.status, 0, read.stderr);
     assert.match(read.stdout, new RegExp(`SUPERSEDED .* by #${replacementId}`));
+  });
+
+  it('attributes direct CLI writes separately from ordinary MCP handler writes', { timeout: 60000 }, async () => {
+    const cli = runTool(MAINTENANCE_TOOL.WRITE, {
+      title: 'CLI source attribution fixture',
+      content: 'A direct validated tool invocation records the CLI write source.',
+      type: 'lesson',
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(
+      getDb().prepare('SELECT source FROM write_decisions ORDER BY id DESC').get().source,
+      WRITE_DECISION_SOURCE.CLI,
+    );
+
+    const write = getToolDefinitions().find(tool => tool.name === MAINTENANCE_TOOL.WRITE);
+    const mcp = await write.handler({
+      title: 'MCP source attribution fixture',
+      content: 'An ordinary registered handler invocation retains the MCP write source.',
+      type: 'lesson',
+    });
+    assert.equal(mcp.isError, undefined);
+    assert.equal(
+      getDb().prepare('SELECT source FROM write_decisions ORDER BY id DESC').get().source,
+      WRITE_DECISION_SOURCE.MCP,
+    );
   });
 
   it('records privacy-safe fallback outcomes and summarizes their denominator', () => {

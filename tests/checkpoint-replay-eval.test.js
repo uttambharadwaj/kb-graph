@@ -1,22 +1,44 @@
 import './helpers/tmp-kb.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import Database from 'better-sqlite3';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { initSchema } from '../src/db.js';
 import {
   CAPTURE_AGENT,
   CAPTURE_COHORT,
   CAPTURE_REASON,
   CAPTURE_STATE,
   CHECKPOINT_REPLAY_LABEL,
+  captureFollowThroughReport,
   evaluateCheckpointReplay,
+  printCaptureFollowThroughReport,
 } from '../src/cli/capture-follow-through.js';
 import { MAINTENANCE_TOOL } from '../src/tool-names.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORPUS_PATH = join(HERE, '..', 'eval', 'checkpoint-replay-v1.json');
+const UNAVAILABLE_REPLAY = {
+  available: false,
+  version: null,
+  cases: 0,
+  tp: 0,
+  fp: 0,
+  fn: 0,
+  tn: 0,
+  precision: null,
+  recall: null,
+  unsafe_capture: 0,
+};
+
+function freshDb() {
+  const db = new Database(':memory:');
+  initSchema(db);
+  return db;
+}
 
 describe('checkpoint replay evaluation', () => {
   it('runs the shipped v1 cases through the actual checkpoint decision core', () => {
@@ -89,5 +111,29 @@ describe('checkpoint replay evaluation', () => {
       'unsafe_capture',
       'version',
     ]);
+  });
+
+  it('keeps direct replay strict while the aggregate report degrades safely', () => {
+    const missing = join(process.env.KB_DIR, 'missing-replay.json');
+    const malformed = join(process.env.KB_DIR, 'malformed-replay.json');
+    writeFileSync(malformed, '{fixture-private-payload');
+
+    assert.throws(() => evaluateCheckpointReplay(missing));
+    assert.throws(() => evaluateCheckpointReplay(malformed));
+
+    for (const replayPath of [missing, malformed]) {
+      const report = captureFollowThroughReport(freshDb(), { replayPath });
+      assert.deepEqual(report.replay, UNAVAILABLE_REPLAY);
+      assert.doesNotMatch(JSON.stringify(report), /missing-replay|malformed-replay|fixture-private-payload/);
+      const lines = [];
+      const originalLog = console.log;
+      console.log = line => lines.push(String(line));
+      try {
+        printCaptureFollowThroughReport(report);
+      } finally {
+        console.log = originalLog;
+      }
+      assert.ok(lines.includes('replay: unavailable'));
+    }
   });
 });

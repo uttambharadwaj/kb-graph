@@ -5,6 +5,8 @@ import { getToolDefinitions } from '../tools.js';
 import { readToolResult } from '../tool-meter.js';
 import { recordFallbackTool } from '../fallback-tool-meter.js';
 import { MAINTENANCE_TOOL } from '../tool-names.js';
+import { callIdentity } from '../retrieval.js';
+import { WRITE_DECISION_SOURCE } from '../write-meter.js';
 
 const INPUT_MAX_BYTES = 1024 * 1024;
 const USAGE = 'Usage: kb tool <name> [--input <json-file>]\n\n'
@@ -80,7 +82,10 @@ export async function runToolCli(args) {
       throw new UsageError(`Invalid input for ${name}: ${err.issues?.map(issue => issue.message).join('; ') || err.message}`, USAGE);
     }
 
-    const result = await tool.handler(validated);
+    const result = await callIdentity.run(
+      { source: WRITE_DECISION_SOURCE.CLI },
+      () => tool.handler(validated),
+    );
     const { ok } = readToolResult(result);
     outcome = ok ? 'succeeded' : 'tool_error';
     console.log(renderResult(result));

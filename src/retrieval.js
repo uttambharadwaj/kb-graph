@@ -109,6 +109,13 @@ export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
 // fallback below.
 export const callIdentity = new AsyncLocalStorage();
 
+// Optional surface identity bound around a local/direct invocation. Kept
+// separate from ancestry so a CLI caller can identify its write channel
+// without pretending to have a harness session or agent.
+export function resolveCallSource() {
+  return callIdentity.getStore()?.source ?? null;
+}
+
 let cachedAncestry = null;
 function defaultAncestry() {
   const bound = callIdentity.getStore();

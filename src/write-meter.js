@@ -15,6 +15,7 @@ export const WRITE_DECISION_SOURCE = Object.freeze({
   MCP: 'mcp',
   REST: 'rest',
   HARVEST: 'harvest',
+  CLI: 'cli',
 });
 const WRITE_DECISION_SOURCES = new Set(Object.values(WRITE_DECISION_SOURCE));
 
