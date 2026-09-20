@@ -28,6 +28,7 @@ import { canonicalTag, getTagAliasMap } from './tags.js';
 import { SURFACE, logRetrievalResults } from './retrieval.js';
 import { reviewedFactGroupStates } from './fact-reviews.js';
 import { buildContextPacket } from './context-packet.js';
+import { MAINTENANCE_TOOL } from './tool-names.js';
 import { WRITE_DECISION_SOURCE } from './write-meter.js';
 
 function getVaultPath() {
@@ -127,7 +128,7 @@ const factGroupKey = fact => `${canonicalEntityId(fact.subject)}\0${fact.predica
 const ADMIN_ONLY_TOOLS = new Set([
   'kb_classify',
   'kb_extract',
-  'kb_promote',
+  MAINTENANCE_TOOL.PROMOTE,
   'kb_synthesize',
   'kb_safety_check',
   'kb_capture_youtube',
@@ -273,7 +274,7 @@ function defineTools() {
     },
 
     {
-      name: 'kb_write',
+      name: MAINTENANCE_TOOL.WRITE,
       description: 'Write a new authored note to the Obsidian vault in one call. This call owns semantic duplicate detection and refuses without writing when that gate is unavailable. Use it for durable knowledge, ideas, lessons, decisions, research, or workstream state—not progress narration or unverified hypotheses. Search and read first only when correcting existing knowledge, then pass supersedes to replace that note in the same call. A successful write can report related near_notes as linking context; they are not duplicate matches.',
       schema: {
         title: z.string().describe('Note title'),
@@ -346,7 +347,7 @@ function defineTools() {
     },
 
     {
-      name: 'kb_supersede',
+      name: MAINTENANCE_TOOL.SUPERSEDE,
       description: 'Mark a note as superseded (meaningfully replaced) so it drops out of search, briefings, and current-state recall while staying reachable via kb_read and its replacement pointer. Superseded is NOT deleted. Optionally record the replacement note and a reason; pass unset to restore the note. Reach for this when the replacement already exists, or when a note is simply wrong and nothing replaces it. If you are about to WRITE the replacement, use kb_write with supersedes instead — it retires the old note and points it at the new one in a single call, so the pointer is never a guess.',
       schema: {
         id: z.number().int().describe('ID of the note to supersede'),
@@ -491,7 +492,7 @@ function defineTools() {
     },
 
     {
-      name: 'kb_capture_fix',
+      name: MAINTENANCE_TOOL.CAPTURE_FIX,
       description: 'Record a bug fix once you have verified it fixed — the symptom you were chasing, the cause you found, the change that resolved it. Reach for this over kb_write for anything you debugged: symptom and cause are separate fields, which is what lets a later session search the symptom and land on the cause, and pasted commands and logs go through secret redaction that kb_write does not perform.',
       schema: {
         title: z.string().describe('Short title for the fix'),
@@ -537,7 +538,7 @@ function defineTools() {
     },
 
     {
-      name: 'kb_promote',
+      name: MAINTENANCE_TOOL.PROMOTE,
       description: `Raise a note's tier because this session confirmed it, recording what did the confirming. This is the only way a note leaves ${DEFAULT_TIER}: ${TIERS.map(t => `${t} = ${TIER_MEANING[t]}`).join('; ')}. Promotions only go up, and ${TIER.VERIFIED} is refused unless confirmed_by names a commit, a pull request or a test. The note's own file is rewritten too, so the tier survives the next reindex.`,
       schema: {
         id: z.number().int().describe('ID of the note to promote'),

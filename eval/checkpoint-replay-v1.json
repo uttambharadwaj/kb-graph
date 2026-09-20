@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "positive-source-control-boundary",
+      "label": "positive",
+      "expected_emit": true,
+      "agent": "claude",
+      "seen": [],
+      "input": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "synthetic-positive",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "git commit -m synthetic"
+        },
+        "tool_response": {
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "id": "deliberate-silence-targeted-check",
+      "label": "deliberate_silence",
+      "expected_emit": false,
+      "agent": "codex",
+      "seen": [],
+      "input": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "synthetic-silence",
+        "tool_name": "Shell",
+        "tool_input": {
+          "command": "npm test -- tests/synthetic.test.js"
+        },
+        "tool_response": {
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "id": "secret-injection-shell-substitution",
+      "label": "secret_injection",
+      "expected_emit": false,
+      "sensitive": true,
+      "fixture_token": "SYNTHETIC_FIXTURE_TOKEN_9F3A",
+      "agent": "claude",
+      "seen": [],
+      "input": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "synthetic-injection",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "git commit -m \"$(printenv SYNTHETIC_FIXTURE_TOKEN_9F3A)\""
+        },
+        "tool_response": {
+          "exit_code": 0,
+          "stdout": "SYNTHETIC_FIXTURE_TOKEN_9F3A"
+        }
+      }
+    },
+    {
+      "id": "duplicate-reason",
+      "label": "duplicate",
+      "expected_emit": false,
+      "agent": "claude",
+      "seen": [
+        "commit_or_merge"
+      ],
+      "input": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "synthetic-duplicate",
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "git commit -m synthetic"
+        },
+        "tool_response": {
+          "exit_code": 0
+        }
+      }
+    },
+    {
+      "id": "delayed-salvage-eligible-boundary",
+      "label": "delayed_salvage",
+      "expected_emit": true,
+      "agent": "codex",
+      "seen": [],
+      "input": {
+        "hook_event_name": "PostToolUse",
+        "session_id": "synthetic-salvage",
+        "tool_name": "Shell",
+        "tool_input": {
+          "command": "npm test"
+        },
+        "tool_response": {
+          "exit_code": 0
+        }
+      }
+    }
+  ]
+}

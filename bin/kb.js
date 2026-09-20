@@ -106,6 +106,12 @@ const COMMANDS = {
     boolean: ['--json'],
     run: a => import('../src/cli/follow-through.js').then(m => m.runFollowThroughCli(a)),
   },
+  'capture-follow-through': {
+    summary: 'Aggregate checkpoint capture correlation by emitted/log-only cohort, including replay precision',
+    value: ['--since', '--through', '--log-dir'],
+    boolean: ['--json'],
+    run: a => import('../src/cli/capture-follow-through.js').then(m => m.runCaptureFollowThroughCli(a)),
+  },
   promotions: {
     summary: 'Promote inferred docs that a followed hint/trigger push confirmed to observed (--dry-run to log only, --json for machine-readable)',
     boolean: ['--json', '--dry-run'],

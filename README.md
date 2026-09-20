@@ -126,6 +126,16 @@ tool calls, detectable subagents, missing identities, and write-denied sessions
 never emit. Cursor remains disabled until its write-approval contract is
 verified.
 
+Measure the default-off rollout with
+`kb capture-follow-through --since <ISO-8601> --through <ISO-8601> --json`.
+The aggregate report separates emitted and log-only cohorts, waits for each
+30-minute immediate-capture window to mature, and reports delayed harvest
+salvage separately. Claude and Codex use exact agent/session correlation;
+Cursor stays agent-level. Test sessions and unattributable candidates never
+enter the rate denominator. Session IDs, commands, prompts, output, and note
+bodies are never printed. The same report evaluates the shipped synthetic
+checkpoint replay corpus for precision, recall, and unsafe captures.
+
 ### Consolidate and review
 
 Harvest folds recent sessions into current workstream state notes. Entity facts
@@ -185,6 +195,7 @@ session briefing reports loop health; inspect the logs for per-run details.
 node bin/kb.js search "credential cache" # terminal search
 node bin/kb.js status                    # store and HTTP server status
 node bin/kb.js harvest --dry-run         # preview transcript work
+node bin/kb.js capture-follow-through --json # checkpoint outcome report
 node bin/kb.js serve --status            # probe the optional daemon
 node bin/kb.js start                     # local dashboard/API
 node bin/kb.js migrate --check           # read-only schema gate

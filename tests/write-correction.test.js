@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 
 import { getToolDefinitions } from '../src/tools.js';
 import { getDocument, getDb } from '../src/db.js';
+import { MAINTENANCE_TOOL } from '../src/tool-names.js';
 
 const call = async (name, args) => {
   const tool = getToolDefinitions().find(t => t.name === name);
@@ -14,7 +15,7 @@ const call = async (name, args) => {
   return { text: res.content[0].text, isError: res.isError === true };
 };
 
-const write = (args) => call('kb_write', { type: 'lesson', ...args });
+const write = (args) => call(MAINTENANCE_TOOL.WRITE, { type: 'lesson', ...args });
 
 describe('correcting a note through kb_write', () => {
   // The defect: a same-title write lands on the target's own vault path, so it
@@ -70,7 +71,7 @@ describe('correcting a note through kb_write', () => {
   it('cannot report an error once the note has been written', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'tools.js'), 'utf8');
     // Anchored on the tool, not on the writeNote call — there is more than one.
-    const handler = src.slice(src.indexOf("name: 'kb_write'"));
+    const handler = src.slice(src.indexOf('name: MAINTENANCE_TOOL.WRITE'));
     const postWrite = handler.slice(
       handler.indexOf('const result = await writeNote('),
       handler.indexOf('return { content: [{ type: \'text\', text: `Note${idNote} saved to'),
