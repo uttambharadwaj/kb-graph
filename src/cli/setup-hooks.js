@@ -100,6 +100,10 @@ const HOOK_SPECS = [
   // Codex included since 2026-08-24 (full push parity): its PreToolUse payload is
   // Claude-shaped (tool_name/tool_input) and the emission envelope is the same.
   { event: 'PreToolUse', matcher: 'Bash', script: 'kb-trigger-hook.js', subcommand: 'trigger-hook', agents: PUSH_AGENTS },
+  // Default-off post-tool stewardship. Cursor is deliberately excluded: its
+  // observed postToolUse envelope is archived as a fixture, but no verified
+  // write-approval contract exists yet.
+  { event: 'PostToolUse', matcher: 'Bash', script: 'kb-checkpoint-hook.js', subcommand: 'checkpoint-hook', agents: PUSH_AGENTS },
 ];
 
 const matcherFor = (spec, agent) =>
@@ -150,7 +154,10 @@ const identifies = (spec, command, agent) => {
   if (agentOf(cmd) !== agent) return false;
   const base = cmd.replace(AGENT_IN_COMMAND, '').trimEnd();
   if (spec.script && new RegExp(`(?:^|/)${spec.script.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)) return true;
-  if (spec.subcommand && new RegExp(`\\s${spec.subcommand.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)) return true;
+  if (
+    spec.subcommand
+    && new RegExp(`(?:^|/)kb\\.js\\s+${spec.subcommand.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)
+  ) return true;
   return false;
 };
 

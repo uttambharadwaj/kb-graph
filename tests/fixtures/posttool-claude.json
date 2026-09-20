@@ -1,0 +1,17 @@
+{
+  "session_id": "claude-session-fixture",
+  "transcript_path": "/home/user/.claude/projects/project/claude-session-fixture.jsonl",
+  "cwd": "/workspace/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git commit -m fixture"
+  },
+  "tool_response": {
+    "stdout": "[main abc1234] fixture",
+    "stderr": "",
+    "exit_code": 0
+  },
+  "tool_use_id": "claude-tool-fixture"
+}

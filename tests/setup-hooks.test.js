@@ -16,6 +16,7 @@ test('mergeAgentHooks adds retrieval, continuity, and asynchronous capture hooks
   const ss = merged.hooks.SessionStart;
   const ups = merged.hooks.UserPromptSubmit;
   const ptu = merged.hooks.PreToolUse;
+  const post = merged.hooks.PostToolUse;
   const pc = merged.hooks.PreCompact;
   assert.equal(ss.length, 1);
   assert.equal(ss[0].matcher, 'startup|resume|clear|compact');
@@ -29,6 +30,9 @@ test('mergeAgentHooks adds retrieval, continuity, and asynchronous capture hooks
   // bin/kb.js, not `kb.js trigger-hook` — see setup-hooks.js's HOOK_SPECS
   // comment for why this one hook skips bin/kb.js's dispatch machinery.
   assert.equal(ptu[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
+  assert.equal(post.length, 1);
+  assert.equal(post[0].matcher, 'Bash');
+  assert.equal(post[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-checkpoint-hook.js');
   assert.equal(pc.length, 2);
   assert.equal(pc[0].matcher, 'manual|auto');
   assert.equal(pc[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb.js precompact-hook');
@@ -208,6 +212,22 @@ test('mergeAgentHooks adds trigger-hook alongside an unrelated PreToolUse entry'
   assert.equal(merged.hooks.PreToolUse.length, 2);
   assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, "echo 'style reminder'");
   assert.equal(merged.hooks.PreToolUse[1].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js');
+});
+
+test('mergeAgentHooks preserves a foreign PostToolUse command named checkpoint-hook', () => {
+  const foreign = '/usr/bin/acme checkpoint-hook';
+  const existing = {
+    hooks: {
+      PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: foreign }] }],
+    },
+  };
+  const merged = mergeAgentHooks(existing, OPTS);
+  assert.equal(merged.hooks.PostToolUse.length, 2);
+  assert.equal(merged.hooks.PostToolUse[0].hooks[0].command, foreign);
+  assert.equal(
+    merged.hooks.PostToolUse[1].hooks[0].command,
+    'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-checkpoint-hook.js',
+  );
 });
 
 // The script form's dedup checks the command for the script's own filename,
@@ -394,6 +414,9 @@ test('mergeAgentHooks installs the codex hooks with the agent flag, trigger hook
   assert.equal(merged.hooks.PreToolUse.length, 1);
   assert.equal(merged.hooks.PreToolUse[0].matcher, 'Bash');
   assert.equal(merged.hooks.PreToolUse[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-trigger-hook.js --agent codex');
+  assert.equal(merged.hooks.PostToolUse.length, 1);
+  assert.equal(merged.hooks.PostToolUse[0].matcher, 'Bash');
+  assert.equal(merged.hooks.PostToolUse[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb-checkpoint-hook.js --agent codex');
   assert.equal(merged.hooks.PreCompact[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=precompact --agent codex');
   assert.equal(merged.hooks.Stop[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=activity --agent codex');
 });
@@ -542,8 +565,8 @@ test('staleHookWarnings names the file each warning came from', () => {
   installAgentHooks({ home, ...CODEX_OPTS });
   const warnings = staleHookWarnings(home, { exists: nothingExists });
   assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /^6 hooks in ~\/\.claude\/settings\.json cannot run: /);
-  assert.match(warnings[1], /^5 hooks in ~\/\.codex\/hooks\.json cannot run: /);
+  assert.match(warnings[0], /^7 hooks in ~\/\.claude\/settings\.json cannot run: /);
+  assert.match(warnings[1], /^6 hooks in ~\/\.codex\/hooks\.json cannot run: /);
 });
 
 test('staleHookWarnings caps how many paths one line names', () => {

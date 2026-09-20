@@ -69,11 +69,12 @@ new checkout.
 ## What each agent gets
 
 - **Claude Code:** MCP, session briefing, prompt hints, trigger checks,
-  pre-compaction continuity, daemon-backed lifecycle capture, and nightly
-  transcript discovery.
+  pre-compaction continuity, optional post-tool capture checkpoints,
+  daemon-backed lifecycle capture, and nightly transcript discovery.
 - **Codex:** MCP after you paste the printed registration, session briefing,
-  prompt hints, trigger checks, daemon-backed activity/pre-compaction capture,
-  and nightly transcript discovery.
+  prompt hints, trigger checks, optional post-tool capture checkpoints,
+  daemon-backed activity/pre-compaction capture, and nightly transcript
+  discovery.
 - **Cursor:** MCP, session-start briefing, and nightly transcript discovery.
   Cursor's current prompt/tool hooks have no context-output channel, so kb-graph
   does not install prompt hints, trigger warnings, or lifecycle capture there.
@@ -113,6 +114,17 @@ sessions are genuine work you want harvested. Fact extraction remains opt-in
 with `KB_HARVEST_FACTS=1`. Scheduled jobs snapshot both settings, so rerun setup
 after changing either one. Harvest uses the same fail-closed note writer; a
 chunk whose duplicate check is unavailable remains incomplete and retries.
+
+Claude Code and Codex also install a default-off PostToolUse checkpoint. It
+classifies successful commit/merge, full verification, and release/deploy
+boundaries, then records only the agent, native session key, checkpoint class,
+permission mode, and outcome under `~/.knowledge-base/logs/checkpoints/`.
+Command text and tool output are never logged. Create
+`KB_DIR/checkpoint-hook-enabled` to emit at most two distinct reminders per
+session; `KB_DIR/checkpoint-hook-disabled` is the kill switch. Failures, KB
+tool calls, detectable subagents, missing identities, and write-denied sessions
+never emit. Cursor remains disabled until its write-approval contract is
+verified.
 
 ### Consolidate and review
 

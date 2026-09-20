@@ -1,0 +1,18 @@
+{
+  "hook_event_name": "PostToolUse",
+  "cwd": "/workspace/project",
+  "session_id": "codex-session-fixture",
+  "permission_mode": "default",
+  "thread_id": "codex-thread-fixture",
+  "turn_id": "codex-turn-fixture",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "npm test"
+  },
+  "tool_response": {
+    "stdout": "tests passed",
+    "stderr": "",
+    "exit_code": 0
+  },
+  "tool_use_id": "codex-tool-fixture"
+}

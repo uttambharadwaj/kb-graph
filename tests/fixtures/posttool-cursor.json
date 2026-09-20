@@ -1,0 +1,23 @@
+{
+  "conversation_id": "conversation-fixture",
+  "cursor_version": "1.0.0-fixture",
+  "cwd": "/workspace/project",
+  "duration": 250,
+  "generation_id": "generation-fixture",
+  "hook_event_name": "postToolUse",
+  "model": "cursor-fixture-model",
+  "session_id": "session-fixture",
+  "tool_input": {
+    "command": "npm test",
+    "cwd": "/workspace/project",
+    "timeout": 30000
+  },
+  "tool_name": "Shell",
+  "tool_output": "TAP fixture output",
+  "tool_use_id": "tool-fixture",
+  "transcript_path": "/cursor/projects/workspace/agent-transcripts/conversation-fixture.jsonl",
+  "user_email": "user@example.invalid",
+  "workspace_roots": [
+    "/workspace/project"
+  ]
+}
