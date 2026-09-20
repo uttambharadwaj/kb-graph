@@ -1,8 +1,11 @@
 import { parseRegisterArgs, registerAgents } from './mcp-register.js';
 
-export function register(args = []) {
+export function register(args = [], { homeDir, cwd = process.cwd() } = {}) {
   const agents = parseRegisterArgs(args);
-  const results = registerAgents(agents, undefined, { force: args.includes('--force') });
+  const results = registerAgents(agents, homeDir, {
+    force: args.includes('--force'),
+    cwd,
+  });
   const written = results.filter(result => result.written);
   // Hand-managed configs are not failures: they need a paste, not a retry.
   const manual = results.filter(result => result.manual);

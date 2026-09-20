@@ -6,8 +6,10 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { register } from '../src/cli/register.js';
 import {
   codexRegistrationSnippet,
+  findCursorWorkspaceConfig,
   getAgentConfigPath,
   KB_ENTRYPOINT_PATH,
   parseRegisterArgs,
@@ -20,6 +22,11 @@ function makeHome() {
   const dir = mkdtempSync(join(tmpdir(), 'kb-register-test-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function writeJson(path, config) {
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, JSON.stringify(config, null, 2));
 }
 
 afterEach(() => {
@@ -250,5 +257,178 @@ describe('registering from a second checkout', () => {
 
     assert.throws(() => registerAgents(['claude'], homeDir), /not valid JSON/);
     assert.strictEqual(readFileSync(path, 'utf8'), '{"mcpServers": {"other": {}}, tru');
+  });
+});
+
+describe('Cursor workspace registration', () => {
+  function cursorConfig(entrypoint = KB_ENTRYPOINT_PATH, extra = {}) {
+    return {
+      ...extra,
+      mcpServers: {
+        ...extra.mcpServers,
+        'knowledge-base': {
+          command: '/old/node',
+          args: [entrypoint, 'mcp'],
+          env: { PRESERVED: 'yes', NODE_OPTIONS: '--require=/old/preload.cjs' },
+        },
+      },
+    };
+  }
+
+  function workspaceFixture() {
+    const homeDir = makeHome();
+    const workspace = join(homeDir, 'dev', 'workspace');
+    const cwd = join(workspace, 'repos', 'service');
+    mkdirSync(cwd, { recursive: true });
+    return {
+      homeDir,
+      workspace,
+      cwd,
+      homePath: getAgentConfigPath('cursor', homeDir),
+      workspacePath: join(workspace, '.cursor', 'mcp.json'),
+    };
+  }
+
+  it('finds the nearest matching Cursor workspace config', () => {
+    const { homeDir, workspace, cwd } = workspaceFixture();
+    const outerPath = join(homeDir, 'dev', '.cursor', 'mcp.json');
+    const nearestPath = join(workspace, '.cursor', 'mcp.json');
+    writeJson(outerPath, cursorConfig());
+    writeJson(nearestPath, cursorConfig());
+
+    assert.strictEqual(findCursorWorkspaceConfig(cwd, homeDir), nearestPath);
+  });
+
+  it('skips a valid nearer config without a knowledge-base entry', () => {
+    const { homeDir, workspace, cwd } = workspaceFixture();
+    const matchingPath = join(homeDir, 'dev', '.cursor', 'mcp.json');
+    writeJson(matchingPath, cursorConfig());
+    writeJson(join(workspace, '.cursor', 'mcp.json'), {
+      theme: 'dark',
+      mcpServers: { foreign: { command: 'foreign' } },
+    });
+
+    assert.strictEqual(findCursorWorkspaceConfig(cwd, homeDir), matchingPath);
+  });
+
+  it('fails closed on a malformed workspace candidate before writing either target', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig());
+    const homeConfig = readFileSync(homePath, 'utf8');
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    const malformed = '{"mcpServers":{"knowledge-base":';
+    writeFileSync(workspacePath, malformed);
+
+    assert.throws(
+      () => registerAgents(['cursor'], homeDir, { cwd }),
+      /not valid JSON/,
+    );
+    assert.strictEqual(readFileSync(homePath, 'utf8'), homeConfig);
+    assert.strictEqual(readFileSync(workspacePath, 'utf8'), malformed);
+  });
+
+  it('does not inspect Cursor workspace config for other agents', () => {
+    const { homeDir, cwd, workspacePath } = workspaceFixture();
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    writeFileSync(workspacePath, '{"mcpServers":{"knowledge-base":');
+
+    const [result] = registerAgents(['claude'], homeDir, { cwd });
+
+    assert.strictEqual(result.written, true);
+    assert.ok(existsSync(getAgentConfigPath('claude', homeDir)));
+  });
+
+  it('preserves both configs while synchronizing the Cursor registration', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig(KB_ENTRYPOINT_PATH, {
+      editor: { fontSize: 14 },
+      mcpServers: { homeOnly: { command: 'home' } },
+    }));
+    writeJson(workspacePath, cursorConfig(KB_ENTRYPOINT_PATH, {
+      workspace: true,
+      mcpServers: { workspaceOnly: { command: 'workspace' } },
+    }));
+
+    const results = registerAgents(['cursor'], homeDir, { cwd });
+
+    assert.deepStrictEqual(results.map(result => result.path), [homePath, workspacePath]);
+    for (const [path, topLevelKey, foreignServer] of [
+      [homePath, 'editor', 'homeOnly'],
+      [workspacePath, 'workspace', 'workspaceOnly'],
+    ]) {
+      const config = JSON.parse(readFileSync(path, 'utf8'));
+      assert.ok(config[topLevelKey]);
+      assert.ok(config.mcpServers[foreignServer]);
+      assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
+        command: stableNodePath(),
+        args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
+        env: { PRESERVED: 'yes', NODE_OPTIONS: '' },
+      });
+    }
+  });
+
+  it('is semantically idempotent across home and workspace configs', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig());
+    writeJson(workspacePath, cursorConfig());
+    registerAgents(['cursor'], homeDir, { cwd, force: true });
+    const once = [homePath, workspacePath].map(path => JSON.parse(readFileSync(path, 'utf8')));
+
+    registerAgents(['cursor'], homeDir, { cwd });
+    const twice = [homePath, workspacePath].map(path => JSON.parse(readFileSync(path, 'utf8')));
+
+    assert.deepStrictEqual(twice, once);
+  });
+
+  it('refuses both writes when either target belongs to another checkout', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig('/other/checkout/bin/kb.js'));
+    writeJson(workspacePath, cursorConfig());
+    const before = [homePath, workspacePath].map(path => readFileSync(path, 'utf8'));
+
+    const results = registerAgents(['cursor'], homeDir, { cwd });
+
+    assert.strictEqual(results.length, 2);
+    assert.ok(results.every(result => result.written === false));
+    assert.deepStrictEqual(
+      [homePath, workspacePath].map(path => readFileSync(path, 'utf8')),
+      before,
+    );
+  });
+
+  it('force-updates both home and workspace registrations', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig('/other/home/bin/kb.js'));
+    writeJson(workspacePath, cursorConfig('/other/workspace/bin/kb.js'));
+
+    const results = registerAgents(['cursor'], homeDir, { cwd, force: true });
+
+    assert.ok(results.every(result => result.written === true));
+    for (const path of [homePath, workspacePath]) {
+      assert.deepStrictEqual(
+        JSON.parse(readFileSync(path, 'utf8')).mcpServers['knowledge-base'].args,
+        [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
+      );
+    }
+  });
+
+  it('CLI refusal output names both Cursor config paths', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig('/other/checkout/bin/kb.js'));
+    writeJson(workspacePath, cursorConfig());
+    const errors = [];
+    const originalError = console.error;
+    const originalExitCode = process.exitCode;
+    console.error = (...parts) => errors.push(parts.join(' '));
+    try {
+      register(['--agents=cursor'], { homeDir, cwd });
+    } finally {
+      console.error = originalError;
+      process.exitCode = originalExitCode;
+    }
+
+    const output = errors.join('\n');
+    assert.ok(output.includes(homePath));
+    assert.ok(output.includes(workspacePath));
   });
 });

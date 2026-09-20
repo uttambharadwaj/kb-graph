@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import {
+  existsSync, mkdirSync, readFileSync, rmSync,
+} from 'fs';
 import { homedir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
@@ -44,6 +46,28 @@ function readJson(path) {
   }
 }
 
+export function findCursorWorkspaceConfig(cwd, homeDir = homedir()) {
+  const home = resolve(homeDir);
+  let current = resolve(cwd);
+
+  while (current !== home) {
+    const parent = dirname(current);
+    if (parent === current) break;
+
+    const path = join(current, '.cursor', 'mcp.json');
+    if (existsSync(path)) {
+      const config = readJson(path);
+      const servers = config?.mcpServers;
+      if (servers && typeof servers === 'object'
+        && Object.prototype.hasOwnProperty.call(servers, KB_MCP_SERVER_NAME)) {
+        return path;
+      }
+    }
+    current = parent;
+  }
+  return null;
+}
+
 export function getAgentConfigPath(agent, homeDir = homedir()) {
   if (agent === 'claude') return join(homeDir, '.claude.json');
   // Codex reads MCP servers from config.toml's [mcp_servers.*]; ~/.codex/mcp.json
@@ -84,6 +108,42 @@ function registeredEntrypoint(config) {
   return Array.isArray(args) ? args[0] ?? null : null;
 }
 
+function loadRegistrationTarget(agent, path) {
+  const config = readJson(path);
+  return {
+    agent,
+    path,
+    config,
+    from: registeredEntrypoint(config),
+  };
+}
+
+function registrationResult(target, written) {
+  const { agent, path, from } = target;
+  return { agent, path, written, from, to: KB_ENTRYPOINT_PATH };
+}
+
+function writeRegistration(target) {
+  const { agent, config, path } = target;
+  mkdirSync(dirname(path), { recursive: true });
+  if (!config.mcpServers) config.mcpServers = {};
+
+  const generated = mcpServerConfig(agent);
+  const existingEnv = config.mcpServers[KB_MCP_SERVER_NAME]?.env;
+  const preservedEnv = existingEnv && typeof existingEnv === 'object' && !Array.isArray(existingEnv)
+    ? existingEnv
+    : {};
+  config.mcpServers[KB_MCP_SERVER_NAME] = {
+    ...generated,
+    env: { ...preservedEnv, ...generated.env },
+  };
+  // Remove the fixed-name temp file used before private writes gained
+  // collision-resistant, ignored names.
+  rmSync(`${path}.kb-tmp`, { force: true });
+  writePrivateFile(path, JSON.stringify(config, null, 2));
+  return registrationResult(target, true);
+}
+
 // The [mcp_servers.knowledge-base] block Codex needs, ready to paste. TOML
 // basic strings take the same escapes JSON does, so JSON.stringify is a
 // correct quoter for a path here.
@@ -116,37 +176,49 @@ export function codexRegistrationSnippet() {
  * Every agent comes back with an outcome, so a caller cannot mistake a refusal
  * for a write it simply didn't look at.
  */
-export function registerAgents(agents, homeDir = homedir(), { force = false } = {}) {
-  return agents.map(agent => {
+export function registerAgents(agents, homeDir = homedir(), { force = false, cwd } = {}) {
+  const results = [];
+  for (const agent of agents) {
     const path = getAgentConfigPath(agent, homeDir);
     // Codex's config.toml is hand-curated (enabled_tools, per-tool
     // approval_mode blocks) and there is no TOML parser in this tree, so the
     // registration it needs is printed for a human to paste rather than
     // written — `--force` has nothing to force here.
     if (agent === AGENT.CODEX) {
-      return { agent, path, written: false, manual: true, snippet: codexRegistrationSnippet(), from: null, to: KB_ENTRYPOINT_PATH };
-    }
-    const config = readJson(path);
-    const from = registeredEntrypoint(config);
-    if (from !== null && from !== KB_ENTRYPOINT_PATH && !force) {
-      return { agent, path, written: false, from, to: KB_ENTRYPOINT_PATH };
+      results.push({
+        agent,
+        path,
+        written: false,
+        manual: true,
+        snippet: codexRegistrationSnippet(),
+        from: null,
+        to: KB_ENTRYPOINT_PATH,
+      });
+      continue;
     }
 
-    mkdirSync(join(path, '..'), { recursive: true });
-    if (!config.mcpServers) config.mcpServers = {};
-    const generated = mcpServerConfig(agent);
-    const existingEnv = config.mcpServers[KB_MCP_SERVER_NAME]?.env;
-    const preservedEnv = existingEnv && typeof existingEnv === 'object' && !Array.isArray(existingEnv)
-      ? existingEnv
-      : {};
-    config.mcpServers[KB_MCP_SERVER_NAME] = {
-      ...generated,
-      env: { ...preservedEnv, ...generated.env },
-    };
-    // Remove the fixed-name temp file used before private writes gained
-    // collision-resistant, ignored names.
-    rmSync(`${path}.kb-tmp`, { force: true });
-    writePrivateFile(path, JSON.stringify(config, null, 2));
-    return { agent, path, written: true, from, to: KB_ENTRYPOINT_PATH };
-  });
+    const targetPaths = [path];
+    if (agent === AGENT.CURSOR && cwd !== undefined) {
+      const workspacePath = findCursorWorkspaceConfig(cwd, homeDir);
+      if (workspacePath !== null) targetPaths.push(workspacePath);
+    }
+
+    // Read and evaluate every Cursor target before writing either one. Cursor
+    // gives a workspace config precedence over the home config, so a partial
+    // update would leave the active registration stale or move only one file
+    // to a different checkout.
+    const targets = targetPaths.map(targetPath => loadRegistrationTarget(agent, targetPath));
+    const refused = !force && targets.some(
+      target => target.from !== null && target.from !== KB_ENTRYPOINT_PATH,
+    );
+    if (refused) {
+      results.push(...targets.map(target => registrationResult(target, false)));
+      continue;
+    }
+
+    for (const target of targets) {
+      results.push(writeRegistration(target));
+    }
+  }
+  return results;
 }
