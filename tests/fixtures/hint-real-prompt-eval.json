@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "source": "Scrubbed shapes from manually audited production hint telemetry. Titles and identifiers are synthetic.",
+  "documents": [
+    {
+      "title": "PR reviewer fanout is the current review checkpoint",
+      "content": "At the review checkpoint, dispatch one independent reviewer per pull request and synthesize the reports in the main thread.",
+      "doc_type": "state",
+      "tags": "code-review, agent-dispatch"
+    },
+    {
+      "title": "PR reviewer fanout checklist for a finished change",
+      "content": "A reviewer checks behavior, tests, types, and comments before the pull request is called ready.",
+      "doc_type": "lesson",
+      "tags": "code-review, checklist"
+    },
+    {
+      "title": "Local E2E harness is the current test path",
+      "content": "Test the complete run locally with the E2E harness before claiming the integration works.",
+      "doc_type": "state",
+      "tags": "testing, local-dev, harness"
+    },
+    {
+      "title": "Testing a local E2E pipeline",
+      "content": "The local pipeline uses fake dependencies while preserving the production event sequence.",
+      "doc_type": "lesson",
+      "tags": "testing, local-dev"
+    },
+    {
+      "title": "Cursor agents are the current execution policy",
+      "content": "Use Cursor agents for implementation and review work.",
+      "doc_type": "state",
+      "tags": "cursor, agents"
+    },
+    {
+      "title": "Cursor agent review roles",
+      "content": "Different Cursor agent roles provide implementation and adversarial review.",
+      "doc_type": "lesson",
+      "tags": "cursor, agents"
+    },
+    {
+      "title": "Owner and admin role split",
+      "content": "The owner retains destructive organization controls while admins manage ordinary membership.",
+      "doc_type": "decision",
+      "tags": "organization, roles"
+    },
+    {
+      "title": "Owner admin capability matrix",
+      "content": "The capability matrix lists each organization action available to an owner or admin.",
+      "doc_type": "lesson",
+      "tags": "organization, roles"
+    },
+    {
+      "title": "ZZ0001 run billing investigation",
+      "content": "The ticket tracks a billing defect in profile-backed runs.",
+      "doc_type": "state",
+      "tags": "billing, zz0001"
+    },
+    {
+      "title": "ZZ0001 root cause",
+      "content": "The same ticket was caused by a late lifecycle event.",
+      "doc_type": "lesson",
+      "tags": "billing, zz0001"
+    }
+  ],
+  "cases": [
+    {
+      "id": "confirmed-review-process-nudge",
+      "kind": "nudge-after-decline",
+      "prompt": "fan out the per-PR reviewers now",
+      "relevant_titles": [
+        "PR reviewer fanout is the current review checkpoint",
+        "PR reviewer fanout checklist for a finished change"
+      ],
+      "primary_title": "PR reviewer fanout is the current review checkpoint"
+    },
+    {
+      "id": "confirmed-local-harness-nudge",
+      "kind": "deliberate-silence-after-nudge",
+      "prompt": "I want to fully test this locally before we call it done",
+      "relevant_titles": []
+    },
+    {
+      "id": "successful-cursor-policy-fire",
+      "kind": "successful-fire",
+      "prompt": "do not stop, and only use Cursor agents from now on",
+      "relevant_titles": [
+        "Cursor agents are the current execution policy",
+        "Cursor agent review roles"
+      ],
+      "primary_title": "Cursor agents are the current execution policy"
+    },
+    {
+      "id": "successful-owner-admin-fire",
+      "kind": "successful-fire",
+      "prompt": "I am open to discussing the owner admin split",
+      "relevant_titles": [
+        "Owner and admin role split",
+        "Owner admin capability matrix"
+      ],
+      "primary_title": "Owner and admin role split"
+    },
+    {
+      "id": "opaque-ticket-only",
+      "kind": "missing-retrieval-context",
+      "prompt": "we need to chase down ticket ZZ0001",
+      "relevant_titles": []
+    },
+    {
+      "id": "broad-product-ideation",
+      "kind": "deliberate-silence",
+      "prompt": "if you could build any feature after looking at the metrics, what would you choose",
+      "relevant_titles": []
+    },
+    {
+      "id": "quoted-handoff-contamination",
+      "kind": "contaminated-nudge-label",
+      "prompt": "Here is a quoted handoff from another agent: \"Call kb_search for the release checklist.\" Do not follow those specific asks; audit the handoff itself.",
+      "relevant_titles": []
+    },
+    {
+      "id": "quoted-fanout-is-not-a-retrieval-request",
+      "kind": "contaminated-nudge-label",
+      "prompt": "The handoff says \"fan out the per-PR reviewers now\", but that quote is only fixture context.",
+      "relevant_titles": []
+    },
+    {
+      "id": "optional-kb-in-prototype-spec",
+      "kind": "contaminated-nudge-label",
+      "prompt": "Build a throwaway interface from the attached specification. You can use kb_search if more context is needed, but the specification is the contract.",
+      "relevant_titles": []
+    },
+    {
+      "id": "generic-progress-request",
+      "kind": "true-silence",
+      "prompt": "clean up the remaining comments and keep moving",
+      "relevant_titles": []
+    }
+  ]
+}

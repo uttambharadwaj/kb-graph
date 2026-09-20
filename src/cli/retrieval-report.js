@@ -19,8 +19,9 @@ const RETRIEVED_DOC_IDS = 'SELECT DISTINCT doc_id FROM retrievals WHERE doc_id I
 // Every prompt long enough to score leaves one row per note it surfaced, or a
 // single null-doc row when it declined, so the prompt text is already here and
 // the labelling applies to history instead of starting a denominator at zero.
-// What each nudge is worth is the state of the prompt *before* it: told to look
-// right after the hint declined is that decline graded by a person.
+// The state of the prompt *before* a nudge makes that decline worth reviewing.
+// It is not ground truth by itself: quoted handoffs, eval prompts, and specs can
+// contain the same phrases without correcting a retrieval failure.
 function askedToLook(db) {
   const events = db.prepare(`
     SELECT session, query, MIN(created_at) AS at, MAX(doc_id IS NOT NULL) AS fired
@@ -122,8 +123,8 @@ export function retrievalReport(db = getDb()) {
   return { coverage, byType, freshness, followThrough, missRate, sessionCoverage, askedToLook: askedToLook(db) };
 }
 
-export function runRetrievalReportCli() {
-  const { coverage, byType, freshness, followThrough, missRate, sessionCoverage, askedToLook } = retrievalReport();
+export function runRetrievalReportCli(db = getDb()) {
+  const { coverage, byType, freshness, followThrough, missRate, sessionCoverage, askedToLook } = retrievalReport(db);
 
   console.log('Retrieval Report');
   console.log('================');
@@ -144,7 +145,7 @@ export function runRetrievalReportCli() {
   const { nudges, prompts, after } = askedToLook;
   console.log(`\nAsked to look: ${nudges}/${prompts} prompts told the agent to go and check the knowledge base (${pct(nudges, prompts)})`);
   if (nudges > 0) {
-    console.log(`  ${after.decline} came straight after a prompt the hint declined — those declines are graded wrong by a person`);
+    console.log(`  ${after.decline} came straight after a prompt the hint declined — manually review these candidates; quoted or test text can match`);
     console.log(`  ${after.fire} after a prompt it fired on, ${after.nothing} opening a session`);
   }
   console.log('  Blind spot: prompts under 20 characters and slash commands never reach the meter, and a terse "check kb" is that shape');

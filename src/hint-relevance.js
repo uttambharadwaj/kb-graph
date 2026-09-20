@@ -47,6 +47,20 @@ const MIN_PREFIX_LEN = 4;
 // `review/reviewer`).
 const INFLECTION_SUFFIXES = new Set(['s', 'es', 'ed', 'er']);
 
+// A current state or durable decision is more useful than accumulated lessons
+// when both are equally strong identity matches. This never turns silence into
+// a hint: it only orders notes that already cleared every precision gate.
+const CURRENT_CONTEXT_TYPES = new Set(['state', 'decision']);
+const CURRENT_CONTEXT_MASS_EPSILON = 0.05;
+// Explicitly learned from a reviewed false negative. Do not join arbitrary
+// neighbours: the live replay showed broad compounds surface unrelated notes.
+const REVIEW_FANOUT_TERMS = ['fanout', 'review'];
+const REVIEW_FANOUT_PHRASE = ['fan', 'out', 'the', 'per', 'pr', 'reviewers'];
+const CURATED_TERM_BLOCKERS = new Set([
+  'assert', 'example', 'fixture', 'handoff', 'quoted', 'spec', 'test',
+]);
+const QUOTED_SPAN = /```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|(?<![\p{L}\p{N}])'[^'\n]*'(?![\p{L}\p{N}])|“[^”\n]*”|‘[^’\n]*’/gu;
+
 // These are prompt framing, not subjects. `show` combined with `prompt` to put
 // an LLM-latency note under a question about the hint hook itself. Keep this
 // local to the hint system (including alias vetting): ordinary kb_search still
@@ -67,7 +81,24 @@ export function tokenize(text) {
     .replace(/\p{Diacritic}/gu, '')
     .toLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
-    .filter(t => t.length >= 3 && !STOP_WORDS.has(t) && !HINT_STOP_WORDS.has(t));
+    .filter(term => term.length >= 3 && !STOP_WORDS.has(term) && !HINT_STOP_WORDS.has(term));
+}
+
+function curatedPromptTerms(text) {
+  const rawTerms = String(text ?? '')
+    .replace(QUOTED_SPAN, ' ')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+  if (rawTerms.some(term => CURATED_TERM_BLOCKERS.has(term))) return [];
+  const hasReviewedPhrase = rawTerms.some(
+    (term, index) => REVIEW_FANOUT_PHRASE.every(
+      (expected, offset) => rawTerms[index + offset] === expected,
+    ),
+  );
+  return hasReviewedPhrase ? REVIEW_FANOUT_TERMS : [];
 }
 
 function covered(term, promptTerms, prefixable) {
@@ -172,7 +203,9 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
   if (!total) return [];
 
   const termFreq = new Map();
-  for (const t of tokenize(prompt)) termFreq.set(t, (termFreq.get(t) || 0) + 1);
+  for (const term of [...tokenize(prompt), ...curatedPromptTerms(prompt)]) {
+    termFreq.set(term, (termFreq.get(term) || 0) + 1);
+  }
   const promptTerms = [...termFreq.keys()];
   if (promptTerms.length < MIN_COVERED_TERMS) return [];
 
@@ -285,5 +318,23 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
     return compareByOutcomeSignal(db, a, b)
       || ((b.mass || 0) - (a.mass || 0));
   });
+
+  // Approximate equality is not transitive, so putting this preference inside
+  // the sort comparator can form cycles and demote the very current notes it is
+  // meant to favor. Preserve the established total order, then only promote a
+  // current note across adjacent, equally grounded accumulated context.
+  for (let index = 1; index < hits.length; index++) {
+    if (!CURRENT_CONTEXT_TYPES.has(hits[index].doc_type)) continue;
+    let current = index;
+    while (current > 0) {
+      const candidate = hits[current];
+      const previous = hits[current - 1];
+      if (CURRENT_CONTEXT_TYPES.has(previous.doc_type)
+        || Math.abs(candidate.mass - previous.mass) > CURRENT_CONTEXT_MASS_EPSILON
+        || compareByOutcomeSignal(db, candidate, previous) !== 0) break;
+      [hits[current - 1], hits[current]] = [candidate, previous];
+      current--;
+    }
+  }
   return hits.slice(0, limit);
 }

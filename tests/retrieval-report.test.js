@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import Database from 'better-sqlite3';
 import { initSchema } from '../src/db.js';
-import { retrievalReport } from '../src/cli/retrieval-report.js';
+import { retrievalReport, runRetrievalReportCli } from '../src/cli/retrieval-report.js';
 import { isKbNudge } from '../src/retrieval.js';
 
 function freshDb() {
@@ -285,5 +285,34 @@ describe('what a nudge is worth: the prompt before it', () => {
     const { askedToLook } = retrievalReport(db);
     assert.deepStrictEqual(askedToLook.after, { decline: 0, fire: 0, nothing: 1 });
     db.close();
+  });
+
+  it('labels decline-followed-by-nudge rows as review candidates, not ground truth', () => {
+    const db = freshDb();
+    insertRetrieval(db, {
+      surface: 'hint',
+      query: 'why is the nightly job not writing anything',
+      session: 'wording',
+      created_at: '2026-08-03 10:00:00',
+    });
+    insertRetrieval(db, {
+      surface: 'hint',
+      query: 'check the kb, there might be something on that',
+      session: 'wording',
+      created_at: '2026-08-03 10:01:00',
+    });
+    const lines = [];
+    const originalLog = console.log;
+    console.log = line => lines.push(String(line));
+    try {
+      runRetrievalReportCli(db);
+    } finally {
+      console.log = originalLog;
+      db.close();
+    }
+    const output = lines.join('\n');
+    assert.match(output, /manually review these candidates/);
+    assert.match(output, /quoted or test text can match/);
+    assert.doesNotMatch(output, /false negative|missed retrieval|graded wrong/i);
   });
 });

@@ -3,8 +3,8 @@
 > Generated: 2026-09-20
 
 ## Quick Stats
-- **Files:** 251
-- **Total lines:** 50,368
+- **Files:** 253
+- **Total lines:** 50,678
 
 ## Architecture Overview
 ```
@@ -74,7 +74,7 @@ bin/
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
 | grounding.js | 334 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate... | Grounding: the extractor asserts things its source text never states — |
 | harvest.js | 724 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, buildLessonsPrompt, isPrintModeTranscript... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
-| hint-relevance.js | 290 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
+| hint-relevance.js | 341 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | http-bind.js | 60 | DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolveHttpHost, resolveHttpPort, resolveHttpBind... | - |
 | ingest.js | 195 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
 | jobs.js | 31 | JOBS, staleAfterHours, STALE_AFTER | The scheduled loops, and how long each may go quiet before that is news. |
@@ -159,7 +159,7 @@ bin/
 | reconcile.js | 49 | runReconcileCli | - |
 | rediscoveries.js | 64 | rediscoveries, countByAgent, runRediscoveriesCli | `kb rediscoveries` — a listing over the rediscovery rows duplicate |
 | register.js | 44 | register | - |
-| retrieval-report.js | 162 | retrievalReport, runRetrievalReportCli | Surface lists are constants, not input, but binding them keeps the SQL |
+| retrieval-report.js | 163 | retrievalReport, runRetrievalReportCli | Surface lists are constants, not input, but binding them keeps the SQL |
 | runtime-node.js | 102 | findPreferredKnowledgeBaseNode, shouldReexecWithPreferredNode, lockPreferredNodeRuntime, isVersionPinned, stableNodePath | Homebrew keeps a versioned Cellar directory plus an `opt` symlink that |
 | search-cli.js | 27 | search | - |
 | serve.js | 92 | runServeCli | - |
@@ -277,8 +277,10 @@ bin/
 | harvest-eval.test.js | 32 | - | Slow behavioral coverage against the real model: |
 | harvest.test.js | 1109 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | health-backlog.test.js | 211 | - | The briefing carried "202 notes missing summaries" unchanged for weeks. A |
+| hint-current-state-ranking.test.js | 100 | - | - |
 | hint-live-regressions.test.js | 91 | - | - |
 | hint-probe.test.js | 56 | - | - |
+| hint-real-prompt-eval.test.js | 129 | - | - |
 | hint-recall.test.js | 336 | - | The opposing force to hint-relevance.test.js. |
 | hint-relevance.test.js | 246 | - | The prompt-hint surface used to fire on 100% of prompts — 94 of 94 logged |
 | hook-fastpath.test.js | 515 | - | Hooks-via-daemon fast path: the control socket daemon.js serves |
@@ -312,7 +314,7 @@ bin/
 | resident-census.test.js | 71 | - | - |
 | restart-on-change.test.js | 134 | half, seed, half, half, seed... | Waiting a fixed 200ms for FSEvents delivery plus a `node --check` fork is a |
 | retrieval-outcomes.test.js | 456 | - | - |
-| retrieval-report.test.js | 290 | - | The classifier's whole job is to separate "go and look in the KB" from |
+| retrieval-report.test.js | 319 | - | The classifier's whole job is to separate "go and look in the KB" from |
 | retrieval-surfaces.test.js | 233 | - | Every read surface, counted rather than inspected. The meter's failure mode |
 | retrieval.test.js | 397 | - | The ancestry walk itself (ps-backed) is process-ancestry.test.js's job; |
 | runtime-node.test.js | 96 | - | Homebrew's Cellar path names one patch release. Persisting it into a job, |
