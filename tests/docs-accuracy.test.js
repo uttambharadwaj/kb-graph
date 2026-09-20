@@ -259,16 +259,41 @@ describe('public documentation contract', () => {
   });
 
   it('keeps local Markdown links resolvable', () => {
-    for (const [path, doc] of [
-      ['README.md', readme],
-      ['docs/ONBOARDING.md', onboarding],
-      ['docs/SKILL-VS-MCP.md', skillVsMcp],
-      ['CONTRIBUTING.md', contributing],
-      ['SECURITY.md', security],
-    ]) {
-      const base = dirname(resolve(root, path));
-      for (const match of doc.matchAll(/\]\((?!https?:|#)([^)#]+)(?:#[^)]*)?\)/g)) {
-        assert.ok(existsSync(resolve(base, match[1])), `${path}: missing ${match[1]}`);
+    const publicDocs = [];
+
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        publicDocs.push(entry.name);
+      }
+    }
+
+    const walk = (relDir, match) => {
+      const fullDir = resolve(root, relDir);
+      if (!existsSync(fullDir)) return;
+      for (const entry of readdirSync(fullDir, { withFileTypes: true })) {
+        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+        const childRel = `${relDir}/${entry.name}`;
+        if (entry.isDirectory()) {
+          walk(childRel, match);
+        } else if (entry.isFile() && match(entry.name, childRel)) {
+          publicDocs.push(childRel);
+        }
+      }
+    };
+
+    walk('docs', name => name.endsWith('.md'));
+    walk('skills', name => name === 'SKILL.md');
+    publicDocs.sort();
+
+    assert.ok(publicDocs.length > 0, 'expected public markdown files to be discovered');
+
+    for (const relPath of publicDocs) {
+      const fullPath = resolve(root, relPath);
+      const doc = readFileSync(fullPath, 'utf8');
+      const base = dirname(fullPath);
+      for (const match of doc.matchAll(/\]\((?!https?:|#|mailto:)([^)#]+)(?:#[^)]*)?\)/g)) {
+        const target = match[1].trim();
+        assert.ok(existsSync(resolve(base, target)), `${relPath}: missing ${target}`);
       }
     }
   });
