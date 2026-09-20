@@ -14,7 +14,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // print usage and write nothing — the whole point of the command.
 const KB_COMMANDS = [
   'start', 'stop', 'mcp', 'mcp-shim', 'tool', 'migrate', 'register', 'ingest', 'search', 'status', 'tags', 'tier',
-  'retrieval-report', 'fact-conflicts', 'fact-adjudicate', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'session-capture-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
+  'retrieval-report', 'hint-probe', 'fact-conflicts', 'fact-adjudicate', 'wakeup-hook', 'prompt-hint', 'trigger-hook', 'session-capture-hook', 'link-backfill', 'stale-servers', 'aliases-backfill', 'trigger-corpus', 'triggers-backfill',
   'fold-inverses', 'canonicalize-entities', 'harvest', 'consolidate-state', 'entity-merge',
   'capture-x', 'classify', 'summarize', 'setup', 'safety-check', 'vault', 'meters',
 ];
@@ -112,6 +112,14 @@ describe('--help is inert at every entry point', () => {
     const result = run([join(ROOT, 'bin', 'kb.js'), 'harvest', '-h']);
     assert.strictEqual(result.status, 0);
     assert.match(result.stdout, /Usage: kb harvest/);
+  });
+
+  it('hint-probe --json is machine-readable and writes nothing', () => {
+    const before = rowCounts();
+    const result = run([join(ROOT, 'bin', 'kb.js'), 'hint-probe', '--json']);
+    assert.strictEqual(result.status, 0, result.stderr);
+    assert.deepStrictEqual(JSON.parse(result.stdout), { total: 0, fired: 0, rows: [] });
+    assert.deepStrictEqual(rowCounts(), before);
   });
 });
 

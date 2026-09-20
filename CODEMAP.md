@@ -3,8 +3,8 @@
 > Generated: 2026-09-20
 
 ## Quick Stats
-- **Files:** 253
-- **Total lines:** 50,678
+- **Files:** 254
+- **Total lines:** 51,101
 
 ## Architecture Overview
 ```
@@ -50,7 +50,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| test-preflight.mjs | 61 | - | - |
+| test-preflight.mjs | 67 | - | - |
 
 ## src/
 
@@ -68,7 +68,7 @@ bin/
 | db.js | 1581 | DEFAULT_BUSY_TIMEOUT_MS, MIGRATIONS, insertDocument, updateDocument, deleteDocument... | better-sqlite3's own default when no `timeout` option is passed — made |
 | doc-version.js | 24 | snapshotDocumentVersion | Stable per-retrieval content identity. Prefer the vault index hash because it |
 | extract-meter.js | 93 | hashInput, logExtraction, EXTRACTION_SUMMARY_WINDOW_MS, summarizeExtractions, formatExtractionSummary | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
-| extract.js | 897 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 898 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | fact-reviews.js | 457 | FACT_REVIEW_POLICY, FACT_REVIEW_DISPOSITIONS, FactReviewError, reviewSubjectId, normalizeReviewItems... | Tool reads start with display-shaped facts, not database rows with ids. Load |
 | facts.js | 338 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
@@ -144,7 +144,7 @@ bin/
 | flags.js | 121 | UsageError, wantsHelp, assertKnownFlags, showHelp, acceptFlags... | `--help` must print help and do nothing else, and a mistyped flag must not be |
 | fold-inverses.js | 129 | foldInverses, runFoldInversesCli | One-time (re-runnable) migration for rows stored under a spelling |
 | follow-through.js | 522 | followThroughReport, followedFireEvents, runFollowThroughCli | `kb follow-through` — does anyone act on what gets pushed at them? |
-| hint-probe.js | 71 | hintProbe, runHintProbeCli | Replay every prompt the hint has actually been asked about, against the |
+| hint-probe.js | 137 | HINT_PROBE_STATUS, compareHintProbeRows, hintProbe, runHintProbeCli | Replay every prompt the hint has actually been asked about, against the |
 | hook-io.js | 230 | readAgentFlag, hookJsonEnvelope, hookOutput, recordHookFailure, deliver... | Shared plumbing for agent hooks (Claude Code, Codex, Cursor): never let a hook |
 | ingest-cli.js | 39 | ingest | - |
 | link-backfill.js | 70 | linkBackfill | One-time (re-runnable) backfill: connect every embedded doc to its |
@@ -165,8 +165,8 @@ bin/
 | serve.js | 92 | runServeCli | - |
 | session-capture-hook.js | 45 | sessionCaptureHook | Lifecycle hook entry: enqueue only. No extraction, summarization, indexing, |
 | setup-hooks.js | 362 | HOOK_FILES, PUSH_AGENTS, mergeAgentHooks, installAgentHooks, unresolvableHookCommands... | src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook con |
-| setup-jobs.js | 153 | renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
-| setup.js | 719 | parseEnvFile, askSecret, buildEnvContent, dockerComposeContent, parseAutoArgs... | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| setup-jobs.js | 169 | renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
+| setup.js | 723 | parseEnvFile, askSecret, buildEnvContent, dockerComposeContent, parseAutoArgs... | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
@@ -184,7 +184,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| embed.js | 105 | EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, authoredBody, embeddableBody, storeEmbedding... | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
+| embed.js | 139 | EMBEDDING_MODEL, EMBEDDING_DIMENSIONS, DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS, resolveEmbeddingLoadTimeoutMs, withEmbeddingLoadTimeout... | Convert Float32Array to Buffer for SQLite BLOB storage (3x smaller than JSON) |
 | search.js | 232 | hybridMergeOrder, DUP_THRESHOLD, duplicatesIn, NEAR_FLOOR, NEAR_K... | Merge groups, in order. A row is ranked on the scale it actually carries, so |
 
 ## src/middleware/
@@ -249,19 +249,20 @@ bin/
 | bus-removal.test.js | 91 | - | - |
 | child-exit.test.js | 32 | - | - |
 | claude-cli.test.js | 180 | - | Fake claude binaries so these tests need no network and run in ms. |
-| cli-inert.test.js | 234 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
+| cli-inert.test.js | 242 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
 | context-truth-packet.test.js | 293 | - | - |
 | daemon-shim-identity.test.js | 350 | - | Drives the daemon's MCP socket with hand-written bytes rather than the SDK |
 | daemon.test.js | 389 | - | A listening server holds the event loop open, so a daemon a test failed to |
 | db-connect-guard.test.js | 40 | - | Runs in its own process so KB_DIR can point somewhere disposable before |
 | db.test.js | 46 | - | - |
 | dedup-agreement.test.js | 109 | - | - |
+| docs-accuracy.test.js | 74 | - | - |
 | entity-canonicalization.test.js | 283 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extract-context.test.js | 197 | - | A qualifier that lands in a different chunk from its claim is not merely |
 | extract-corpus.test.js | 77 | - | - |
 | extract-eval.test.js | 263 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract-meter.test.js | 227 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract.test.js | 1085 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 1089 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extraction-grounding-migration.test.js | 138 | - | - |
 | extraction-summary.test.js | 51 | - | - |
 | fact-add-retirement.test.js | 203 | - | - |
@@ -275,11 +276,11 @@ bin/
 | from-preview-migration.test.js | 60 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | grounding.test.js | 654 | - | Points KB_DIR and the vault at throwaway dirs — must come before anything |
 | harvest-eval.test.js | 32 | - | Slow behavioral coverage against the real model: |
-| harvest.test.js | 1109 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| harvest.test.js | 1121 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | health-backlog.test.js | 211 | - | The briefing carried "202 notes missing summaries" unchanged for weeks. A |
 | hint-current-state-ranking.test.js | 100 | - | - |
 | hint-live-regressions.test.js | 91 | - | - |
-| hint-probe.test.js | 56 | - | - |
+| hint-probe.test.js | 168 | - | - |
 | hint-real-prompt-eval.test.js | 129 | - | - |
 | hint-recall.test.js | 336 | - | The opposing force to hint-relevance.test.js. |
 | hint-relevance.test.js | 246 | - | The prompt-hint surface used to fire on 100% of prompts — 94 of 94 logged |
@@ -326,7 +327,7 @@ bin/
 | session-map.test.js | 174 | - | Backdates a file's mtime by `days` so the sweeper's age check treats it as |
 | setup-env-preserve.test.js | 10 | - | - |
 | setup-hooks.test.js | 633 | - | tests/setup-hooks.test.js |
-| setup-jobs.test.js | 110 | - | tests/setup-jobs.test.js |
+| setup-jobs.test.js | 145 | - | tests/setup-jobs.test.js |
 | shim-hello.test.js | 125 | - | The compatibility direction step 2 cannot cover: a NEW shim dialing an OLD |
 | shim-path-meter.test.js | 67 | - | - |
 | source-hygiene.test.js | 26 | - | - |
@@ -337,7 +338,7 @@ bin/
 | tags-cli.test.js | 51 | - | tmp-kb.js first: runTagsCli's alias path writes through the module-level |
 | tags.test.js | 142 | - | Must be first: insertDocument writes through the module-level getDb() handle, |
 | terminal.test.js | 40 | - | - |
-| test-runtime.test.js | 35 | - | - |
+| test-runtime.test.js | 86 | - | - |
 | test-session-backfill-migration.test.js | 122 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | tier-annotation.test.js | 80 | - | A tier printed on every row is a tier that tells the reader nothing. Every |
 | tiers.test.js | 720 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |

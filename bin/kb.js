@@ -132,8 +132,8 @@ const COMMANDS = {
     },
   },
   'hint-probe': {
-    summary: 'Replay every prompt the hint has seen against the current scorer; --explain shows why each note matched',
-    boolean: ['--explain'],
+    summary: 'Replay every prompt the hint has seen; --json emits collision-safe rows and --explain shows match evidence',
+    boolean: ['--explain', '--json'],
     run: a => import('../src/cli/hint-probe.js').then(m => m.runHintProbeCli(a)),
   },
   'aliases-backfill': {

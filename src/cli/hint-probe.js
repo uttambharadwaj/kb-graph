@@ -10,9 +10,10 @@
 // whether the hint fired, which makes it a replayable evaluation set nobody had
 // to build.
 //
-// The report is deliberately one stable line per prompt: run it, change the
-// scorer, run it again, diff the two. That is the whole workflow, and it needs
-// no baseline file and no second code path to go stale.
+// The report keeps one stable line and one machine-readable row per prompt.
+// compareHintProbeRows is the canonical way to pair saved baseline/candidate
+// rows without duplicating scoring or mistaking a display excerpt for identity.
+import { createHash } from 'crypto';
 import { getDb } from '../db.js';
 import { relevantNotes } from '../hint-relevance.js';
 import { SURFACE } from '../retrieval.js';
@@ -21,8 +22,67 @@ const MAX_HINTS = 3;
 
 // Enough to tell two prompts apart on one line without wrapping a terminal.
 const PROMPT_EXCERPT = 64;
+const PROMPT_SHA256 = /^[0-9a-f]{64}$/;
+
+export const HINT_PROBE_STATUS = Object.freeze({
+  ADDED: 'added',
+  CHANGED: 'changed',
+  REMOVED: 'removed',
+  UNCHANGED: 'unchanged',
+});
 
 const excerpt = (prompt) => prompt.replace(/\s+/g, ' ').trim().slice(0, PROMPT_EXCERPT);
+const promptDigest = prompt => createHash('sha256').update(prompt).digest('hex');
+const hitIds = row => row.hits.map(hit => hit.id);
+
+function indexRowsByPromptIdentity(rows, label) {
+  const indexed = new Map();
+  for (const row of rows) {
+    if (!PROMPT_SHA256.test(row.prompt_sha256)) {
+      throw new Error(`${label} row has invalid prompt_sha256`);
+    }
+    if (indexed.has(row.prompt_sha256)) {
+      throw new Error(`${label} contains duplicate prompt identity ${row.prompt_sha256}`);
+    }
+    indexed.set(row.prompt_sha256, row);
+  }
+  return indexed;
+}
+
+function comparisonStatus(before, after) {
+  if (after === null) return HINT_PROBE_STATUS.REMOVED;
+  return JSON.stringify(hitIds(before)) === JSON.stringify(hitIds(after))
+    ? HINT_PROBE_STATUS.UNCHANGED
+    : HINT_PROBE_STATUS.CHANGED;
+}
+
+export function compareHintProbeRows(baselineRows, candidateRows) {
+  const baseline = indexRowsByPromptIdentity(baselineRows, 'baseline');
+  const candidate = indexRowsByPromptIdentity(candidateRows, 'candidate');
+  const compared = [...baseline].map(([prompt_sha256, before]) => {
+    const after = candidate.get(prompt_sha256) ?? null;
+    candidate.delete(prompt_sha256);
+    return {
+      prompt_sha256,
+      prompt: before.prompt,
+      status: comparisonStatus(before, after),
+      before,
+      after,
+    };
+  });
+  for (const [prompt_sha256, after] of [...candidate].sort(([a], [b]) => (
+    a < b ? -1 : a > b ? 1 : 0
+  ))) {
+    compared.push({
+      prompt_sha256,
+      prompt: after.prompt,
+      status: HINT_PROBE_STATUS.ADDED,
+      before: null,
+      after,
+    });
+  }
+  return compared;
+}
 
 export function hintProbe(db = getDb(), { explain = false } = {}) {
   const prompts = db.prepare(
@@ -30,6 +90,7 @@ export function hintProbe(db = getDb(), { explain = false } = {}) {
   ).pluck().all(SURFACE.HINT);
 
   const rows = prompts.map(prompt => ({
+    prompt_sha256: promptDigest(prompt),
     prompt: excerpt(prompt),
     hits: relevantNotes(prompt, { limit: MAX_HINTS, explain }).map(n => ({
       id: n.id,
@@ -43,7 +104,12 @@ export function hintProbe(db = getDb(), { explain = false } = {}) {
 
 export function runHintProbeCli(args = []) {
   const explain = args.includes('--explain');
-  const { total, fired, rows } = hintProbe(undefined, { explain });
+  const report = hintProbe(undefined, { explain });
+  const { total, fired, rows } = report;
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
   if (!total) {
     console.log('No prompts recorded yet — the hint surface has not been asked anything.');
     return;
@@ -51,7 +117,7 @@ export function runHintProbeCli(args = []) {
 
   for (const row of rows) {
     const ids = row.hits.length ? row.hits.map(h => `#${h.id}`).join(' ') : 'DECLINE';
-    console.log(`${ids.padEnd(20)} ${row.prompt}`);
+    console.log(`${ids.padEnd(20)} [${row.prompt_sha256.slice(0, 12)}] ${row.prompt}`);
     for (const hit of row.hits) {
       console.log(`${' '.repeat(20)}   #${hit.id} ${hit.title}`);
       if (explain) {
