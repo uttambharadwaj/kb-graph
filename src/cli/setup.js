@@ -463,6 +463,37 @@ async function runInteractive(env) {
 // Apply configuration
 // ---------------------------------------------------------------------------
 
+export function registerSetupAgent(agent, {
+  homeDir = HOME,
+  cwd = process.cwd(),
+  register = registerAgents,
+} = {}) {
+  try {
+    return register([agent], homeDir, { cwd }).map(result => {
+      // A hand-managed config (Codex's config.toml) and a refused move are
+      // both "not registered" — reporting either as a write is how a setup
+      // run ends believing it wired something it did not.
+      if (result.manual) {
+        return {
+          action: `MCP config for ${agent} is hand-managed — not written`,
+          path: result.path,
+          hint: `Run 'kb register --agents=${agent}' to print the block to paste`,
+        };
+      }
+      if (!result.written) {
+        return {
+          action: `Refused to move the MCP registration for ${agent}`,
+          path: result.path,
+          error: `points at ${result.from} — re-register from that checkout, or 'kb register --force'`,
+        };
+      }
+      return { action: `Registered MCP for ${agent}`, path: result.path };
+    });
+  } catch (err) {
+    return [{ action: `Failed to register MCP for ${agent}`, error: err.message }];
+  }
+}
+
 function applyConfig(cfg) {
   const results = { steps: [] };
 
@@ -496,29 +527,7 @@ function applyConfig(cfg) {
   // 2. Register MCP for each agent that has a config we can write
   for (const agent of (cfg.agents || [])) {
     if (!SUPPORTED_AGENTS.includes(agent)) continue;
-    try {
-      const r = registerAgents([agent], HOME)[0];
-      // A hand-managed config (Codex's config.toml) and a refused move are
-      // both "not registered" — reporting either as a write is how a setup
-      // run ends believing it wired something it did not.
-      if (r.manual) {
-        results.steps.push({
-          action: `MCP config for ${agent} is hand-managed — not written`,
-          path: r.path,
-          hint: `Run 'kb register --agents=${agent}' to print the block to paste`,
-        });
-      } else if (!r.written) {
-        results.steps.push({
-          action: `Refused to move the MCP registration for ${agent}`,
-          path: r.path,
-          error: `points at ${r.from} — re-register from that checkout, or 'kb register --force'`,
-        });
-      } else {
-        results.steps.push({ action: `Registered MCP for ${agent}`, path: r.path });
-      }
-    } catch (err) {
-      results.steps.push({ action: `Failed to register MCP for ${agent}`, error: err.message });
-    }
+    results.steps.push(...registerSetupAgent(agent));
   }
 
   // 3. Install service

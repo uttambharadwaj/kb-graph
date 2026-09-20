@@ -1,7 +1,7 @@
 import './helpers/tmp-kb.js';
 import {
-  chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
-  statSync, symlinkSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  renameSync, statSync, symlinkSync, writeFileSync,
 } from 'fs';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { CONFIG_PATH } from '../src/paths.js';
 import { setPassword } from '../src/auth.js';
 import * as setup from '../src/cli/setup.js';
-import { writePrivateFile } from '../src/private-file.js';
+import { writePrivateFile, writePrivateFiles } from '../src/private-file.js';
 
 const REPO_ROOT = dirname(fileURLToPath(new URL('../package.json', import.meta.url)));
 
@@ -216,4 +216,125 @@ test('failed private-file commits remove temporary secret files', () => {
     [],
   );
   assert.equal(statSync(destination).isDirectory(), true);
+});
+
+test('private-file batches stage every file before replacing any target', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-batch-stage-'));
+  const first = join(dir, 'first.json');
+  const second = join(dir, 'second.json');
+  writeFileSync(first, 'first-old');
+  writeFileSync(second, 'second-old');
+  let writes = 0;
+
+  assert.throws(
+    () => writePrivateFiles([
+      { path: first, content: 'first-new' },
+      { path: second, content: 'second-new' },
+    ], {
+      writeFile(path, content, options) {
+        writes += 1;
+        if (writes === 2) {
+          writeFileSync(path, 'partial-secret', options);
+          throw new Error('injected stage failure');
+        }
+        return writeFileSync(path, content, options);
+      },
+    }),
+    /injected stage failure/,
+  );
+
+  assert.equal(readFileSync(first, 'utf8'), 'first-old');
+  assert.equal(readFileSync(second, 'utf8'), 'second-old');
+  assert.deepEqual(readdirSync(dir).sort(), ['first.json', 'second.json']);
+});
+
+test('private-file batches roll back an earlier replacement after a later commit failure', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-batch-rollback-'));
+  const first = join(dir, 'first.json');
+  const second = join(dir, 'second.json');
+  writeFileSync(first, 'first-old');
+  writeFileSync(second, 'second-old');
+  let failed = false;
+
+  assert.throws(
+    () => writePrivateFiles([
+      { path: first, content: 'first-new' },
+      { path: second, content: 'second-new' },
+    ], {
+      rename(from, to) {
+        if (!failed && to === second && from.includes('.kb-private-')) {
+          failed = true;
+          throw new Error('injected commit failure');
+        }
+        return renameSync(from, to);
+      },
+    }),
+    /injected commit failure/,
+  );
+
+  assert.equal(readFileSync(first, 'utf8'), 'first-old');
+  assert.equal(readFileSync(second, 'utf8'), 'second-old');
+  assert.deepEqual(readdirSync(dir).sort(), ['first.json', 'second.json']);
+});
+
+test('private-file batch rollback deletes a target that did not previously exist', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-batch-rollback-new-'));
+  const first = join(dir, 'first.json');
+  const second = join(dir, 'second.json');
+  writeFileSync(second, 'second-old');
+  let failed = false;
+
+  assert.throws(
+    () => writePrivateFiles([
+      { path: first, content: 'first-new' },
+      { path: second, content: 'second-new' },
+    ], {
+      rename(from, to) {
+        if (!failed && to === second && from.includes('.kb-private-')) {
+          failed = true;
+          throw new Error('injected commit failure');
+        }
+        return renameSync(from, to);
+      },
+    }),
+    /injected commit failure/,
+  );
+
+  assert.equal(existsSync(first), false);
+  assert.equal(readFileSync(second, 'utf8'), 'second-old');
+  assert.deepEqual(readdirSync(dir), ['second.json']);
+});
+
+test('private-file batches surface rollback failures', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kb-private-batch-rollback-failure-'));
+  const first = join(dir, 'first.json');
+  const second = join(dir, 'second.json');
+  writeFileSync(first, 'first-old');
+  writeFileSync(second, 'second-old');
+  let commitFailed = false;
+
+  assert.throws(
+    () => writePrivateFiles([
+      { path: first, content: 'first-new' },
+      { path: second, content: 'second-new' },
+    ], {
+      rename(from, to) {
+        if (!commitFailed && to === second && from.includes('.kb-private-')) {
+          commitFailed = true;
+          throw new Error('injected commit failure');
+        }
+        if (commitFailed && to === first && from.includes('.kb-private-')) {
+          throw new Error('injected rollback failure');
+        }
+        return renameSync(from, to);
+      },
+    }),
+    err => err instanceof AggregateError
+      && err.errors.some(cause => /commit failure/.test(cause.message))
+      && err.errors.some(cause => /rollback failure/.test(cause.message)),
+  );
+  assert.deepEqual(
+    readdirSync(dir).filter(name => name.includes('.kb-private-')),
+    [],
+  );
 });

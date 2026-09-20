@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'path';
 import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
 import { fileURLToPath } from 'url';
-import { writePrivateFile } from '../private-file.js';
+import { writePrivateFile, writePrivateFiles } from '../private-file.js';
 
 export const SUPPORTED_AGENTS = ['claude', 'codex', 'gemini', 'cursor'];
 export const KB_MCP_SERVER_NAME = 'knowledge-base';
@@ -42,7 +42,7 @@ function readJson(path) {
   try {
     return JSON.parse(raw);
   } catch (err) {
-    throw new Error(`${path} is not valid JSON (${err.message}). Refusing to overwrite it.`);
+    throw new Error(`${path} is not valid JSON (${err.message}). Refusing registration because it cannot be safely inspected.`);
   }
 }
 
@@ -123,25 +123,25 @@ function registrationResult(target, written) {
   return { agent, path, written, from, to: KB_ENTRYPOINT_PATH };
 }
 
-function writeRegistration(target) {
+function prepareRegistration(target) {
   const { agent, config, path } = target;
-  mkdirSync(dirname(path), { recursive: true });
   if (!config.mcpServers) config.mcpServers = {};
 
   const generated = mcpServerConfig(agent);
-  const existingEnv = config.mcpServers[KB_MCP_SERVER_NAME]?.env;
+  const existing = config.mcpServers[KB_MCP_SERVER_NAME];
+  const preserved = existing && typeof existing === 'object' && !Array.isArray(existing)
+    ? existing
+    : {};
+  const existingEnv = preserved.env;
   const preservedEnv = existingEnv && typeof existingEnv === 'object' && !Array.isArray(existingEnv)
     ? existingEnv
     : {};
   config.mcpServers[KB_MCP_SERVER_NAME] = {
+    ...preserved,
     ...generated,
     env: { ...preservedEnv, ...generated.env },
   };
-  // Remove the fixed-name temp file used before private writes gained
-  // collision-resistant, ignored names.
-  rmSync(`${path}.kb-tmp`, { force: true });
-  writePrivateFile(path, JSON.stringify(config, null, 2));
-  return registrationResult(target, true);
+  return { path, content: JSON.stringify(config, null, 2) };
 }
 
 // The [mcp_servers.knowledge-base] block Codex needs, ready to paste. TOML
@@ -177,7 +177,7 @@ export function codexRegistrationSnippet() {
  * for a write it simply didn't look at.
  */
 export function registerAgents(agents, homeDir = homedir(), { force = false, cwd } = {}) {
-  const results = [];
+  const plans = [];
   for (const agent of agents) {
     const path = getAgentConfigPath(agent, homeDir);
     // Codex's config.toml is hand-curated (enabled_tools, per-tool
@@ -185,14 +185,16 @@ export function registerAgents(agents, homeDir = homedir(), { force = false, cwd
     // registration it needs is printed for a human to paste rather than
     // written — `--force` has nothing to force here.
     if (agent === AGENT.CODEX) {
-      results.push({
-        agent,
-        path,
-        written: false,
-        manual: true,
-        snippet: codexRegistrationSnippet(),
-        from: null,
-        to: KB_ENTRYPOINT_PATH,
+      plans.push({
+        manual: {
+          agent,
+          path,
+          written: false,
+          manual: true,
+          snippet: codexRegistrationSnippet(),
+          from: null,
+          to: KB_ENTRYPOINT_PATH,
+        },
       });
       continue;
     }
@@ -211,14 +213,41 @@ export function registerAgents(agents, homeDir = homedir(), { force = false, cwd
     const refused = !force && targets.some(
       target => target.from !== null && target.from !== KB_ENTRYPOINT_PATH,
     );
-    if (refused) {
-      results.push(...targets.map(target => registrationResult(target, false)));
+    plans.push({ targets, refused });
+  }
+
+  // Finish deriving every writable config before the first filesystem write.
+  // A malformed or structurally unsafe later agent must not leave an earlier
+  // agent updated by the same invocation.
+  for (const plan of plans) {
+    if (!plan.manual && !plan.refused) {
+      plan.files = plan.targets.map(prepareRegistration);
+    }
+  }
+
+  const results = [];
+  for (const plan of plans) {
+    if (plan.manual) {
+      results.push(plan.manual);
+      continue;
+    }
+    if (plan.refused) {
+      results.push(...plan.targets.map(target => registrationResult(target, false)));
       continue;
     }
 
-    for (const target of targets) {
-      results.push(writeRegistration(target));
+    for (const file of plan.files) {
+      mkdirSync(dirname(file.path), { recursive: true });
+      // Remove the fixed-name temp file used before private writes gained
+      // collision-resistant, ignored names.
+      rmSync(`${file.path}.kb-tmp`, { force: true });
     }
+    if (plan.files.length === 1) {
+      writePrivateFile(plan.files[0].path, plan.files[0].content);
+    } else {
+      writePrivateFiles(plan.files);
+    }
+    results.push(...plan.targets.map(target => registrationResult(target, true)));
   }
   return results;
 }

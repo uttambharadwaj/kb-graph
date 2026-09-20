@@ -1,12 +1,15 @@
+import './helpers/tmp-kb.js';
 import { afterEach, describe, it } from 'node:test';
 import { stableNodePath } from '../src/cli/runtime-node.js';
 import assert from 'node:assert';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync,
+  writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { register } from '../src/cli/register.js';
+import { registerSetupAgent } from '../src/cli/setup.js';
 import {
   codexRegistrationSnippet,
   findCursorWorkspaceConfig,
@@ -327,6 +330,19 @@ describe('Cursor workspace registration', () => {
     assert.strictEqual(readFileSync(workspacePath, 'utf8'), malformed);
   });
 
+  it('fails before writing another requested agent when Cursor discovery is malformed', () => {
+    const { homeDir, cwd, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    writeFileSync(workspacePath, '{"mcpServers":{"knowledge-base":');
+
+    assert.throws(
+      () => registerAgents(['claude', 'cursor'], homeDir, { cwd }),
+      /cannot be safely inspected/,
+    );
+    assert.strictEqual(existsSync(claudePath), false);
+  });
+
   it('does not inspect Cursor workspace config for other agents', () => {
     const { homeDir, cwd, workspacePath } = workspaceFixture();
     mkdirSync(join(workspacePath, '..'), { recursive: true });
@@ -340,14 +356,20 @@ describe('Cursor workspace registration', () => {
 
   it('preserves both configs while synchronizing the Cursor registration', () => {
     const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
-    writeJson(homePath, cursorConfig(KB_ENTRYPOINT_PATH, {
+    const homeConfig = cursorConfig(KB_ENTRYPOINT_PATH, {
       editor: { fontSize: 14 },
       mcpServers: { homeOnly: { command: 'home' } },
-    }));
-    writeJson(workspacePath, cursorConfig(KB_ENTRYPOINT_PATH, {
+    });
+    homeConfig.mcpServers['knowledge-base'].type = 'stdio';
+    homeConfig.mcpServers['knowledge-base'].disabled = true;
+    writeJson(homePath, homeConfig);
+    const workspaceConfig = cursorConfig(KB_ENTRYPOINT_PATH, {
       workspace: true,
       mcpServers: { workspaceOnly: { command: 'workspace' } },
-    }));
+    });
+    workspaceConfig.mcpServers['knowledge-base'].type = 'stdio';
+    workspaceConfig.mcpServers['knowledge-base'].disabled = true;
+    writeJson(workspacePath, workspaceConfig);
 
     const results = registerAgents(['cursor'], homeDir, { cwd });
 
@@ -360,6 +382,8 @@ describe('Cursor workspace registration', () => {
       assert.ok(config[topLevelKey]);
       assert.ok(config.mcpServers[foreignServer]);
       assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
+        type: 'stdio',
+        disabled: true,
         command: stableNodePath(),
         args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
         env: { PRESERVED: 'yes', NODE_OPTIONS: '' },
@@ -390,6 +414,63 @@ describe('Cursor workspace registration', () => {
 
     assert.strictEqual(results.length, 2);
     assert.ok(results.every(result => result.written === false));
+    assert.deepStrictEqual(
+      [homePath, workspacePath].map(path => readFileSync(path, 'utf8')),
+      before,
+    );
+  });
+
+  it('refuses both writes when home is clean and the workspace belongs to another checkout', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(workspacePath, cursorConfig('/other/workspace/bin/kb.js'));
+    const workspaceBefore = readFileSync(workspacePath, 'utf8');
+
+    const results = registerAgents(['cursor'], homeDir, { cwd });
+
+    assert.deepStrictEqual(results.map(result => [result.path, result.written, result.from]), [
+      [homePath, false, null],
+      [workspacePath, false, '/other/workspace/bin/kb.js'],
+    ]);
+    assert.strictEqual(existsSync(homePath), false);
+    assert.strictEqual(readFileSync(workspacePath, 'utf8'), workspaceBefore);
+  });
+
+  it('rejects a workspace symlink before writing the home config', {
+    skip: process.platform === 'win32',
+  }, () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig());
+    const homeBefore = readFileSync(homePath, 'utf8');
+    const target = join(homeDir, 'workspace-target.json');
+    writeJson(target, cursorConfig());
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    symlinkSync(target, workspacePath);
+
+    assert.throws(
+      () => registerAgents(['cursor'], homeDir, { cwd }),
+      /symbolic link/,
+    );
+    assert.strictEqual(readFileSync(homePath, 'utf8'), homeBefore);
+    assert.strictEqual(readFileSync(target, 'utf8'), JSON.stringify(cursorConfig(), null, 2));
+  });
+
+  it('leaves both targets unchanged when workspace staging is unwritable', {
+    skip: process.platform === 'win32' || process.getuid?.() === 0,
+  }, () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    writeJson(homePath, cursorConfig());
+    writeJson(workspacePath, cursorConfig());
+    const before = [homePath, workspacePath].map(path => readFileSync(path, 'utf8'));
+    const workspaceConfigDir = join(workspacePath, '..');
+    chmodSync(workspaceConfigDir, 0o500);
+    try {
+      assert.throws(
+        () => registerAgents(['cursor'], homeDir, { cwd }),
+        /EACCES|permission denied/i,
+      );
+    } finally {
+      chmodSync(workspaceConfigDir, 0o700);
+    }
     assert.deepStrictEqual(
       [homePath, workspacePath].map(path => readFileSync(path, 'utf8')),
       before,
@@ -430,5 +511,58 @@ describe('Cursor workspace registration', () => {
     const output = errors.join('\n');
     assert.ok(output.includes(homePath));
     assert.ok(output.includes(workspacePath));
+  });
+});
+
+describe('setup MCP registration', () => {
+  it('passes the effective cwd and reports every Cursor target', () => {
+    const calls = [];
+    const steps = registerSetupAgent('cursor', {
+      homeDir: '/test/home',
+      cwd: '/test/workspace/repo',
+      register(agents, homeDir, options) {
+        calls.push({ agents, homeDir, options });
+        return [
+          { agent: 'cursor', path: '/test/home/.cursor/mcp.json', written: true },
+          {
+            agent: 'cursor',
+            path: '/test/workspace/.cursor/mcp.json',
+            written: false,
+            from: '/other/bin/kb.js',
+          },
+        ];
+      },
+    });
+
+    assert.deepStrictEqual(calls, [{
+      agents: ['cursor'],
+      homeDir: '/test/home',
+      options: { cwd: '/test/workspace/repo' },
+    }]);
+    assert.deepStrictEqual(steps, [
+      { action: 'Registered MCP for cursor', path: '/test/home/.cursor/mcp.json' },
+      {
+        action: 'Refused to move the MCP registration for cursor',
+        path: '/test/workspace/.cursor/mcp.json',
+        error: "points at /other/bin/kb.js — re-register from that checkout, or 'kb register --force'",
+      },
+    ]);
+  });
+
+  it('preserves setup reporting for hand-managed Codex config', () => {
+    const steps = registerSetupAgent('codex', {
+      register: () => [{
+        agent: 'codex',
+        path: '/test/home/.codex/config.toml',
+        manual: true,
+        written: false,
+      }],
+    });
+
+    assert.deepStrictEqual(steps, [{
+      action: 'MCP config for codex is hand-managed — not written',
+      path: '/test/home/.codex/config.toml',
+      hint: "Run 'kb register --agents=codex' to print the block to paste",
+    }]);
   });
 });
