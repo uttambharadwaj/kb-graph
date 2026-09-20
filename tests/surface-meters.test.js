@@ -5,6 +5,7 @@ import { getDb, insertDocument } from '../src/db.js';
 import { getToolDefinitions } from '../src/tools.js';
 import { metered, readToolResult } from '../src/tool-meter.js';
 import { logWriteDecision } from '../src/write-meter.js';
+import { storeEmbedding } from '../src/embeddings/embed.js';
 
 const calls = () => getDb().prepare('SELECT * FROM tool_calls ORDER BY id').all();
 
@@ -51,11 +52,16 @@ describe('tool meter', () => {
 
 describe('write decision meter', () => {
   const ids = {};
-  before(() => {
-    const note = title => insertDocument({ title, content: title, doc_type: 'lesson', tags: 'meter' }).id;
-    ids.neighbour = note('An existing note the next write lands near');
-    ids.accepted = note('A note written despite a close neighbour');
-    ids.alone = note('A note written into empty space');
+  before(async () => {
+    const note = async title => {
+      const { id } = insertDocument({ title, content: title, doc_type: 'lesson', tags: 'meter' });
+      await storeEmbedding(id, title);
+      return id;
+    };
+    ids.neighbour = await note('An existing note the next write lands near');
+    ids.accepted = await note('A note written despite a close neighbour');
+    ids.alone = await note('A note written into empty space');
+
     // An accept just under the line is the row that did not used to exist:
     // refusals were always visible in their own result.
     logWriteDecision({ nearest: { document_id: ids.neighbour, score: 0.77 }, threshold: 0.82, refused: false, docId: ids.accepted });

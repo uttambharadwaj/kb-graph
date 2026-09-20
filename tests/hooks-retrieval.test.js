@@ -94,6 +94,14 @@ describe('wakeup-hook retrieval logging', () => {
     });
     assert.match(stdout, /KB BRIEFING/);
   });
+
+  it('prompts one-call durable capture without a mandatory duplicate preflight', () => {
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-one-call-capture' });
+
+    assert.match(stdout, /At a durable boundary, call kb_write directly/);
+    assert.match(stdout, /Search and read before correcting an existing note/);
+    assert.doesNotMatch(stdout, /kb_check_duplicate/);
+  });
 });
 
 function insertStateNote(db, { title, content, updatedAt }) {

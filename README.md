@@ -100,7 +100,10 @@ matches a note. Cursor receives the session briefing but not per-prompt hints.
 
 Use `/debrief`, `kb_write`, `kb_capture_session`, or `kb_capture_fix` for
 deliberate capture. This is the high-quality path: the agent can name the lesson
-and preserve its evidence while the session is still fresh.
+and preserve its evidence while the session is still fresh. Routine note
+creation is one `kb_write` call: it owns semantic duplicate detection and
+refuses without writing when that check is unavailable. Search and read first
+when correcting an existing note, then pass `supersedes`.
 
 Nightly harvest is a safety net, not guaranteed capture. By default it scans
 Claude Code, Codex, and Cursor transcripts, but skips short, still-active,
@@ -108,7 +111,8 @@ subagent, and print-mode sessions. Work is capped per run and long transcripts
 are processed in bounded chunks. Set `KB_HARVEST_SDK_SESSIONS=1` if print-mode
 sessions are genuine work you want harvested. Fact extraction remains opt-in
 with `KB_HARVEST_FACTS=1`. Scheduled jobs snapshot both settings, so rerun setup
-after changing either one.
+after changing either one. Harvest uses the same fail-closed note writer; a
+chunk whose duplicate check is unavailable remains incomplete and retries.
 
 ### Consolidate and review
 
@@ -196,10 +200,11 @@ available over HTTP; seven administrative tools remain local-only. See
 [Skills vs MCP](docs/SKILL-VS-MCP.md) for the complete surface and
 [llms.txt](llms.txt) for agent-oriented reference.
 
-`kb_ingest` and the other note-writing surfaces similarity-check content before
-writing. The bulk CLI command `node bin/kb.js ingest <path>` instead skips only
-filenames it has already imported; it does not silently drop a requested file
-because its content resembles an existing note.
+`kb_write`, `kb_ingest`, REST ingest, and harvest own their fail-closed
+similarity check. `kb_check_duplicate` is an exploratory check, not a mandatory
+preflight. The bulk CLI command `node bin/kb.js ingest <path>` instead skips
+only filenames it has already imported; it does not silently drop a requested
+file because its content resembles an existing note.
 
 ## Data, privacy, and backups
 

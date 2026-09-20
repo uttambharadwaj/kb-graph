@@ -80,6 +80,13 @@ kb_write:
   content: "What was decided and why"
 ```
 
+Routine note creation is one `kb_write` call; it owns semantic duplicate
+detection and refuses safely when that gate is unavailable. Use
+`kb_check_duplicate` only for exploratory similarity checks. Search and read
+before correcting an existing note, then pass its ID as `supersedes`.
+`kb_capture_fix` redacts pasted diagnostics but does not share this fail-closed
+dedupe contract.
+
 ## The Self-Learning Loop
 
 This is how the system compounds intelligence:

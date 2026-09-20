@@ -16,7 +16,7 @@ import {
 } from './extract.js';
 import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
-import { writeNote } from './write-note.js';
+import { writeNote, WRITE_SKIP_REASON } from './write-note.js';
 import { HARVEST_SOURCE_PREFIX } from './tiers.js';
 import {
   defaultTranscriptRoots,
@@ -429,7 +429,7 @@ export const harvestExtractOptions = options => ({
 });
 
 async function harvestTranscript(path, mtime, {
-  vaultPath, dryRun, facts: wantFacts, db = getDb(), extract = kbExtract,
+  vaultPath, dryRun, facts: wantFacts, db = getDb(), extract = kbExtract, write = writeNote,
 }) {
   const raw = readFileSync(path, 'utf-8');
   const { text, recognizedTurns, unsupportedTurns } = parseTranscript(raw);
@@ -509,11 +509,12 @@ async function harvestTranscript(path, mtime, {
     }
 
     let chunkWritten = 0;
+    let chunkWriteFailed = false;
     for (const n of notes.slice(0, 3)) {
       if (!n?.title || !n?.content) continue;
       if (dryRun) { chunkWritten++; continue; }
       const tags = [n.tags, 'auto-debrief'].filter(Boolean).join(',');
-      const res = await writeNote(vaultPath, {
+      const res = await write(vaultPath, {
         title: n.title,
         content: n.content,
         type: ['lesson', 'decision', 'workflow', 'idea', 'fix'].includes(n.type) ? n.type : 'lesson',
@@ -521,10 +522,17 @@ async function harvestTranscript(path, mtime, {
         project: n.project || undefined,
         source,
       });
+      if (res.reason === WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE) {
+        lessonErrors++;
+        chunkWriteFailed = true;
+        break;
+      }
       if (!res.skipped) chunkWritten++;
     }
     written += chunkWritten;
-    if (!dryRun) recordChunkComplete(db, { transcriptPath: path, pass: 'lessons', chunk, notes: chunkWritten });
+    if (!dryRun && !chunkWriteFailed) {
+      recordChunkComplete(db, { transcriptPath: path, pass: 'lessons', chunk, notes: chunkWritten });
+    }
   }
 
   const lessonsUnread = pendingChunks(db, path, 'lessons', lessonChunks).reduce((n, chunk) => n + (chunk.end - chunk.start), 0);
@@ -591,6 +599,7 @@ export async function runHarvest({
   runMaintenance = null,
   harvestOne = harvestTranscript,
   extract = kbExtract,
+  write = writeNote,
 } = {}) {
   const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
   const db = getDb();
@@ -627,7 +636,7 @@ export async function runHarvest({
   for (const { path, mtime, sessionId: candidateSessionId = null } of work) {
     try {
       const r = await harvestOne(path, mtime, {
-        vaultPath, dryRun, facts: wantFacts, db, extract,
+        vaultPath, dryRun, facts: wantFacts, db, extract, write,
       });
       if (r.skipped) {
         summary.tooShort++;

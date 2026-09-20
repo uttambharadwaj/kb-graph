@@ -132,6 +132,14 @@ function defaultListProcesses() {
   return parseProcessTable(execFileSync('ps', ['-eo', 'pid,ppid,lstart,comm'], psExecOptions()));
 }
 
+export function resolveProcessStart({ pid = process.pid, listProcesses = defaultListProcesses } = {}) {
+  try {
+    return listProcesses().find(proc => proc.pid === pid)?.lstart ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // The one impure entry point everything else calls: find the nearest harness
 // ancestor of `pid`, that ancestor's start time, and which agent it is, from
 // one `ps` snapshot. Failures anywhere (ps missing, pid already exited)

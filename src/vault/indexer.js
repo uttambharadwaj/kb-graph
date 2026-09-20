@@ -170,6 +170,9 @@ async function _indexVault(vaultPath, { embeddings = false } = {}) {
 
   const pruned = pruneMissingVaultFiles(vaultPath, existingPaths, seenPaths);
   deleted += pruned.deleted;
+  if (embeddingHelpers) {
+    embedded += await embedMissingNonVaultDocuments(embeddingHelpers, errors);
+  }
 
   return { indexed, skipped, deleted, preserved: pruned.preserved, embedded, errors, total: files.length };
 }
@@ -233,6 +236,30 @@ async function embedIfMissing(relPath, embeddings, errors) {
   }
 }
 
+async function embedMissingNonVaultDocuments(embeddings, errors) {
+  const missing = getDb().prepare(`
+    SELECT d.id, d.content
+    FROM documents d
+    WHERE d.superseded_at IS NULL
+      AND NOT EXISTS (
+      SELECT 1 FROM embeddings e WHERE e.document_id = d.id
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM vault_files vf WHERE vf.document_id = d.id
+      )
+      AND TRIM(COALESCE(d.content, '')) <> ''
+  `).all();
+  let embedded = 0;
+  for (const doc of missing) {
+    try {
+      embedded += await embeddings.storeEmbedding(doc.id, doc.content);
+    } catch (embErr) {
+      errors.push(`embedding document #${doc.id}: ${embErr.message}`);
+    }
+  }
+  return embedded;
+}
+
 async function loadEmbeddingHelpers(errors) {
   try {
     const embedModule = await import('../embeddings/embed.js');
@@ -261,6 +288,13 @@ async function upsertVaultDocument({ filePath, relPath, content, hash, embedding
   };
 
   if (existing && existing.document_id) {
+    const previous = getDb().prepare('SELECT content FROM documents WHERE id = ?').get(existing.document_id);
+    if (previous?.content !== fields.content) {
+      // The old vector describes content that no longer exists. Remove it
+      // before updating the document so a failed re-embed leaves an explicit,
+      // retryable corpus gap instead of a stale false-negative.
+      getDb().prepare('DELETE FROM embeddings WHERE document_id = ?').run(existing.document_id);
+    }
     updateDocumentFull(existing.document_id, fields);
     docId = existing.document_id;
   } else {

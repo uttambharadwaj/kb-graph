@@ -9,7 +9,13 @@ import { captureWeb } from './capture/web.js';
 import { captureSession, captureFix } from './capture/terminal.js';
 import { hybridSearch, checkDuplicate, DUP_THRESHOLD } from './embeddings/search.js';
 import { metered } from './tool-meter.js';
-import { writeNote, setNoteTier, relatedForDoc, renderNearNeighbors } from './write-note.js';
+import {
+  writeNote,
+  setNoteTier,
+  relatedForDoc,
+  renderNearNeighbors,
+  WRITE_SKIP_REASON,
+} from './write-note.js';
 import { TIER, TIERS, TIER_MEANING, DEFAULT_TIER, tierBanner, tiersDiscriminate } from './tiers.js';
 import { addFact, queryFact, invalidateFact, invalidateFactById, factTimeline, factStats, nearbyEntities, canonicalEntityId } from './facts.js';
 import { kbExtract, canonicalTriple, retireContradicted } from './extract.js';
@@ -34,7 +40,7 @@ function formatVaultIndexResult(result) {
 
 async function indexVaultForResponse(vaultPath, vaultFilePath) {
   try {
-    const result = await indexVaultFile(vaultPath, vaultFilePath);
+    const result = await indexVaultFile(vaultPath, vaultFilePath, { embeddings: true });
     return { ok: true, ...result, status: formatVaultIndexResult(result) };
   } catch (error) {
     return { ok: false, error: error.message, status: `; index failed: ${error.message}` };
@@ -59,11 +65,19 @@ function duplicateRefusal(matches) {
       type: 'text',
       text: JSON.stringify({
         skipped: true,
-        reason: 'duplicate_detected',
+        reason: WRITE_SKIP_REASON.DUPLICATE,
         matches,
         ...(id && { remedy: `To replace #${id} rather than add a note beside it, call kb_write with supersedes: ${id}.` }),
       }, null, 2),
     }],
+  };
+}
+
+function writeRefusal(result) {
+  if (result.reason === WRITE_SKIP_REASON.DUPLICATE) return duplicateRefusal(result.matches);
+  return {
+    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    isError: true,
   };
 }
 
@@ -249,7 +263,7 @@ function defineTools() {
           // Files-first invariant: no DB-only writes. Every historical
           // vault/DB divergence traced back to this tool bypassing the vault.
           const result = await writeNote(getVaultPath(), { title, content, type: 'capture', tags });
-          if (result.skipped) return duplicateRefusal(result.matches);
+          if (result.skipped) return writeRefusal(result);
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -259,7 +273,7 @@ function defineTools() {
 
     {
       name: 'kb_write',
-      description: 'Write a new note to the Obsidian vault. Use this to capture knowledge, ideas, lessons, or research that should persist across sessions. The note will be synced to all devices via Obsidian Sync. Pass supersedes to retire an older note this one replaces. A successful write can report related near_notes as context for linking. They are not duplicate matches; retire one with kb_supersede only if the note you just wrote actually contradicts or replaces it.',
+      description: 'Write a new authored note to the Obsidian vault in one call. This call owns semantic duplicate detection and refuses without writing when that gate is unavailable. Use it for durable knowledge, ideas, lessons, decisions, research, or workstream state—not progress narration or unverified hypotheses. Search and read first only when correcting existing knowledge, then pass supersedes to replace that note in the same call. A successful write can report related near_notes as linking context; they are not duplicate matches.',
       schema: {
         title: z.string().describe('Note title'),
         content: z.string().describe('Markdown content (body text, no frontmatter needed)'),
@@ -284,7 +298,7 @@ function defineTools() {
             return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
           }
           const result = await writeNote(getVaultPath(), { title, content, type, tags, project, tier, tier_ref, excludeId: supersedes });
-          if (result.skipped) return duplicateRefusal(result.matches);
+          if (result.skipped) return writeRefusal(result);
 
           // The note is on disk and indexed from here on, so nothing below may
           // report a failure: a caller told the write failed writes it again,
@@ -627,7 +641,7 @@ function defineTools() {
 
     {
       name: 'kb_check_duplicate',
-      description: `Check whether content already exists in the knowledge base, using the same comparison kb_write will make. Pass the exact note body you are about to write: the write path embeds that body, so a summary or a title scores against different text and predicts nothing. Leave threshold unset to get the write's own verdict — a lower threshold reports notes kb_write will accept as merely related, and a higher one hides notes it will reject as duplicates. A not-a-duplicate verdict also carries near_notes: the live notes closest to your content, the same ones the write itself will report.`,
+      description: `Explore whether content resembles a live note, using the same comparison kb_write makes for its authoritative verdict. Routine creates do not need this preflight: call kb_write directly. Pass the exact prospective note body when you need to inspect similarity or try a custom threshold. A lower threshold reports notes kb_write accepts as related, while a higher one hides notes it rejects as duplicates. A not-a-duplicate verdict also carries near_notes.`,
       schema: {
         content: z.string().describe('The exact note body that will be passed to kb_write'),
         threshold: z.number().optional().default(DUP_THRESHOLD).describe(`Similarity threshold 0-1. Defaults to ${DUP_THRESHOLD}, the value kb_write uses; change it only to explore, not to pre-check a write.`),

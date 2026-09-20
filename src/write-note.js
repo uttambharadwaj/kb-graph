@@ -7,17 +7,26 @@ import { randomUUID } from 'crypto';
 import matter from 'gray-matter';
 import { similarDocs, duplicatesIn, nearNeighborSignal, DUP_THRESHOLD } from './embeddings/search.js';
 import { indexVaultFile } from './vault/indexer.js';
-import { getVaultFile, getDb } from './db.js';
+import { getVaultFile, getDb, getDocument } from './db.js';
 import { splitTags } from './tags.js';
 import { assertTier } from './tiers.js';
 import { logWriteDecision } from './write-meter.js';
 import { SURFACE, logRetrievalResults } from './retrieval.js';
+import { resolveProcessStart } from './process-ancestry.js';
 
 // Re-exported, not redeclared: kb_check_duplicate answers with this same value,
 // and a second copy is the drift that made the pre-check disagree with the write.
 export { DUP_THRESHOLD };
 export const RELATED_MIN = 0.55;
 export const RELATED_K = 3;
+export const WRITE_SKIP_REASON = Object.freeze({
+  DUPLICATE: 'duplicate_detected',
+  DEDUPE_UNAVAILABLE: 'dedupe_unavailable',
+});
+const WRITE_LOCK_KEY = 'runtime:authored-write-lock';
+const WRITE_LOCK_TIMEOUT_MS = 30_000;
+let ownProcessStart;
+let identityCache = null;
 
 const FOLDER_MAP = {
   capture: 'inbox',
@@ -83,18 +92,140 @@ export function setNoteTier(vaultPath, relPath, { tier, ref }) {
   writeFileSync(fullPath, matter.stringify(body, updated));
 }
 
-export async function writeNote(vaultPath, { title, content, type = 'capture', tags, project, source, tier, tier_ref, excludeId }) {
+function dedupeUnavailable() {
+  return {
+    skipped: true,
+    reason: WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE,
+    retryable: true,
+  };
+}
+
+function hasUnembeddedLiveDocuments() {
+  return Boolean(getDb().prepare(`
+    SELECT 1
+    FROM documents d
+    WHERE d.superseded_at IS NULL
+      AND TRIM(COALESCE(d.content, '')) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM embeddings e WHERE e.document_id = d.id
+      )
+    LIMIT 1
+  `).get());
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code !== 'ESRCH';
+  }
+}
+
+function processIdentityIsAlive({ pid, pid_start: expectedStart } = {}) {
+  if (pid === process.pid && expectedStart && expectedStart === ownProcessStart) return true;
+  const cacheKey = `${pid}:${expectedStart ?? ''}`;
+  if (identityCache?.key === cacheKey && Date.now() - identityCache.checkedAt < 1_000) {
+    return identityCache.alive;
+  }
+  if (!processIsAlive(pid)) return false;
+  const actualStart = expectedStart ? resolveProcessStart({ pid }) : null;
+  const alive = !expectedStart || actualStart == null || actualStart === expectedStart;
+  identityCache = { key: cacheKey, alive, checkedAt: Date.now() };
+  return alive;
+}
+
+function releaseWriteLock(owner) {
+  try {
+    getDb().prepare('DELETE FROM meta WHERE key = ? AND value = ?').run(WRITE_LOCK_KEY, owner);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function retryWriteLockRelease(owner, delay = 20) {
+  const timer = setTimeout(() => {
+    if (!releaseWriteLock(owner)) retryWriteLockRelease(owner, Math.min(delay * 2, 30_000));
+  }, delay);
+  timer.unref?.();
+}
+
+function tryAcquireWriteLock(owner) {
+  const db = getDb();
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO meta (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+  `);
+  if (insert.run(WRITE_LOCK_KEY, owner).changes === 1) return true;
+
+  const current = db.prepare('SELECT value FROM meta WHERE key = ?').get(WRITE_LOCK_KEY);
+  if (!current) return false;
+  try {
+    if (processIdentityIsAlive(JSON.parse(current.value))) return false;
+  } catch {
+    // A malformed owner cannot represent a live lock holder.
+  }
+
+  return db.transaction(() => {
+    const deleted = db.prepare(
+      'DELETE FROM meta WHERE key = ? AND value = ?',
+    ).run(WRITE_LOCK_KEY, current.value);
+    return deleted.changes === 1 && insert.run(WRITE_LOCK_KEY, owner).changes === 1;
+  })();
+}
+
+async function acquireWriteLock(owner) {
+  const deadline = Date.now() + WRITE_LOCK_TIMEOUT_MS;
+  let delay = 20;
+  while (true) {
+    if (tryAcquireWriteLock(owner)) return;
+    if (Date.now() >= deadline) throw new Error('Timed out waiting for the authored-write lock');
+    await new Promise(resolve => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 250);
+  }
+}
+
+async function withWriteLock(run) {
+  ownProcessStart ??= resolveProcessStart();
+  const owner = JSON.stringify({
+    token: randomUUID(),
+    pid: process.pid,
+    pid_start: ownProcessStart,
+    acquired_at: new Date().toISOString(),
+  });
+  await acquireWriteLock(owner);
+  try {
+    return await run();
+  } finally {
+    if (!releaseWriteLock(owner)) retryWriteLockRelease(owner);
+  }
+}
+
+async function writeNoteUnlocked(
+  vaultPath,
+  { title, content, type = 'capture', tags, project, source, tier, tier_ref, excludeId },
+  { findSimilar = similarDocs } = {},
+) {
   // Refused loudly, before anything is written: a caller told its note was
   // saved has no reason to check what tier it actually landed on.
   const graded = assertTier({ tier, ref: tier_ref, provenance: source });
+  const canProceedWithoutDedupe = excludeId != null && getDocument(excludeId) != null;
+
+  // A successful similarity query over an incomplete corpus is not a valid
+  // duplicate verdict. Explicit corrections may proceed because their target
+  // is already known; routine creates wait for reindex to restore coverage.
+  if (!canProceedWithoutDedupe && hasUnembeddedLiveDocuments()) return dedupeUnavailable();
 
   // One embedding pass drives both dedup and related-links. If the semantic
   // layer is down, say so — a silent skip reads as "no duplicates found".
   let similar = [];
   let warning = '';
   try {
-    similar = await similarDocs(content, { limit: 10 });
+    similar = await findSimilar(content, { limit: 10 });
   } catch (err) {
+    if (!canProceedWithoutDedupe) return dedupeUnavailable();
     warning = ` [dedup/links skipped: ${err.message} — run 'kb vault reindex' to build embeddings]`;
   }
 
@@ -131,7 +262,7 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
       query: content.slice(0, 300),
       eventId: randomUUID(),
     });
-    return { skipped: true, reason: 'duplicate_detected', matches };
+    return { skipped: true, reason: WRITE_SKIP_REASON.DUPLICATE, matches };
   }
   const related = similar
     .filter(s => s.score >= RELATED_MIN && s.score < DUP_THRESHOLD)
@@ -203,4 +334,8 @@ export async function writeNote(vaultPath, { title, content, type = 'capture', t
     ...nearNeighborSignal(similar),
     status: indexStatus + warning,
   };
+}
+
+export function writeNote(vaultPath, note, options) {
+  return withWriteLock(() => writeNoteUnlocked(vaultPath, note, options));
 }

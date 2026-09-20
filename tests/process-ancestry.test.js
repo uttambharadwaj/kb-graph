@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
-  AGENT, harnessAgent, findHarnessAncestor, parseProcessTable, resolveHarnessAncestry, psExecOptions,
+  AGENT, harnessAgent, findHarnessAncestor, parseProcessTable, resolveHarnessAncestry,
+  resolveProcessStart, psExecOptions,
 } from '../src/process-ancestry.js';
 
 // This runs on a hook's critical path (every UserPromptSubmit) — a hung `ps`
@@ -83,6 +84,17 @@ describe('parseProcessTable', () => {
 
   it('skips a line whose lstart does not parse (unrecognisable ps output)', () => {
     assert.deepStrictEqual(parseProcessTable('  1 0 not-a-date node'), []);
+  });
+});
+
+describe('resolveProcessStart', () => {
+  it('returns the start identity for the requested pid and fails closed when unavailable', () => {
+    const rows = [
+      { pid: 42, ppid: 1, lstart: 'Sun Aug  9 20:00:00 2026', comm: 'node' },
+    ];
+    assert.strictEqual(resolveProcessStart({ pid: 42, listProcesses: () => rows }), rows[0].lstart);
+    assert.strictEqual(resolveProcessStart({ pid: 7, listProcesses: () => rows }), null);
+    assert.strictEqual(resolveProcessStart({ pid: 42, listProcesses: () => { throw new Error('ps failed'); } }), null);
   });
 });
 

@@ -131,7 +131,8 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
       ] : []),
       'Recently updated:',
       ...recent.map(r => `- ${r.title}${r.project ? ` [${r.project}]` : ''} (${r.note_type}${showTier ? `, ${tierLabel(r.tier)}` : ''})`),
-      'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity). Capture learnings at session end via /debrief.',
+      'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity); only a fresh reviewed projection is current state.',
+      'At a durable boundary, call kb_write directly; it owns duplicate gating and fails closed. Search and read before correcting an existing note, then pass supersedes. Lifecycle capture is automatic; /debrief is the higher-fidelity pass.',
     ];
 
     if (hookInput.source === 'compact') {

@@ -10,6 +10,7 @@ import { getToolDefinitions } from '../src/tools.js';
 import { insertDocument, getDb } from '../src/db.js';
 import { generateEmbedding, embeddingToBuffer } from '../src/embeddings/embed.js';
 import { similarDocs } from '../src/embeddings/search.js';
+import { WRITE_SKIP_REASON } from '../src/write-note.js';
 import { SURFACE, callIdentity, resolveSessionId } from '../src/retrieval.js';
 import { AGENT } from '../src/process-ancestry.js';
 import { countByAgent, rediscoveries, runRediscoveriesCli } from '../src/cli/rediscoveries.js';
@@ -50,7 +51,7 @@ const rediscoveryRows = () => getDb().prepare(
 ).all(SURFACE.REDISCOVERY);
 
 describe('kb_check_duplicate logs a rediscovery', () => {
-  beforeEach(() => getDb().exec('DELETE FROM embeddings'));
+  beforeEach(() => getDb().exec('DELETE FROM embeddings; DELETE FROM documents'));
 
   it('one row per match, sharing an event id, query truncated to 300 chars and the ambient session', async () => {
     const content = `Retries are capped at three attempts, with jitter between them. ${'x'.repeat(400)}`;
@@ -96,7 +97,7 @@ describe('kb_check_duplicate logs a rediscovery', () => {
 });
 
 describe('kb_write dedupe refusal logs a rediscovery', () => {
-  beforeEach(() => getDb().exec('DELETE FROM embeddings'));
+  beforeEach(() => getDb().exec('DELETE FROM embeddings; DELETE FROM documents'));
 
   it('logs a rediscovery row when the write is refused as a duplicate', async () => {
     const content = 'Queue workers acknowledge a message only after the write commits.';
@@ -104,7 +105,7 @@ describe('kb_write dedupe refusal logs a rediscovery', () => {
 
     const before = rediscoveryRows().length;
     const res = await call('kb_write', { title: 'Acknowledge after commit', content, type: 'lesson' });
-    assert.strictEqual(JSON.parse(res.text).reason, 'duplicate_detected');
+    assert.strictEqual(JSON.parse(res.text).reason, WRITE_SKIP_REASON.DUPLICATE);
 
     const rows = rediscoveryRows().slice(before);
     assert.strictEqual(rows.length, 1);

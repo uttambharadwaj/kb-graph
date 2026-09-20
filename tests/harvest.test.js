@@ -66,7 +66,12 @@ writeFileSync(stub, [
   // as a duplicate and the fact count would stop moving for the wrong reason.
   'const predicates = "owns uses contains provides includes supports tracks documents calls talks_to runs_on stored_in depends_on gates gated_by defaults_to bypasses excludes enables prevents causes breaks returns indicates drops lacks replaces reverts proposes chose rejects addresses".split(" ");',
   'const predicate = predicates[(n - 1) % predicates.length];',
-  'const notes = prompt.includes("MIDDLE_SENTINEL") ? [{ title: "Middle sentinel", type: "lesson", content: "MIDDLE_SENTINEL was covered.", tags: "test", project: "knowledge-base-server" }] : [];',
+  'let notes = [];',
+  'if (prompt.includes("DEDUPE_UNAVAILABLE_SENTINEL")) {',
+  '  notes = [{ title: "Dedupe unavailable sentinel", type: "lesson", content: "DEDUPE_UNAVAILABLE_SENTINEL was covered.", tags: "test", project: "knowledge-base-server" }];',
+  '} else if (prompt.includes("MIDDLE_SENTINEL")) {',
+  '  notes = [{ title: "Middle sentinel", type: "lesson", content: "MIDDLE_SENTINEL was covered.", tags: "test", project: "knowledge-base-server" }];',
+  '}',
   'const inner = { notes, facts: [{ subject: "billing service", predicate, object: "payments team", category: "status" }], skipped: [] };',
   'reply(inner);',
 ].join('\n') + '\n');
@@ -76,6 +81,7 @@ process.env.CLAUDE_PATH = stub;
 const { extractTranscriptText, chunkText, chunkTextWithIdentity, runHarvest, runHarvestCli, factsRequested, stillPending, selectWork, isPrintModeTranscript, buildLessonsPrompt, findTranscripts, MAX_SESSIONS_PER_RUN } = await import('../src/harvest.js');
 const { HARVEST_EXTRACT_CALL_BUDGET_MS } = await import('../src/extract.js');
 const { getDb, getHealth } = await import('../src/db.js');
+const { WRITE_SKIP_REASON } = await import('../src/write-note.js');
 
 describe('harvest transcript parsing', () => {
   it('keeps evidence-strength guidance in the production lessons prompt', () => {
@@ -943,6 +949,60 @@ describe('harvest candidate selection', () => {
     assert.strictEqual(replay.notes, 0, 'the existing note is deduped on replay');
     assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM documents WHERE title = 'Middle sentinel'").get().n, 1);
     assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 1);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('leaves a lesson chunk incomplete when semantic dedupe is unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'dedupe-unavailable.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [{
+            type: 'text',
+            text: `${'x'.repeat(5000)} DEDUPE_UNAVAILABLE_SENTINEL ${'z'.repeat(5000)}`,
+          }],
+        },
+      }),
+    ].join('\n'));
+
+    const summary = await runHarvest({
+      onlyPath: path,
+      write: async () => ({
+        skipped: true,
+        reason: WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE,
+        retryable: true,
+      }),
+    });
+
+    assert.strictEqual(summary.notes, 0);
+    assert.strictEqual(summary.lessonErrors, 1);
+    assert.strictEqual(summary.errors, 1);
+    assert.strictEqual(summary.coverageComplete, false);
+    assert.strictEqual(
+      getDb().prepare("SELECT COUNT(*) AS count FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).count,
+      0,
+    );
+    assert.strictEqual(
+      getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path),
+      undefined,
+    );
+    assert.strictEqual(
+      getDb().prepare("SELECT 1 FROM documents WHERE title = 'Dedupe unavailable sentinel'").get(),
+      undefined,
+    );
+
+    const retry = await runHarvest({ onlyPath: path });
+    assert.strictEqual(retry.notes, 1);
+    assert.strictEqual(retry.lessonErrors, 0);
+    assert.strictEqual(retry.coverageComplete, true);
+    assert.ok(
+      getDb().prepare("SELECT 1 FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path),
+    );
+    assert.ok(getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path));
+    assert.ok(getDb().prepare("SELECT 1 FROM documents WHERE title = 'Dedupe unavailable sentinel'").get());
     rmSync(root, { recursive: true, force: true });
   });
 

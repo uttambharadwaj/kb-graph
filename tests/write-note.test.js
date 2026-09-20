@@ -3,25 +3,37 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { env as transformersEnv } from '@huggingface/transformers';
 import { writeNote } from '../src/write-note.js';
-import { getDocument } from '../src/db.js';
+import { getDocument, insertDocument } from '../src/db.js';
 
-// Exercise filename allocation even when semantic dedup is unavailable.
-transformersEnv.allowRemoteModels = false;
-transformersEnv.allowLocalModels = false;
 const vault = process.env.OBSIDIAN_VAULT_PATH;
 const date = new Date().toISOString().split('T')[0];
+const dedupeAvailable = { findSimilar: async () => [] };
+
+function writeWithNoDuplicates(note) {
+  return writeNote(vault, note, dedupeAvailable);
+}
 
 describe('note filename collisions', () => {
+  it('does not treat an empty document as a semantic corpus gap', async () => {
+    insertDocument({ title: 'Empty import', content: '', doc_type: 'capture' });
+
+    const result = await writeWithNoDuplicates({
+      title: 'First meaningful note',
+      content: 'Meaningful content can still be checked.',
+    });
+
+    assert.equal(result.skipped, false, JSON.stringify(result));
+  });
+
   for (const [name, titles] of [
     ['same title', ['Collision note', 'Collision note']],
     ['normalized slug', ['Punctuation: collision', 'Punctuation collision!']],
     ['truncated slug', ['a'.repeat(60) + ' first', 'a'.repeat(60) + ' second']],
   ]) {
     it(`preserves distinct notes with the ${name}`, async () => {
-      const first = await writeNote(vault, { title: titles[0], content: 'Original body.' });
-      const second = await writeNote(vault, { title: titles[1], content: 'Distinct body.' });
+      const first = await writeWithNoDuplicates({ title: titles[0], content: 'Original body.' });
+      const second = await writeWithNoDuplicates({ title: titles[1], content: 'Distinct body.' });
       assert.equal(first.skipped, false);
       assert.equal(second.skipped, false);
       assert.equal(second.path, first.path.replace(/\.md$/, '-2.md'));
@@ -38,14 +50,14 @@ describe('note filename collisions', () => {
     mkdirSync(join(vault, 'inbox'), { recursive: true });
     const path = `inbox/${date}-unindexed-collision.md`;
     writeFileSync(join(vault, path), 'Handwritten note.');
-    const result = await writeNote(vault, { title: 'Unindexed collision', content: 'New note.' });
+    const result = await writeWithNoDuplicates({ title: 'Unindexed collision', content: 'New note.' });
     assert.equal(result.path, path.replace(/\.md$/, '-2.md'));
     assert.equal(readFileSync(join(vault, path), 'utf8'), 'Handwritten note.');
   });
 
   it('allocates separate files and document ids for concurrent writes', async () => {
     const results = await Promise.all(Array.from({ length: 5 }, (_, i) =>
-      writeNote(vault, { title: 'Concurrent collision', content: `Concurrent body ${i}.` })
+      writeWithNoDuplicates({ title: 'Concurrent collision', content: `Concurrent body ${i}.` })
     ));
     const base = `inbox/${date}-concurrent-collision`;
     assert.deepEqual(results.map(r => r.path).sort(),
@@ -61,8 +73,8 @@ describe('note filename collisions', () => {
 
   it('overwrites only the explicitly targeted note, including a suffixed target', async () => {
     const title = 'Targeted collision';
-    const first = await writeNote(vault, { title, content: 'First note.' });
-    const target = await writeNote(vault, { title, content: 'Target note.' });
+    const first = await writeWithNoDuplicates({ title, content: 'First note.' });
+    const target = await writeWithNoDuplicates({ title, content: 'Target note.' });
     const corrected = await writeNote(vault, { title, content: 'Corrected target.', excludeId: target.docId });
     assert.equal(corrected.path, target.path);
     assert.equal(corrected.docId, target.docId);

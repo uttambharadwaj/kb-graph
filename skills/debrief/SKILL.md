@@ -37,9 +37,15 @@ Review the full conversation and extract candidates.
 
 ## Step 2: Check for existing entries
 
-Before creating an entry, call `kb_check_duplicate` with **the exact body you are about to write** and no `threshold` — that is what makes its answer the answer `kb_write` will give. A summary of the note, or a lower threshold, produces a verdict about a different question: the write embeds the body and rejects at the default, so a check run any other way green-lights writes that are about to be refused, and vice versa. `kb_search` on the candidate title is the complementary check, since titles are not part of the comparison at all.
+Routine new notes need one `kb_write` call. It owns the semantic duplicate
+verdict and refuses without writing if that gate is unavailable. Use
+`kb_check_duplicate` only to explore similarity or a custom threshold, not as a
+mandatory preflight.
 
-If a similar entry exists and is right, skip. If it's outdated, supersede it **first** and then write — `kb_write` refuses a near-duplicate of a live note, and a correction is by construction a near-duplicate of what it corrects.
+Search and read before correcting existing knowledge. If an entry is outdated,
+pass its ID as `supersedes` to `kb_write` so the replacement and pointer are
+handled in the same call. Use `kb_supersede` directly only when the replacement
+already exists or no replacement is needed.
 
 The check is not the last word. A write that is accepted still comes back with `near_notes` when live notes sit close to it, and you are the only reader who has both texts: if what you just wrote contradicts or replaces one of them, `kb_supersede` it with a reason. Left alone, both stay live and later recall returns the two of them with nothing to say which is current.
 

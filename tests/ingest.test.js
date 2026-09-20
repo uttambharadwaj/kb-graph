@@ -6,6 +6,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory } from '../src/ingest.js';
 import { similarDocs } from '../src/embeddings/search.js';
+import { getDb, insertDocument } from '../src/db.js';
+import { indexVault } from '../src/vault/indexer.js';
+
+function hasEmbedding(documentId) {
+  return Boolean(
+    getDb().prepare('SELECT 1 FROM embeddings WHERE document_id = ?').get(documentId),
+  );
+}
 
 describe('ingest helpers', () => {
   it('preserves frontmatter metadata when ingesting markdown notes', () => {
@@ -52,6 +60,21 @@ describe('ingest reaches every retrieval surface', () => {
     const hits = await similarDocs('what clears the zarquon lease table?', { limit: 5 });
     assert.ok(hits.some(h => h.document_id === doc.id), 'ingested document is invisible to semantic search');
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('repairs a missing non-vault embedding during a full reindex', async () => {
+    const doc = insertDocument({
+      title: 'Imported embedding repair',
+      content: 'A non-vault import remains repairable after a transient model failure.',
+      source: 'file:/tmp/imported-embedding-repair.md',
+      doc_type: 'document',
+    });
+    assert.equal(hasEmbedding(doc.id), false);
+
+    const result = await indexVault(process.env.OBSIDIAN_VAULT_PATH, { embeddings: true });
+
+    assert.ok(result.embedded >= 1);
+    assert.equal(hasEmbedding(doc.id), true);
   });
 });
 

@@ -16,6 +16,7 @@ import {
 import { getToolDefinitions } from '../src/tools.js';
 import { backfillTiers, getDb, getDocument, insertDocument, preferConfirmed, promoteDocumentTier, searchDocuments } from '../src/db.js';
 import { hybridMergeOrder } from '../src/embeddings/search.js';
+import { storeEmbedding } from '../src/embeddings/embed.js';
 import { writeNote } from '../src/write-note.js';
 import { indexVaultFile } from '../src/vault/indexer.js';
 
@@ -28,6 +29,12 @@ const call = async (name, args) => {
   const tool = getToolDefinitions().find(t => t.name === name);
   const res = await tool.handler(args);
   return { text: res.content[0].text, isError: res.isError === true };
+};
+
+const insertEmbeddedDocument = async args => {
+  const doc = insertDocument(args);
+  await storeEmbedding(doc.id, args.content);
+  return doc;
 };
 
 const runHook = (name, input) => execFileSync(process.execPath, [HOOK, name], {
@@ -146,7 +153,7 @@ describe('the unattended sweep', () => {
     const src = readFileSync(join(SRC, 'harvest.js'), 'utf8');
     assert.match(src, /HARVEST_SOURCE_PREFIX.*from '\.\/tiers\.js'/, 'the prefix must come from the module that gates on it');
     assert.match(src, /const source = `\$\{HARVEST_SOURCE_PREFIX\}/);
-    const writeCall = src.slice(src.indexOf('await writeNote('), src.indexOf('if (!res.skipped) written++'));
+    const writeCall = src.slice(src.indexOf('const res = await write('), src.indexOf('if (res.reason === WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE)'));
     assert.ok(writeCall.length > 0, 'failed to locate the harvest writeNote call');
     assert.doesNotMatch(writeCall, /tier/, 'the sweep must not pass a tier at all');
   });
@@ -215,9 +222,10 @@ describe('the index does not trust the file', () => {
 
 describe('kb_promote', () => {
   const promote = (args) => call('kb_promote', args);
+  beforeEach(() => getDb().exec('DELETE FROM embeddings; DELETE FROM documents'));
 
   it('raises a tier and records what confirmed it', async () => {
-    const doc = insertDocument({ title: 'A guess about the queue', content: 'Guessed.', doc_type: 'lesson' });
+    const doc = await insertEmbeddedDocument({ title: 'A guess about the queue', content: 'Guessed.', doc_type: 'lesson' });
     assert.strictEqual(doc.tier, DEFAULT_TIER);
 
     const res = await promote({ id: doc.id, tier: TIER.VERIFIED, confirmed_by: 'fixed in tests/tiers.test.js' });
@@ -231,7 +239,7 @@ describe('kb_promote', () => {
   });
 
   it('will not confirm without saying what did the confirming', async () => {
-    const doc = insertDocument({ title: 'An unconfirmed guess', content: 'Guessed.', doc_type: 'lesson' });
+    const doc = await insertEmbeddedDocument({ title: 'An unconfirmed guess', content: 'Guessed.', doc_type: 'lesson' });
     for (const confirmed_by of ['', '   ']) {
       const res = await promote({ id: doc.id, tier: TIER.OBSERVED, confirmed_by });
       assert.strictEqual(res.isError, true);
@@ -241,7 +249,7 @@ describe('kb_promote', () => {
   });
 
   it(`will not reach ${TIER.VERIFIED} on prose alone`, async () => {
-    const doc = insertDocument({ title: 'A claim promoted on a hunch', content: 'Guessed.', doc_type: 'lesson' });
+    const doc = await insertEmbeddedDocument({ title: 'A claim promoted on a hunch', content: 'Guessed.', doc_type: 'lesson' });
     const res = await promote({ id: doc.id, tier: TIER.VERIFIED, confirmed_by: 'I am sure this is right now' });
     assert.strictEqual(res.isError, true);
     assert.match(res.text, /requires a reference/);
@@ -249,7 +257,7 @@ describe('kb_promote', () => {
   });
 
   it('only ever goes up', async () => {
-    const doc = insertDocument({ title: 'Already observed behaviour', content: 'Seen.', doc_type: 'lesson', tier: TIER.OBSERVED });
+    const doc = await insertEmbeddedDocument({ title: 'Already observed behaviour', content: 'Seen.', doc_type: 'lesson', tier: TIER.OBSERVED });
     const down = await promote({ id: doc.id, tier: DEFAULT_TIER, confirmed_by: 'on reflection, unsure' });
     assert.strictEqual(down.isError, true);
     assert.match(down.text, /only raises/);

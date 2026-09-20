@@ -7,7 +7,7 @@ import { getToolDefinitions } from '../src/tools.js';
 import { insertDocument, getDb } from '../src/db.js';
 import { generateEmbedding, embeddingToBuffer } from '../src/embeddings/embed.js';
 import { similarDocs, NEAR_FLOOR, NEAR_K, DUP_THRESHOLD } from '../src/embeddings/search.js';
-import { RELATED_MIN } from '../src/write-note.js';
+import { RELATED_MIN, WRITE_SKIP_REASON } from '../src/write-note.js';
 import { createApiKeyMiddleware } from '../src/middleware/api-key.js';
 import v1Router from '../src/routes/v1.js';
 
@@ -59,9 +59,9 @@ async function plantNeighborAt(score, { title, content }) {
 const wrote = (title) => getDb().prepare('SELECT COUNT(*) c FROM documents WHERE title = ?').get(title).c;
 
 describe('an accepted note is told what it landed beside', () => {
-  // Each test owns the semantic space: similarDocs reads this table and nothing
-  // else, so emptying it isolates the scores from every note a sibling wrote.
-  beforeEach(() => getDb().exec('DELETE FROM embeddings'));
+  // Each test owns a complete semantic corpus. Leaving documents behind while
+  // deleting their embeddings correctly makes authored writes fail closed.
+  beforeEach(() => getDb().exec('DELETE FROM embeddings; DELETE FROM documents'));
 
   it('names related live notes as context after the write', async () => {
     const content = 'The relay clears its lease table on every restart, so leases never outlive a deploy.';
@@ -130,7 +130,7 @@ describe('an accepted note is told what it landed beside', () => {
     const body = JSON.parse(res.text);
     assert.deepStrictEqual(Object.keys(body), ['skipped', 'reason', 'matches', 'remedy'],
       'a refusal gains nothing — the blocker was always named in its own result');
-    assert.strictEqual(body.reason, 'duplicate_detected');
+    assert.strictEqual(body.reason, WRITE_SKIP_REASON.DUPLICATE);
     assert.strictEqual(wrote('Acknowledge after commit'), 0, 'the same notes are still refused');
   });
 
@@ -149,7 +149,7 @@ describe('an accepted note is told what it landed beside', () => {
 });
 
 describe('the pre-check and the write describe the same neighbourhood', () => {
-  beforeEach(() => getDb().exec('DELETE FROM embeddings'));
+  beforeEach(() => getDb().exec('DELETE FROM embeddings; DELETE FROM documents'));
 
   // The drift this guards shipped once in the other direction: kb_check_duplicate
   // green-lit content the write then refused. A pre-check that omits what the

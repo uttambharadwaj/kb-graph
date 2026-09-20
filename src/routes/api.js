@@ -221,7 +221,7 @@ router.post('/api/vault/reindex', authMiddleware, async (req, res) => {
     if (!vaultPath) {
       return res.status(400).json({ error: 'OBSIDIAN_VAULT_PATH not configured' });
     }
-    const result = await indexVault(vaultPath);
+    const result = await indexVault(vaultPath, { embeddings: true });
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });
