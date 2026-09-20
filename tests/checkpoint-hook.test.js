@@ -12,6 +12,7 @@ import { HOOK_ERROR_LOG } from '../src/cli/hook-io.js';
 import { AGENT } from '../src/process-ancestry.js';
 import {
   CHECKPOINT_DISABLED_FLAG,
+  CHECKPOINT_DECLINE_REASON,
   CHECKPOINT_ENABLED_FLAG,
   CHECKPOINT_LOG_DIR,
   CHECKPOINT_MESSAGES,
@@ -105,6 +106,8 @@ describe('normalizePostToolUse', () => {
       { status: 'aborted' },
       { interrupted: true },
       { timed_out: true },
+      { exit_code: 0, interrupted: true },
+      { exit_code: 0, status: 'cancelled' },
     ]) {
       const input = claudeFixture();
       input.tool_response = toolResponse;
@@ -201,10 +204,13 @@ describe('decideCheckpoint', () => {
 
   it('is default-off, capped, deduplicated, and kill-switchable', () => {
     const input = claudeFixture();
-    assert.equal(decideCheckpoint(input, { agent: AGENT.CLAUDE }).declineReason, 'disabled');
+    assert.equal(
+      decideCheckpoint(input, { agent: AGENT.CLAUDE }).declineReason,
+      CHECKPOINT_DECLINE_REASON.DISABLED,
+    );
     assert.equal(
       decideCheckpoint(input, { agent: AGENT.CLAUDE, enabled: true, killed: true }).declineReason,
-      'kill_switch',
+      CHECKPOINT_DECLINE_REASON.KILL_SWITCH,
     );
     assert.equal(
       decideCheckpoint(input, {
@@ -212,7 +218,7 @@ describe('decideCheckpoint', () => {
         enabled: true,
         seen: [CHECKPOINT_REASON.COMMIT_OR_MERGE],
       }).declineReason,
-      'duplicate',
+      CHECKPOINT_DECLINE_REASON.DUPLICATE,
     );
     assert.equal(
       decideCheckpoint(input, {
@@ -220,7 +226,7 @@ describe('decideCheckpoint', () => {
         enabled: true,
         seen: [CHECKPOINT_REASON.FULL_VERIFICATION, CHECKPOINT_REASON.RELEASE_OR_DEPLOY],
       }).declineReason,
-      'cap',
+      CHECKPOINT_DECLINE_REASON.CAP,
     );
   });
 
@@ -230,61 +236,61 @@ describe('decideCheckpoint', () => {
     delete missing.transcript_path;
     assert.equal(
       decideCheckpoint(missing, { agent: AGENT.CLAUDE, enabled: true }).declineReason,
-      'missing_identity',
+      CHECKPOINT_DECLINE_REASON.MISSING_IDENTITY,
     );
     const blank = claudeFixture();
     blank.session_id = '   ';
     assert.equal(
       decideCheckpoint(blank, { agent: AGENT.CLAUDE, enabled: true }).declineReason,
-      'missing_identity',
+      CHECKPOINT_DECLINE_REASON.MISSING_IDENTITY,
     );
     const oversized = claudeFixture();
     oversized.session_id = 's'.repeat(201);
     assert.equal(
       decideCheckpoint(oversized, { agent: AGENT.CLAUDE, enabled: true }).declineReason,
-      'missing_identity',
+      CHECKPOINT_DECLINE_REASON.MISSING_IDENTITY,
     );
     assert.equal(
       decideCheckpoint(cursorFixture(), { agent: AGENT.CURSOR, enabled: true }).declineReason,
-      'unsupported_agent',
+      CHECKPOINT_DECLINE_REASON.UNSUPPORTED_AGENT,
     );
     const denied = codexFixture();
     denied.permission_mode = 'read-only';
     assert.equal(
       decideCheckpoint(denied, { agent: AGENT.CODEX, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const neverApprove = codexFixture();
     neverApprove.approval_policy = 'never';
     delete neverApprove.permission_mode;
     assert.equal(
       decideCheckpoint(neverApprove, { agent: AGENT.CODEX, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const bypassed = codexFixture();
     bypassed.permission_mode = 'bypassPermissions';
     assert.equal(
       decideCheckpoint(bypassed, { agent: AGENT.CODEX, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const conflicting = codexFixture();
     conflicting.permission_mode = 'default';
     conflicting.approval_policy = 'never';
     assert.equal(
       decideCheckpoint(conflicting, { agent: AGENT.CODEX, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const sandboxed = codexFixture();
     sandboxed.sandbox_policy = { type: 'read-only' };
     assert.equal(
       decideCheckpoint(sandboxed, { agent: AGENT.CODEX, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const claudePlan = claudeFixture();
     claudePlan.permission_mode = 'plan';
     assert.equal(
       decideCheckpoint(claudePlan, { agent: AGENT.CLAUDE, enabled: true }).declineReason,
-      'write_denied',
+      CHECKPOINT_DECLINE_REASON.WRITE_DENIED,
     );
     const claudeBypass = claudeFixture();
     claudeBypass.permission_mode = 'bypassPermissions';
@@ -333,7 +339,7 @@ describe('bin/kb-checkpoint-hook.js', () => {
       Object.keys(row).sort(),
       ['agent', 'decline_reason', 'emitted', 'permission_mode', 'reason', 'session', 'ts'].sort(),
     );
-    assert.equal(row.decline_reason, 'disabled');
+    assert.equal(row.decline_reason, CHECKPOINT_DECLINE_REASON.DISABLED);
     assert.equal(JSON.stringify(row).includes('git commit'), false);
     assert.equal(JSON.stringify(row).includes('[main abc1234]'), false);
   });

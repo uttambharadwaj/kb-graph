@@ -22,6 +22,17 @@ export const CHECKPOINT_REASON = Object.freeze({
   RELEASE_OR_DEPLOY: 'release_or_deploy',
 });
 
+export const CHECKPOINT_DECLINE_REASON = Object.freeze({
+  CAP: 'cap',
+  DISABLED: 'disabled',
+  DUPLICATE: 'duplicate',
+  KILL_SWITCH: 'kill_switch',
+  MARKER_WRITE_FAILED: 'marker_write_failed',
+  MISSING_IDENTITY: 'missing_identity',
+  UNSUPPORTED_AGENT: 'unsupported_agent',
+  WRITE_DENIED: 'write_denied',
+});
+
 export const CHECKPOINT_MESSAGES = Object.freeze({
   [CHECKPOINT_REASON.COMMIT_OR_MERGE]:
     'KB CHECKPOINT: A source-control boundary completed. If this work produced durable verified knowledge, capture it now with kb_write (which owns dedupe); use supersedes when correcting an existing note. Skip transient progress.',
@@ -61,7 +72,6 @@ function responseSucceeded(response, agent) {
     : typeof rawExitCode === 'string' && /^-?\d+$/.test(rawExitCode)
       ? Number(rawExitCode)
       : null;
-  if (exitCode !== null) return exitCode === 0;
   if (
     object.is_error === true
     || object.isError === true
@@ -71,6 +81,11 @@ function responseSucceeded(response, agent) {
     || object.timed_out === true
     || object.timedOut === true
   ) return false;
+  if (
+    typeof object.status === 'string'
+    && /^(?:aborted|cancelled|canceled|error|failed|failure|interrupted|timeout|timed[_ -]?out)$/i.test(object.status)
+  ) return false;
+  if (exitCode !== null) return exitCode === 0;
   if (object.success === true) return true;
   return typeof object.status === 'string' && /^(?:completed|ok|success|succeeded)$/i.test(object.status);
 }
@@ -299,13 +314,14 @@ export function decideCheckpoint(input, {
   if (!reason) return null;
 
   let declineReason = null;
-  if (agent === AGENT.CURSOR) declineReason = 'unsupported_agent';
-  else if (!normalized.session) declineReason = 'missing_identity';
-  else if (writeDenied(input, normalized.permissionMode, agent)) declineReason = 'write_denied';
-  else if (killed) declineReason = 'kill_switch';
-  else if (!enabled) declineReason = 'disabled';
-  else if (seen.includes(reason)) declineReason = 'duplicate';
-  else if (seen.length >= MAX_SESSION_CHECKPOINTS) declineReason = 'cap';
+  if (agent === AGENT.CURSOR) declineReason = CHECKPOINT_DECLINE_REASON.UNSUPPORTED_AGENT;
+  else if (!normalized.session) declineReason = CHECKPOINT_DECLINE_REASON.MISSING_IDENTITY;
+  else if (writeDenied(input, normalized.permissionMode, agent)) {
+    declineReason = CHECKPOINT_DECLINE_REASON.WRITE_DENIED;
+  } else if (killed) declineReason = CHECKPOINT_DECLINE_REASON.KILL_SWITCH;
+  else if (!enabled) declineReason = CHECKPOINT_DECLINE_REASON.DISABLED;
+  else if (seen.includes(reason)) declineReason = CHECKPOINT_DECLINE_REASON.DUPLICATE;
+  else if (seen.length >= MAX_SESSION_CHECKPOINTS) declineReason = CHECKPOINT_DECLINE_REASON.CAP;
 
   return {
     declineReason,
@@ -343,7 +359,7 @@ function reserveCheckpoint(agent, session, reason) {
   try {
     writeFileSync(claimPath, `${reason}\n`, { flag: 'wx', mode: 0o600 });
   } catch (err) {
-    if (err?.code === 'EEXIST') return 'duplicate';
+    if (err?.code === 'EEXIST') return CHECKPOINT_DECLINE_REASON.DUPLICATE;
     throw err;
   }
 
@@ -363,7 +379,7 @@ function reserveCheckpoint(agent, session, reason) {
     }
   }
   unlinkSync(claimPath);
-  return 'cap';
+  return CHECKPOINT_DECLINE_REASON.CAP;
 }
 
 function sweepOldFiles() {
@@ -400,7 +416,7 @@ export function computeCheckpointHook(input, { agent } = {}) {
     } catch (err) {
       recordHookFailure('checkpoint-marker-write', err);
       decision.emit = false;
-      decision.declineReason = 'marker_write_failed';
+      decision.declineReason = CHECKPOINT_DECLINE_REASON.MARKER_WRITE_FAILED;
     }
   }
   try {
