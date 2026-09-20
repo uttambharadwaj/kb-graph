@@ -331,7 +331,13 @@ export async function processSessionCaptureQueue({
       if (receipt?.processedMtime >= mtime) {
         result.skipped++;
       } else {
-        const summary = await harvest({ onlyPath: transcriptPath, sessionId: request.sessionId, facts: false, maintenance: false });
+        const summary = await harvest({
+          onlyPath: transcriptPath,
+          sessionId: request.sessionId,
+          agent: request.agent,
+          facts: false,
+          maintenance: false,
+        });
         if (summary.errors > 0) throw new Error(`harvest reported ${summary.errors} extraction error(s)`);
         if (summary.coverageComplete !== true) {
           requeueIncomplete(queuePath, workingPath, leaseOwner, request, now);

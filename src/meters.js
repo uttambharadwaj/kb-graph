@@ -27,6 +27,12 @@ export const PRUNE_EXCLUDED = {
     'retrieval-report (coverage, freshness, hint follow-through, "asked to look") and hint-probe both '
     + 'read raw query text and per-document history over all time -- a day-bucketed rollup cannot hold '
     + 'which document or which prompt was involved, so pruning would silently change or shrink those reports.',
+  tool_calls:
+    'PF-4128 follow-through reporting joins raw tool calls to write decisions by session inside bounded time '
+    + 'windows -- a day/tool rollup discards session and agent identity, so pruning would make attribution impossible.',
+  write_decisions:
+    'PF-4128 follow-through reporting needs each raw write decision with its session, agent, source, and timestamp '
+    + '-- existing day/band rollups discard that identity and cannot reconstruct same-session attribution.',
   model_calls:
     "surface-report's MODEL CALLS section prints p50/p90 duration percentiles over all time -- percentiles "
     + 'need the full distribution, which a compact rollup cannot hold without keeping every row, so pruning '

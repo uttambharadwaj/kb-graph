@@ -25,6 +25,15 @@ function insertWriteDecision(db, { nearestId = null, nearestScore = null, thresh
   ).run(nearestId, nearestScore, threshold, refused, docId, createdAt);
 }
 
+function insertExtraction(db, { inputHash, createdAt }) {
+  db.prepare(`
+    INSERT INTO extractions (
+      input_hash, input_chars, chunk_count, chunk_chars, emitted_count,
+      skipped_count, duration_ms, created_at
+    ) VALUES (?, 10, 1, '[10]', 0, 0, 5, ?)
+  `).run(inputHash, createdAt);
+}
+
 // pruneMeters(table: 'tool_calls') deletes from the whole table, so a test
 // asserting an exact deleted count needs a database no other test's rows can
 // land in — this repo's tmp-kb.js gives one temp DB per *file*, not per test.
@@ -58,9 +67,13 @@ describe('migration 14 — meter_rollups', () => {
 });
 
 describe('meterGrowth — the measurement prune requires', () => {
-  it('reports all five meter tables, with an exclusion reason on exactly the two prune refuses', () => {
+  it('reports all five meter tables, with an exclusion reason on every raw-history table', () => {
     const rows = meterGrowth(getDb());
     assert.deepStrictEqual(rows.map(r => r.table), METER_TABLES);
+    assert.deepStrictEqual(
+      Object.keys(PRUNE_EXCLUDED).sort(),
+      ['model_calls', 'retrievals', 'tool_calls', 'write_decisions'],
+    );
     for (const r of rows) {
       if (r.table in PRUNE_EXCLUDED) assert.ok(r.excludedReason, `${r.table} should carry its exclusion reason`);
       else assert.strictEqual(r.excludedReason, null);
@@ -123,16 +136,16 @@ describe('kb meters prune — flag gate', () => {
 describe('pruneMeters — dry run', () => {
   it('counts correctly and deletes nothing', () => {
     const db = freshDb();
-    insertToolCall(db, { tool: 'kb_probe_dry', createdAt: timestampDaysAgo(30) });
-    insertToolCall(db, { tool: 'kb_probe_dry', createdAt: timestampDaysAgo(1) });
-    const before = db.prepare('SELECT COUNT(*) c FROM tool_calls').get().c;
+    insertExtraction(db, { inputHash: 'old', createdAt: timestampDaysAgo(30) });
+    insertExtraction(db, { inputHash: 'recent', createdAt: timestampDaysAgo(1) });
+    const before = db.prepare('SELECT COUNT(*) c FROM extractions').get().c;
 
-    const [result] = pruneMeters(db, { keepDays: 10, table: 'tool_calls', dryRun: true });
+    const [result] = pruneMeters(db, { keepDays: 10, table: 'extractions', dryRun: true });
     assert.strictEqual(result.dryRun, true);
     assert.strictEqual(result.deleted, 0);
     assert.strictEqual(result.wouldDelete, 1);
 
-    const after = db.prepare('SELECT COUNT(*) c FROM tool_calls').get().c;
+    const after = db.prepare('SELECT COUNT(*) c FROM extractions').get().c;
     assert.strictEqual(after, before, 'dry run must not delete');
     db.close();
   });
@@ -141,14 +154,14 @@ describe('pruneMeters — dry run', () => {
 describe('pruneMeters — deletes only older than N', () => {
   it('leaves the recent row, removes only the old one', () => {
     const db = freshDb();
-    insertToolCall(db, { tool: 'kb_probe_cutoff', durationMs: 111, createdAt: timestampDaysAgo(30) });
-    insertToolCall(db, { tool: 'kb_probe_cutoff', durationMs: 222, createdAt: timestampDaysAgo(1) });
+    insertExtraction(db, { inputHash: 'old-cutoff', createdAt: timestampDaysAgo(30) });
+    insertExtraction(db, { inputHash: 'recent-cutoff', createdAt: timestampDaysAgo(1) });
 
-    const [result] = pruneMeters(db, { keepDays: 10, table: 'tool_calls' });
+    const [result] = pruneMeters(db, { keepDays: 10, table: 'extractions' });
     assert.strictEqual(result.deleted, 1);
 
-    const remaining = db.prepare('SELECT duration_ms FROM tool_calls').all();
-    assert.deepStrictEqual(remaining, [{ duration_ms: 222 }]);
+    const remaining = db.prepare('SELECT input_hash FROM extractions').all();
+    assert.deepStrictEqual(remaining, [{ input_hash: 'recent-cutoff' }]);
     db.close();
   });
 });
@@ -175,13 +188,8 @@ describe('pruneMeters — empty tables', () => {
   });
 });
 
-// The load-bearing test: prune must not change what surface-report prints for
-// the tables it is allowed to touch. Seeds an old half and a recent half of
-// both tool_calls and write_decisions (write_decisions with one band whose
-// note later got superseded and one that did not), snapshots surfaceReport,
-// prunes the old half, and asserts the snapshot is unchanged.
-describe('rollup preserves surface-report numbers across a prune', () => {
-  it('tool demand and write-decision numbers are identical before and after', () => {
+describe('attribution meters retain raw rows', () => {
+  it('the default sweep leaves tool calls and write decisions untouched', () => {
     const db = getDb();
 
     insertToolCall(db, { tool: 'kb_probe_preserve', ok: 1, durationMs: 100, resultChars: 500, createdAt: timestampDaysAgo(30) });
@@ -207,19 +215,14 @@ describe('rollup preserves surface-report numbers across a prune', () => {
     insertWriteDecision(db, { nearestId: null, nearestScore: null, refused: 0, docId: liveDoc.id, createdAt: timestampDaysAgo(30) });
 
     const before = surfaceReport(db);
-    const results = pruneMeters(db, { keepDays: 10 }); // default sweep: tool_calls, write_decisions, extractions
+    const results = pruneMeters(db, { keepDays: 10 });
     const after = surfaceReport(db);
 
     assert.deepStrictEqual(after.tool, before.tool, 'TOOL SURFACE must read identical before and after the prune');
     assert.deepStrictEqual(after.write, before.write, 'WRITE DECISIONS must read identical before and after the prune');
-
-    // Sanity: the prune actually did something, so this is testing the fold,
-    // not a no-op. tool_calls: 3 of the 4 rows above are older than 10 days
-    // (ages 30, 29, 30). write_decisions: 3 of the 4 (ages 30, 30, 30).
-    const toolResult = results.find(r => r.table === 'tool_calls');
-    assert.strictEqual(toolResult.deleted, 3);
-    const writeResult = results.find(r => r.table === 'write_decisions');
-    assert.strictEqual(writeResult.deleted, 3);
+    assert.deepStrictEqual(results.map(result => result.table), ['extractions']);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM tool_calls').get().n, 4);
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM write_decisions').get().n, 4);
 
     // And the specific numbers this test exists to pin down:
     const preserved = after.tool.rows.find(r => r.tool === 'kb_probe_preserve');
@@ -227,7 +230,7 @@ describe('rollup preserves surface-report numbers across a prune', () => {
     assert.strictEqual(preserved.failed, 1);
     assert.ok(!after.tool.never.includes('kb_probe_preserve_gone'), 'a tool with only rolled-up history is not "never called"');
     const gone = after.tool.rows.find(r => r.tool === 'kb_probe_preserve_gone');
-    assert.strictEqual(gone.calls, 1, 'its one call now lives only in the rollup');
+    assert.strictEqual(gone.calls, 1);
 
     const band07 = after.write.bands.find(b => Math.abs(b.band - 0.7) < 1e-9);
     assert.strictEqual(band07.n, 2);

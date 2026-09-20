@@ -206,7 +206,7 @@ async function withWriteLock(run) {
 async function writeNoteUnlocked(
   vaultPath,
   { title, content, type = 'capture', tags, project, source, tier, tier_ref, excludeId },
-  { findSimilar = similarDocs } = {},
+  { findSimilar = similarDocs, writeAttribution } = {},
 ) {
   // Refused loudly, before anything is written: a caller told its note was
   // saved has no reason to check what tier it actually landed on.
@@ -240,7 +240,12 @@ async function writeNoteUnlocked(
   const nearest = similar[0] ?? null;
   const dups = duplicatesIn(similar);
   if (dups.length) {
-    logWriteDecision({ nearest, threshold: DUP_THRESHOLD, refused: true });
+    logWriteDecision({
+      nearest,
+      threshold: DUP_THRESHOLD,
+      refused: true,
+      ...writeAttribution,
+    });
     // write_decisions (above) already durably records this refusal, but only
     // its single nearest match — retrievals is the analysis store `kb
     // rediscoveries` reads, so it gets its own row per match here. A caller
@@ -321,7 +326,13 @@ async function writeNoteUnlocked(
   const docId = getVaultFile(relPath)?.document_id || null;
   if (docId) insertDocLinks(docId, related);
 
-  logWriteDecision({ nearest, threshold: DUP_THRESHOLD, refused: false, docId });
+  logWriteDecision({
+    nearest,
+    threshold: DUP_THRESHOLD,
+    refused: false,
+    docId,
+    ...writeAttribution,
+  });
   return {
     skipped: false,
     path: relPath,

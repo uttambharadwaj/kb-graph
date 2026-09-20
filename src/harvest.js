@@ -18,6 +18,7 @@ import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote, WRITE_SKIP_REASON } from './write-note.js';
 import { HARVEST_SOURCE_PREFIX } from './tiers.js';
+import { WRITE_DECISION_SOURCE } from './write-meter.js';
 import {
   defaultTranscriptRoots,
   isActualSubagentTranscript,
@@ -429,7 +430,14 @@ export const harvestExtractOptions = options => ({
 });
 
 async function harvestTranscript(path, mtime, {
-  vaultPath, dryRun, facts: wantFacts, db = getDb(), extract = kbExtract, write = writeNote,
+  vaultPath,
+  dryRun,
+  facts: wantFacts,
+  sessionId = null,
+  agent = null,
+  db = getDb(),
+  extract = kbExtract,
+  write = writeNote,
 }) {
   const raw = readFileSync(path, 'utf-8');
   const { text, recognizedTurns, unsupportedTurns } = parseTranscript(raw);
@@ -521,6 +529,12 @@ async function harvestTranscript(path, mtime, {
         tags,
         project: n.project || undefined,
         source,
+      }, {
+        writeAttribution: {
+          session: sessionId,
+          agent,
+          source: WRITE_DECISION_SOURCE.HARVEST,
+        },
       });
       if (res.reason === WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE) {
         lessonErrors++;
@@ -594,6 +608,7 @@ export async function runHarvest({
   facts,
   searchRoots,
   sessionId = null,
+  agent = null,
   recordOutcomes = null,
   maintenance = true,
   runMaintenance = null,
@@ -636,7 +651,14 @@ export async function runHarvest({
   for (const { path, mtime, sessionId: candidateSessionId = null } of work) {
     try {
       const r = await harvestOne(path, mtime, {
-        vaultPath, dryRun, facts: wantFacts, db, extract, write,
+        vaultPath,
+        dryRun,
+        facts: wantFacts,
+        sessionId: candidateSessionId,
+        agent,
+        db,
+        extract,
+        write,
       });
       if (r.skipped) {
         summary.tooShort++;

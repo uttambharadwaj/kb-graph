@@ -122,6 +122,7 @@ describe('session capture queue', () => {
         calls++;
         assert.equal(options.onlyPath, path);
         assert.equal(options.sessionId, 's-1');
+        assert.equal(options.agent, 'codex');
         assert.equal(options.facts, false);
         assert.equal(options.maintenance, false);
         return { sessions: 0, notes: 0, tooShort: 1, errors: 0, coverageComplete: true };

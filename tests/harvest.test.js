@@ -82,6 +82,7 @@ const { extractTranscriptText, chunkText, chunkTextWithIdentity, runHarvest, run
 const { HARVEST_EXTRACT_CALL_BUDGET_MS } = await import('../src/extract.js');
 const { getDb, getHealth } = await import('../src/db.js');
 const { WRITE_SKIP_REASON } = await import('../src/write-note.js');
+const { WRITE_DECISION_SOURCE } = await import('../src/write-meter.js');
 
 describe('harvest transcript parsing', () => {
   it('keeps evidence-strength guidance in the production lessons prompt', () => {
@@ -902,6 +903,66 @@ describe('harvest candidate selection', () => {
     await runHarvest({ onlyPath: path, sessionId: 'hook-session', recordOutcomes: async args => calls.push(args) });
 
     assert.deepStrictEqual(calls, [{ sessionId: 'hook-session', transcriptPath: path, transcriptMtime: mtime }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('passes lifecycle attribution through to injected note writers', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'attributed-capture.jsonl');
+    const writes = [];
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `MIDDLE_SENTINEL ${'x'.repeat(5000)}` }] },
+      }),
+    ].join('\n'));
+
+    await runHarvest({
+      onlyPath: path,
+      sessionId: 'capture-session',
+      agent: 'cursor',
+      write: async (...args) => {
+        writes.push(args);
+        return { skipped: false };
+      },
+    });
+
+    assert.strictEqual(writes.length, 1);
+    assert.deepStrictEqual(writes[0][2].writeAttribution, {
+      session: 'capture-session',
+      agent: 'cursor',
+      source: WRITE_DECISION_SOURCE.HARVEST,
+    });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('passes explicit null attribution for nightly harvest writes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
+    const path = join(root, 'nightly-attribution.jsonl');
+    const writes = [];
+    writeTranscript(path, [
+      JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `MIDDLE_SENTINEL ${'y'.repeat(5000)}` }] },
+      }),
+    ].join('\n'));
+
+    await runHarvest({
+      onlyPath: path,
+      write: async (...args) => {
+        writes.push(args);
+        return { skipped: false };
+      },
+    });
+
+    assert.strictEqual(writes.length, 1);
+    assert.deepStrictEqual(writes[0][2].writeAttribution, {
+      session: null,
+      agent: null,
+      source: WRITE_DECISION_SOURCE.HARVEST,
+    });
     rmSync(root, { recursive: true, force: true });
   });
 

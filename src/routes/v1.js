@@ -13,6 +13,7 @@ import {
 } from '../db.js';
 import { writeNote, nearNeighborFields, WRITE_SKIP_REASON } from '../write-note.js';
 import { SURFACE, logRetrievalResults } from '../retrieval.js';
+import { WRITE_DECISION_SOURCE } from '../write-meter.js';
 
 const router = Router();
 
@@ -208,7 +209,11 @@ router.post('/ingest', async (req, res) => {
 
   try {
     const vaultPath = process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
-    const result = await writeNote(vaultPath, { title, content, type: 'capture', tags });
+    const result = await writeNote(
+      vaultPath,
+      { title, content, type: 'capture', tags },
+      { writeAttribution: { source: WRITE_DECISION_SOURCE.REST } },
+    );
     if (result.reason === WRITE_SKIP_REASON.DEDUPE_UNAVAILABLE) return res.status(503).json(result);
     if (result.skipped) return res.status(409).json(result);
     res.status(201).json({ id: result.docId, title, path: result.path, related: result.related, ...nearNeighborFields(result) });

@@ -28,6 +28,7 @@ import { canonicalTag, getTagAliasMap } from './tags.js';
 import { SURFACE, logRetrievalResults } from './retrieval.js';
 import { reviewedFactGroupStates } from './fact-reviews.js';
 import { buildContextPacket } from './context-packet.js';
+import { WRITE_DECISION_SOURCE } from './write-meter.js';
 
 function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
@@ -297,7 +298,11 @@ function defineTools() {
           if (supersedes != null && !getDocument(supersedes)) {
             return { content: [{ type: 'text', text: `Error: supersedes target #${supersedes} not found.` }], isError: true };
           }
-          const result = await writeNote(getVaultPath(), { title, content, type, tags, project, tier, tier_ref, excludeId: supersedes });
+          const result = await writeNote(
+            getVaultPath(),
+            { title, content, type, tags, project, tier, tier_ref, excludeId: supersedes },
+            { writeAttribution: { source: WRITE_DECISION_SOURCE.MCP } },
+          );
           if (result.skipped) return writeRefusal(result);
 
           // The note is on disk and indexed from here on, so nothing below may

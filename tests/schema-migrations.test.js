@@ -330,4 +330,41 @@ describe('migrating forward from an older schema', () => {
     assert.ok(hasIndex(db, 'idx_retrieval_outcomes_doc_version'));
   });
 
+  it('adds nullable attribution without inventing it for historical meter rows', () => {
+    const db = new Database(':memory:');
+    applyMigrations(db, KB_MIGRATIONS.filter(migration => migration.version <= 28));
+    db.exec(`
+      DROP INDEX idx_write_decisions_session_created;
+      DROP INDEX idx_tool_calls_session_created;
+      ALTER TABLE write_decisions DROP COLUMN source;
+      ALTER TABLE write_decisions DROP COLUMN agent;
+      ALTER TABLE write_decisions DROP COLUMN session;
+      ALTER TABLE tool_calls DROP COLUMN agent;
+    `);
+    db.prepare(`
+      INSERT INTO tool_calls (tool, ok, duration_ms, session)
+      VALUES ('kb_legacy', 1, 10, 'legacy-session')
+    `).run();
+    db.prepare(`
+      INSERT INTO write_decisions (threshold, refused)
+      VALUES (0.82, 0)
+    `).run();
+
+    assert.deepStrictEqual(
+      applyMigrations(db, KB_MIGRATIONS).map(migration => migration.version),
+      [29],
+    );
+
+    assert.deepStrictEqual(
+      db.prepare('SELECT session, agent, source FROM write_decisions').get(),
+      { session: null, agent: null, source: null },
+    );
+    assert.deepStrictEqual(
+      db.prepare('SELECT session, agent FROM tool_calls').get(),
+      { session: 'legacy-session', agent: null },
+    );
+    assert.ok(hasIndex(db, 'idx_write_decisions_session_created'));
+    assert.ok(hasIndex(db, 'idx_tool_calls_session_created'));
+  });
+
 });

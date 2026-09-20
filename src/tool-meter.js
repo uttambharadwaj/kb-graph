@@ -9,7 +9,7 @@
 // is metered without anyone remembering to do it — the property that matters,
 // since the tools nobody routes to are exactly the ones nobody instruments.
 import { getDb } from './db.js';
-import { resolveSessionId } from './retrieval.js';
+import { resolveAgent, resolveSessionId } from './retrieval.js';
 
 // Enough of a failure to recognise it and group by it; the full text is in the
 // caller's transcript, and a meter is not a log.
@@ -18,11 +18,29 @@ const ERROR_MAX_CHARS = 200;
 // Never let telemetry break a tool call: insert failures are swallowed so the
 // caller still gets its result, but logged loudly since a silent failure here
 // means the meter quietly goes blind — same contract as retrieval.js.
-function logToolCall({ tool, ok, durationMs, resultChars = null, error = null, session = resolveSessionId() }) {
+function logToolCall({
+  tool,
+  ok,
+  durationMs,
+  resultChars = null,
+  error = null,
+  session = resolveSessionId(),
+  agent = resolveAgent(),
+}) {
   try {
     getDb().prepare(
-      'INSERT INTO tool_calls (tool, ok, duration_ms, result_chars, error, session) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(tool, ok ? 1 : 0, Math.round(durationMs), resultChars, error?.slice(0, ERROR_MAX_CHARS) ?? null, session);
+      `INSERT INTO tool_calls
+        (tool, ok, duration_ms, result_chars, error, session, agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      tool,
+      ok ? 1 : 0,
+      Math.round(durationMs),
+      resultChars,
+      error?.slice(0, ERROR_MAX_CHARS) ?? null,
+      session,
+      agent,
+    );
   } catch (err) {
     console.error(`[KB] tool call log failed (tool=${tool}): ${err.message}`);
   }
