@@ -106,10 +106,9 @@ Nightly harvest is a safety net, not guaranteed capture. By default it scans
 Claude Code, Codex, and Cursor transcripts, but skips short, still-active,
 subagent, and print-mode sessions. Work is capped per run and long transcripts
 are processed in bounded chunks. Set `KB_HARVEST_SDK_SESSIONS=1` if print-mode
-sessions are genuine work you want harvested during a manual
-`node bin/kb.js harvest` run. Setup-generated scheduled jobs do not currently
-carry that flag. Fact extraction remains opt-in with `KB_HARVEST_FACTS=1`;
-scheduled jobs snapshot that setting, so rerun setup after changing it.
+sessions are genuine work you want harvested. Fact extraction remains opt-in
+with `KB_HARVEST_FACTS=1`. Scheduled jobs snapshot both settings, so rerun setup
+after changing either one.
 
 ### Consolidate and review
 

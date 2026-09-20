@@ -26,6 +26,24 @@ test('the harvest job carries KB_HARVEST_FACTS, and only the harvest job', () =>
   assert.doesNotMatch(renderPlist(harvest, OPTS), /KB_HARVEST_FACTS/, 'unset must not write an empty opt-in');
 });
 
+test('the harvest job carries only validated print-mode session opt-ins', () => {
+  const [harvest, reindex] = JOBS;
+
+  for (const value of ['1', 'true', 'YES']) {
+    const opts = { ...OPTS, harvestSdkSessions: value };
+    assert.match(renderPlist(harvest, opts), /<key>KB_HARVEST_SDK_SESSIONS<\/key>\s*<string>1<\/string>/);
+    assert.match(renderSystemdUnits(harvest, opts).service, /Environment="KB_HARVEST_SDK_SESSIONS=1"/);
+    assert.doesNotMatch(renderPlist(reindex, opts), /KB_HARVEST_SDK_SESSIONS/);
+    assert.doesNotMatch(renderSystemdUnits(reindex, opts).service, /KB_HARVEST_SDK_SESSIONS/);
+  }
+
+  for (const value of [undefined, '', '0', 'false', 'no', 'invalid']) {
+    const opts = { ...OPTS, harvestSdkSessions: value };
+    assert.doesNotMatch(renderPlist(harvest, opts), /KB_HARVEST_SDK_SESSIONS/);
+    assert.doesNotMatch(renderSystemdUnits(harvest, opts).service, /KB_HARVEST_SDK_SESSIONS/);
+  }
+});
+
 test('renderPlist mirrors the reference install', () => {
   const harvest = renderPlist(JOBS[0], OPTS);
   assert.match(harvest, /<string>com\.kb\.harvest<\/string>/);
@@ -96,7 +114,24 @@ test('installJobs surfaces mkdir failure as an error step, never throws', () => 
 test('installJobs with load:false writes files and never shells out', () => {
   const home = mkdtempSync(join(tmpdir(), 'kbjobs-'));
   const logsDir = join(home, '.knowledge-base', 'logs');
-  const result = installJobs({ home, ...OPTS, logsDir, load: false });
+  const previous = process.env.KB_HARVEST_SDK_SESSIONS;
+  let result;
+  try {
+    process.env.KB_HARVEST_SDK_SESSIONS = 'yes';
+    installJobs({ home, ...OPTS, logsDir, load: false });
+    const jobPath = process.platform === 'darwin'
+      ? join(home, 'Library', 'LaunchAgents', 'com.kb.harvest.plist')
+      : join(home, '.config', 'systemd', 'user', 'kb-harvest.service');
+    assert.match(readFileSync(jobPath, 'utf8'), /KB_HARVEST_SDK_SESSIONS/);
+
+    process.env.KB_HARVEST_SDK_SESSIONS = 'false';
+    result = installJobs({ home, ...OPTS, logsDir, load: false });
+    assert.doesNotMatch(readFileSync(jobPath, 'utf8'), /KB_HARVEST_SDK_SESSIONS/,
+      'rerunning setup with the opt-in disabled must replace the old job definition');
+  } finally {
+    if (previous === undefined) delete process.env.KB_HARVEST_SDK_SESSIONS;
+    else process.env.KB_HARVEST_SDK_SESSIONS = previous;
+  }
   assert.equal(result.steps.filter(s => !s.error).length, 4);
   // launchd will not create the directory it redirects into, so install must.
   assert.ok(existsSync(logsDir), 'the log directory must exist before the job first runs');

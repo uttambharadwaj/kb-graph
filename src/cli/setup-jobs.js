@@ -24,6 +24,9 @@ const sdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
 // against the launcher's cwd (/ under launchd), not the install. Whatever the
 // job needs has to be written into the unit here, and changing it later means
 // re-running `kb setup`.
+const optInEnabled = value =>
+  ['1', 'true', 'yes'].includes(String(value ?? '').toLowerCase());
+
 const jobEnv = (job, opts) => ({
   OBSIDIAN_VAULT_PATH: opts.vaultPath,
   CLAUDE_PATH: opts.claudePath ?? '',
@@ -37,6 +40,9 @@ const jobEnv = (job, opts) => ({
   ])].join(':'),
   // Only the harvest reads it, and only when the installing environment set it.
   ...(job.name === 'harvest' && opts.harvestFacts ? { KB_HARVEST_FACTS: opts.harvestFacts } : {}),
+  ...(job.name === 'harvest' && optInEnabled(opts.harvestSdkSessions)
+    ? { KB_HARVEST_SDK_SESSIONS: '1' }
+    : {}),
 });
 
 export function renderPlist(job, opts) {
@@ -93,8 +99,18 @@ WantedBy=timers.target
   return { service, timer };
 }
 
-export function installJobs({ home, nodeBin, kbRoot, vaultPath, claudePath, harvestFacts = process.env.KB_HARVEST_FACTS, load = true, logsDir = LOGS_DIR }) {
-  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts, logsDir };
+export function installJobs({
+  home,
+  nodeBin,
+  kbRoot,
+  vaultPath,
+  claudePath,
+  harvestFacts = process.env.KB_HARVEST_FACTS,
+  harvestSdkSessions = process.env.KB_HARVEST_SDK_SESSIONS,
+  load = true,
+  logsDir = LOGS_DIR,
+}) {
+  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts, harvestSdkSessions, logsDir };
   const steps = [];
   // launchd does not create the directory it is told to redirect into; a
   // missing one makes the job fail before it runs, with nowhere to say so.

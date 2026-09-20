@@ -172,6 +172,10 @@ export function buildEnvContent(cfg) {
     '# copy, so changing it here later needs a `kb setup` re-run.',
     '# KB_HARVEST_FACTS=1',
     '',
+    '# Include print-mode/SDK sessions in manual and scheduled harvests.',
+    '# Off by default. Set it before `kb setup`; scheduled jobs take a copy.',
+    '# KB_HARVEST_SDK_SESSIONS=1',
+    '',
   ];
 
   // API keys per agent

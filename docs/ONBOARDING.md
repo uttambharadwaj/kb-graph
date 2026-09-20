@@ -77,8 +77,9 @@ node bin/kb.js search onboarding
 
 Harvest skips short, active, subagent, and print-mode sessions by default and
 caps work per run. Use `/debrief` after substantial sessions when you want
-immediate, deliberate capture. If you change `KB_HARVEST_FACTS`, rerun setup so
-the scheduled job receives the new value.
+immediate, deliberate capture. Set `KB_HARVEST_SDK_SESSIONS=1` to include
+print-mode sessions. If you change it or `KB_HARVEST_FACTS`, rerun setup so the
+scheduled job receives the new value.
 
 ## Logs and troubleshooting
 

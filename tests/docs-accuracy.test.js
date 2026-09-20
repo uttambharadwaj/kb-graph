@@ -44,10 +44,15 @@ describe('public documentation contract', () => {
       vaultPath: '/home/user/vault',
       claudePath: '/usr/bin/claude',
       logsDir: '/home/user/.knowledge-base/logs',
+      harvestSdkSessions: '1',
     };
     const scheduled = `${renderPlist(JOBS[0], opts)}\n${renderSystemdUnits(JOBS[0], opts).service}`;
-    assert.doesNotMatch(scheduled, /KB_HARVEST_SDK_SESSIONS/);
-    assert.match(readme, /scheduled jobs do not currently\s+carry that flag/i);
+    assert.match(scheduled, /KB_HARVEST_SDK_SESSIONS/);
+    assert.doesNotMatch(readme, /scheduled jobs do not currently\s+carry that flag/i);
+    for (const doc of [readme, onboarding]) {
+      assert.match(doc, /KB_HARVEST_SDK_SESSIONS/);
+      assert.match(doc, /rerun setup/i);
+    }
     assert.match(readme, /Linux jobs use the\s+systemd journal/i);
     assert.match(
       readme,
