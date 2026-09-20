@@ -11,7 +11,7 @@ What problem does it solve or what feature does it add?
 - [ ] Ran `npm test`
 - [ ] Tested affected MCP tools
 - [ ] Existing functionality still works
-- [ ] No breaking changes to tool interfaces
+- [ ] No uncoordinated breaking changes to tool interfaces
 
 ## Files changed
 

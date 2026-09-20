@@ -18,13 +18,14 @@ Include the affected version or commit, the impact, reproduction steps, and a
 minimal proof of concept when possible. Redact credentials, API keys, vault
 contents, transcripts, and other private data.
 
-This is a maintainer-run project. The target is to acknowledge a report within
-seven days. Investigation and remediation time depends on severity and
-maintainer availability, so there is no fixed resolution SLA.
+This is a maintainer-run project. We make a best-effort attempt to acknowledge
+a report within seven days. Investigation and remediation time depends on
+severity and maintainer availability, so there is no fixed resolution SLA.
 
 ## Scope
 
-Security reports are in scope when they concern:
+Vulnerabilities in kb-graph project code and dependencies are in scope.
+Examples include:
 
 - HTTP authentication, authorization, or API-key handling;
 - untrusted input crossing hook or resident-daemon boundaries;
@@ -35,8 +36,10 @@ Security reports are in scope when they concern:
 The following documented deployment and data-flow boundaries are not
 vulnerabilities by themselves:
 
-- Claude-backed curation may send selected transcript or note content through
-  the operator's authenticated Claude CLI to its configured provider; and
+- Claude-backed curation may send transcript chunks, note metadata, note
+  content, source paths, state and fact excerpts, and action descriptions
+  through the operator's authenticated Claude CLI to its configured provider;
+  and
 - operators who intentionally expose the HTTP server remotely are responsible
   for authentication and a correctly configured TLS-terminating reverse proxy.
 

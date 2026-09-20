@@ -14,6 +14,9 @@ const readme = read('README.md');
 const onboarding = read('docs/ONBOARDING.md');
 const contributing = read('CONTRIBUTING.md');
 const security = read('SECURITY.md');
+const bugReport = read('.github/ISSUE_TEMPLATE/bug_report.md');
+const agentTask = read('.github/ISSUE_TEMPLATE/agent_task.md');
+const pullRequestTemplate = read('.github/pull_request_template.md');
 const pkg = JSON.parse(read('package.json'));
 const privateReportUrl = 'https://github.com/uttambharadwaj/kb-graph/security/advisories/new';
 const issueTemplateDir = resolve(root, '.github/ISSUE_TEMPLATE');
@@ -57,6 +60,19 @@ describe('public documentation contract', () => {
     assert.ok(security.includes(privateReportUrl));
     assert.match(security, /\]\(docs\/UPGRADING-2\.0\.md\)/);
     assert.doesNotMatch(security, /npm install|\bmaster\b/i);
+    assert.match(security, /project code and dependencies/i);
+    assert.match(security, /Examples include/i);
+    assert.match(security, /best-effort[\s\S]{0,100}seven days|seven days[\s\S]{0,100}best-effort/i);
+    for (const disclosed of [
+      /transcript chunks/i,
+      /note metadata/i,
+      /note\s+content/i,
+      /source paths/i,
+      /state.+fact excerpts/is,
+      /action descriptions/i,
+    ]) {
+      assert.match(security, disclosed);
+    }
   });
 
   it('routes community questions and security reports safely', () => {
@@ -68,6 +84,14 @@ describe('public documentation contract', () => {
     assert.match(question, /node bin\/kb\.js status/);
     assert.match(question, /Claude Code.+Codex.+Cursor.+Gemini/s);
     assert.match(question, /Never include passwords, API keys, tokens/);
+  });
+
+  it('directs scheduled-job reports to the platform-specific logs', () => {
+    assert.match(bugReport, /~\/\.knowledge-base\/logs\//);
+    for (const { name } of JOBS) {
+      assert.match(bugReport, new RegExp(`journalctl --user -u kb-${name}\\.service`));
+    }
+    assert.doesNotMatch(bugReport, /journalctl --user -u kb-serve/);
   });
 
   it('uses only live issue labels and documents every one used', () => {
@@ -95,21 +119,32 @@ describe('public documentation contract', () => {
     assert.match(contributing, /Issues.+support|support.+Issues/is);
     assert.match(contributing, /Discussions.+disabled/is);
     assert.match(contributing, /\]\(SECURITY\.md\)/);
-    assert.match(read('.github/pull_request_template.md'), /npm test/);
+    assert.match(contributing, /commonly used.+labels/is);
+    assert.doesNotMatch(contributing, /repository currently uses these labels/i);
+    assert.match(contributing, /\]\(README\.md\)/);
+    assert.doesNotMatch(contributing, /llms\.txt/i);
+    assert.doesNotMatch(agentTask, /llms\.txt/i);
+    assert.match(agentTask, /README\.md/);
+    assert.match(pullRequestTemplate, /npm test/);
+    assert.match(agentTask, /No uncoordinated breaking changes/);
+    assert.match(pullRequestTemplate, /No uncoordinated breaking changes/);
+    assert.match(contributing, /serv(?:e|es|ing)[\s\S]{0,40}prior code/i);
+    assert.doesNotMatch(contributing, /served by nothing/i);
+    assert.doesNotMatch(contributing, /Run `npm test` before opening a pull request/i);
   });
 
   it('removes stale public contributor guidance', () => {
     const contributorDocs = [
       contributing,
-      read('.github/ISSUE_TEMPLATE/bug_report.md'),
-      read('.github/ISSUE_TEMPLATE/agent_task.md'),
-      read('.github/pull_request_template.md'),
+      bugReport,
+      agentTask,
+      pullRequestTemplate,
     ].join('\n');
     assert.doesNotMatch(
       contributorDocs,
       /knowledge-base-server|good-first-issue|latest master|journalctl -u kb-server|npm install|kb_deduplicate|Kubernetes|cloud deployment/i,
     );
-    assert.doesNotMatch(read('.github/pull_request_template.md'), /kb start/i);
+    assert.doesNotMatch(pullRequestTemplate, /kb start/i);
   });
 
   it('discloses current scheduler and HTTP boundaries', () => {

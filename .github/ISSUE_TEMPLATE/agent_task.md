@@ -20,11 +20,11 @@ Why this matters and how it fits into the system.
 - [ ] Criterion 1
 - [ ] Criterion 2
 - [ ] Existing MCP tools still work
-- [ ] No breaking changes to tool interfaces
+- [ ] No uncoordinated breaking changes to tool interfaces
 
 **How to Start**
 Tell your AI agent:
-> "Read llms.txt and EXTENDING.md in the kb-graph repo, then implement issue #N."
+> "Read README.md in the kb-graph repo, then implement issue #N. Read EXTENDING.md too if the task changes an extension point."
 
 **Difficulty**
 - [ ] Easy (< 1 hour with AI)

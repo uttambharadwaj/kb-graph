@@ -13,7 +13,7 @@ redacted reproduction. GitHub Discussions are deliberately disabled.
 Do not open a public issue for a suspected vulnerability. Follow the private
 reporting process in the [security policy](SECURITY.md).
 
-The repository currently uses these labels:
+Commonly used labels for incoming issues are:
 
 - `bug` — confirmed or reproducible defects
 - `documentation` — documentation changes
@@ -27,7 +27,7 @@ The repository currently uses these labels:
 
 1. Fork and clone `kb-graph`.
 2. Create a focused feature branch.
-3. Read [llms.txt](llms.txt) and, for extension work,
+3. Read the [README](README.md) first. For extension work, also read
    [EXTENDING.md](EXTENDING.md).
 4. Make the change and add or update tests.
 5. Run `npm test`.
@@ -75,7 +75,7 @@ While developing, mind which process serves your code:
 
 - **Daemon running:** it deliberately does not watch `src/` — restart it after
   edits (`launchctl kickstart -k gui/$(id -u)/com.kb.serve` /
-  `systemctl --user restart kb-serve`) or your changes are served by nothing.
+  `systemctl --user restart kb-serve`) or it continues serving the prior code.
 - **No daemon (in-process fallback / direct `kb mcp`):** `kb mcp` is a
   supervisor — it holds the client's stdio connection and runs the real server
   (`src/mcp.js`) as a child, replacing that child whenever a `.js` or `.json`
@@ -88,8 +88,6 @@ While developing, mind which process serves your code:
 
 `kb stale-servers` lists running servers that predate their own checkout's last
 source change — the ones that will never notice on their own.
-
-Run `npm test` before opening a pull request.
 
 ## License
 

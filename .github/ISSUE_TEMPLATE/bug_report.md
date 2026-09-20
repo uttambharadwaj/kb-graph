@@ -26,7 +26,14 @@ What should have happened.
 **Logs**
 Paste relevant error output after redacting secrets and private data. On macOS,
 scheduled-job logs are under `~/.knowledge-base/logs/`. On Linux, use the
-systemd user journal, for example `journalctl --user -u kb-serve`.
+systemd user journal for the affected scheduled job:
+
+```bash
+journalctl --user -u kb-harvest.service
+journalctl --user -u kb-reindex.service
+journalctl --user -u kb-synthesis.service
+journalctl --user -u kb-reconcile.service
+```
 
 **Did your AI agent help debug this?**
 If yes, what did it find? (We're building a self-learning system -- your debugging context helps everyone.)
