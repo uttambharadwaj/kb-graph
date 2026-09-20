@@ -33,17 +33,28 @@ export function mcpServerConfig(agent = null) {
 
 export const KB_MCP_SERVER_CONFIG = mcpServerConfig();
 
-// Absent and unreadable are different answers. Treating both as "empty config"
-// means one bad parse rewrites the file as nothing but our own entry, and
-// ~/.claude.json holds the user's whole Claude Code configuration.
+// Absent and invalid/unreadable are different answers. Treating either invalid
+// JSON or an unsafe shape as "empty config" would replace the file with our
+// entry, and ~/.claude.json holds the user's whole Claude Code configuration.
 function readJson(path) {
   if (!existsSync(path)) return {};
   const raw = readFileSync(path, 'utf-8');
+  let config;
   try {
-    return JSON.parse(raw);
+    config = JSON.parse(raw);
   } catch (err) {
     throw new Error(`${path} is not valid JSON (${err.message}). Refusing registration because it cannot be safely inspected.`);
   }
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`${path} must contain a JSON object. Refusing registration because it cannot be safely inspected.`);
+  }
+  if (Object.prototype.hasOwnProperty.call(config, 'mcpServers')
+    && (config.mcpServers === null
+      || typeof config.mcpServers !== 'object'
+      || Array.isArray(config.mcpServers))) {
+    throw new Error(`${path} field "mcpServers" must be a JSON object. Refusing registration because it cannot be safely inspected.`);
+  }
+  return config;
 }
 
 export function findCursorWorkspaceConfig(cwd, homeDir = homedir()) {
@@ -176,7 +187,11 @@ export function codexRegistrationSnippet() {
  * Every agent comes back with an outcome, so a caller cannot mistake a refusal
  * for a write it simply didn't look at.
  */
-export function registerAgents(agents, homeDir = homedir(), { force = false, cwd } = {}) {
+export function registerAgents(agents, homeDir = homedir(), {
+  force = false,
+  cwd,
+  privateFileOptions,
+} = {}) {
   const plans = [];
   for (const agent of agents) {
     const path = getAgentConfigPath(agent, homeDir);
@@ -205,10 +220,8 @@ export function registerAgents(agents, homeDir = homedir(), { force = false, cwd
       if (workspacePath !== null) targetPaths.push(workspacePath);
     }
 
-    // Read and evaluate every Cursor target before writing either one. Cursor
-    // gives a workspace config precedence over the home config, so a partial
-    // update would leave the active registration stale or move only one file
-    // to a different checkout.
+    // Read and evaluate every target before any invocation-wide write. Cursor
+    // additionally treats home and workspace configs as one refusal unit.
     const targets = targetPaths.map(targetPath => loadRegistrationTarget(agent, targetPath));
     const refused = !force && targets.some(
       target => target.from !== null && target.from !== KB_ENTRYPOINT_PATH,
@@ -225,6 +238,22 @@ export function registerAgents(agents, homeDir = homedir(), { force = false, cwd
     }
   }
 
+  // Stage and commit every writable agent plan in one transaction. A late
+  // Cursor target failure must not leave an earlier Claude/Gemini target
+  // updated by the same registerAgents invocation.
+  const writableFiles = plans.flatMap(plan => plan.files ?? []);
+  for (const file of writableFiles) {
+    mkdirSync(dirname(file.path), { recursive: true });
+    // Remove the fixed-name temp file used before private writes gained
+    // collision-resistant, ignored names.
+    rmSync(`${file.path}.kb-tmp`, { force: true });
+  }
+  if (writableFiles.length === 1) {
+    writePrivateFile(writableFiles[0].path, writableFiles[0].content);
+  } else if (writableFiles.length > 1) {
+    writePrivateFiles(writableFiles, privateFileOptions);
+  }
+
   const results = [];
   for (const plan of plans) {
     if (plan.manual) {
@@ -236,17 +265,6 @@ export function registerAgents(agents, homeDir = homedir(), { force = false, cwd
       continue;
     }
 
-    for (const file of plan.files) {
-      mkdirSync(dirname(file.path), { recursive: true });
-      // Remove the fixed-name temp file used before private writes gained
-      // collision-resistant, ignored names.
-      rmSync(`${file.path}.kb-tmp`, { force: true });
-    }
-    if (plan.files.length === 1) {
-      writePrivateFile(plan.files[0].path, plan.files[0].content);
-    } else {
-      writePrivateFiles(plan.files);
-    }
     results.push(...plan.targets.map(target => registrationResult(target, true)));
   }
   return results;

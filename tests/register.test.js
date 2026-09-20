@@ -3,8 +3,8 @@ import { afterEach, describe, it } from 'node:test';
 import { stableNodePath } from '../src/cli/runtime-node.js';
 import assert from 'node:assert';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync,
-  writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync,
+  symlinkSync, writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -343,6 +343,39 @@ describe('Cursor workspace registration', () => {
     assert.strictEqual(existsSync(claudePath), false);
   });
 
+  it('rejects an array-shaped config root before writing any requested agent', () => {
+    const { homeDir, cwd, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    writeFileSync(workspacePath, '[]');
+
+    assert.throws(
+      () => registerAgents(['claude', 'cursor'], homeDir, { cwd }),
+      err => err.message.includes(workspacePath)
+        && /JSON object/.test(err.message)
+        && /safely inspected/.test(err.message),
+    );
+    assert.strictEqual(existsSync(claudePath), false);
+    assert.strictEqual(readFileSync(workspacePath, 'utf8'), '[]');
+  });
+
+  it('rejects an array-shaped mcpServers before writing any requested agent', () => {
+    const { homeDir, cwd, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    writeFileSync(workspacePath, '{"mcpServers":[]}');
+
+    assert.throws(
+      () => registerAgents(['claude', 'cursor'], homeDir, { cwd }),
+      err => err.message.includes(workspacePath)
+        && /mcpServers/.test(err.message)
+        && /JSON object/.test(err.message)
+        && /safely inspected/.test(err.message),
+    );
+    assert.strictEqual(existsSync(claudePath), false);
+    assert.strictEqual(readFileSync(workspacePath, 'utf8'), '{"mcpServers":[]}');
+  });
+
   it('does not inspect Cursor workspace config for other agents', () => {
     const { homeDir, cwd, workspacePath } = workspaceFixture();
     mkdirSync(join(workspacePath, '..'), { recursive: true });
@@ -454,25 +487,105 @@ describe('Cursor workspace registration', () => {
     assert.strictEqual(readFileSync(target, 'utf8'), JSON.stringify(cursorConfig(), null, 2));
   });
 
-  it('leaves both targets unchanged when workspace staging is unwritable', {
+  it('leaves an earlier agent unchanged when the Cursor workspace is a symlink', {
+    skip: process.platform === 'win32',
+  }, () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    writeJson(claudePath, {
+      mcpServers: {
+        'knowledge-base': {
+          command: '/old/node',
+          args: [KB_ENTRYPOINT_PATH, 'mcp'],
+        },
+      },
+    });
+    writeJson(homePath, cursorConfig());
+    const before = [claudePath, homePath].map(path => readFileSync(path, 'utf8'));
+    const target = join(homeDir, 'workspace-target.json');
+    writeJson(target, cursorConfig());
+    const targetBefore = readFileSync(target, 'utf8');
+    mkdirSync(join(workspacePath, '..'), { recursive: true });
+    symlinkSync(target, workspacePath);
+
+    assert.throws(
+      () => registerAgents(['claude', 'cursor'], homeDir, { cwd }),
+      /symbolic link/,
+    );
+    assert.deepStrictEqual(
+      [claudePath, homePath].map(path => readFileSync(path, 'utf8')),
+      before,
+    );
+    assert.strictEqual(readFileSync(target, 'utf8'), targetBefore);
+  });
+
+  it('leaves every agent unchanged when Cursor workspace staging is unwritable', {
     skip: process.platform === 'win32' || process.getuid?.() === 0,
   }, () => {
     const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    writeJson(claudePath, {
+      mcpServers: {
+        'knowledge-base': {
+          command: '/old/node',
+          args: [KB_ENTRYPOINT_PATH, 'mcp'],
+        },
+      },
+    });
     writeJson(homePath, cursorConfig());
     writeJson(workspacePath, cursorConfig());
-    const before = [homePath, workspacePath].map(path => readFileSync(path, 'utf8'));
+    const paths = [claudePath, homePath, workspacePath];
+    const before = paths.map(path => readFileSync(path, 'utf8'));
     const workspaceConfigDir = join(workspacePath, '..');
     chmodSync(workspaceConfigDir, 0o500);
     try {
       assert.throws(
-        () => registerAgents(['cursor'], homeDir, { cwd }),
+        () => registerAgents(['claude', 'cursor'], homeDir, { cwd }),
         /EACCES|permission denied/i,
       );
     } finally {
       chmodSync(workspaceConfigDir, 0o700);
     }
     assert.deepStrictEqual(
-      [homePath, workspacePath].map(path => readFileSync(path, 'utf8')),
+      paths.map(path => readFileSync(path, 'utf8')),
+      before,
+    );
+  });
+
+  it('rolls back every agent when the final Cursor commit fails', () => {
+    const { homeDir, cwd, homePath, workspacePath } = workspaceFixture();
+    const claudePath = getAgentConfigPath('claude', homeDir);
+    writeJson(claudePath, {
+      mcpServers: {
+        'knowledge-base': {
+          command: '/old/node',
+          args: [KB_ENTRYPOINT_PATH, 'mcp'],
+        },
+      },
+    });
+    writeJson(homePath, cursorConfig());
+    writeJson(workspacePath, cursorConfig());
+    const paths = [claudePath, homePath, workspacePath];
+    const before = paths.map(path => readFileSync(path, 'utf8'));
+    let failed = false;
+
+    assert.throws(
+      () => registerAgents(['claude', 'cursor'], homeDir, {
+        cwd,
+        privateFileOptions: {
+          rename(from, to) {
+            if (!failed && to === workspacePath) {
+              failed = true;
+              throw new Error('injected final Cursor commit failure');
+            }
+            return renameSync(from, to);
+          },
+        },
+      }),
+      /injected final Cursor commit failure/,
+    );
+    assert.deepStrictEqual(
+      paths.map(path => readFileSync(path, 'utf8')),
       before,
     );
   });
