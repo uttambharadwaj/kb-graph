@@ -5,7 +5,7 @@ import { getToolDefinitions } from '../tools.js';
 import { readToolResult } from '../tool-meter.js';
 import { recordFallbackTool } from '../fallback-tool-meter.js';
 import { MAINTENANCE_TOOL } from '../tool-names.js';
-import { callIdentity } from '../retrieval.js';
+import { callSource } from '../retrieval.js';
 import { WRITE_DECISION_SOURCE } from '../write-meter.js';
 
 const INPUT_MAX_BYTES = 1024 * 1024;
@@ -82,8 +82,8 @@ export async function runToolCli(args) {
       throw new UsageError(`Invalid input for ${name}: ${err.issues?.map(issue => issue.message).join('; ') || err.message}`, USAGE);
     }
 
-    const result = await callIdentity.run(
-      { source: WRITE_DECISION_SOURCE.CLI },
+    const result = await callSource.run(
+      WRITE_DECISION_SOURCE.CLI,
       () => tool.handler(validated),
     );
     const { ok } = readToolResult(result);

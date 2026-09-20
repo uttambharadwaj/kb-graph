@@ -237,7 +237,9 @@ function classifyCandidate(candidate, evidence, throughMs) {
   const tools = evidence.toolsByIdentity.get(key) ?? [];
   const writes = evidence.writesByIdentity.get(key) ?? [];
   const immediateTools = tools.filter(row =>
-    row.ok && inRange(row, candidate.at, immediateEnd));
+    row.ok
+    && row.tool !== MAINTENANCE_TOOL.WRITE
+    && inRange(row, candidate.at, immediateEnd));
   const immediateWrites = writes.filter(row =>
     inRange(row, candidate.at, immediateEnd));
   const refused = immediateWrites.filter(row => row.refused);

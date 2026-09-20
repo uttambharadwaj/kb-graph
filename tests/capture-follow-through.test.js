@@ -397,16 +397,19 @@ describe('captureFollowThroughReport', () => {
       candidate({ ts: '2026-09-01T10:00:00Z', session: 'too-late' }),
     ]);
     insertTool(db, {
+      tool: MAINTENANCE_TOOL.CAPTURE_FIX,
       session: 'edge',
       agent: AGENT.CLAUDE,
       at: '2026-09-01T10:30:00Z',
     });
     insertTool(db, {
+      tool: MAINTENANCE_TOOL.CAPTURE_FIX,
       session: 'wrong-agent',
       agent: AGENT.CODEX,
       at: '2026-09-01T10:05:00Z',
     });
     insertTool(db, {
+      tool: MAINTENANCE_TOOL.CAPTURE_FIX,
       session: 'too-late',
       agent: AGENT.CLAUDE,
       at: '2026-09-01T10:30:00.001Z',
@@ -419,6 +422,35 @@ describe('captureFollowThroughReport', () => {
 
     assert.equal(report.partitions.state[CAPTURE_STATE.IMMEDIATE_CAPTURE], 1);
     assert.equal(report.partitions.state[CAPTURE_STATE.NO_CORRELATED_CAPTURE], 2);
+  });
+
+  it('treats a protocol-successful refused kb_write as a duplicate attempt', () => {
+    const db = freshDb();
+    const logDir = join(process.env.KB_DIR, 'report-refused-write');
+    writeCandidates(logDir, [
+      candidate({ ts: '2026-09-01T10:00:00Z', session: 'refused-write' }),
+    ]);
+    insertTool(db, {
+      tool: MAINTENANCE_TOOL.WRITE,
+      session: 'refused-write',
+      agent: AGENT.CLAUDE,
+      at: '2026-09-01T10:05:00Z',
+    });
+    insertWrite(db, {
+      refused: 1,
+      session: 'refused-write',
+      agent: AGENT.CLAUDE,
+      at: '2026-09-01T10:05:00Z',
+    });
+
+    const report = captureFollowThroughReport(db, {
+      logDir,
+      through: '2026-09-01T11:00:00Z',
+    });
+
+    assert.equal(report.partitions.state[CAPTURE_STATE.DUPLICATE_ATTEMPT], 1);
+    assert.equal(report.partitions.state[CAPTURE_STATE.IMMEDIATE_CAPTURE], 0);
+    assert.equal(report.signals.duplicateAttempts, 1);
   });
 
   it('attributes delayed harvest provenance only by the exact transcript basename rule', () => {

@@ -5,10 +5,24 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import Database from 'better-sqlite3';
 import { DEFAULT_BUSY_TIMEOUT_MS, getDb } from '../src/db.js';
-import { PUSH_SURFACES, READ_SURFACES, SURFACE, SURFACES, callIdentity, isTestSession, logRetrieval, logRetrievalResults, resolveAgent, resolveSessionId } from '../src/retrieval.js';
+import {
+  PUSH_SURFACES,
+  READ_SURFACES,
+  SURFACE,
+  SURFACES,
+  callIdentity,
+  callSource,
+  isTestSession,
+  logRetrieval,
+  logRetrievalResults,
+  resolveAgent,
+  resolveCallSource,
+  resolveSessionId,
+} from '../src/retrieval.js';
 import { AGENT } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { DB_PATH } from '../src/paths.js';
+import { WRITE_DECISION_SOURCE } from '../src/write-meter.js';
 
 function seedMap(pid, entry) {
   mkdirSync(SESSION_MAP_DIR, { recursive: true });
@@ -66,6 +80,18 @@ describe('resolveSessionId', () => {
     assert.strictEqual(
       resolveSessionId(null, { getAncestry: () => ({ harnessPid: 5106, pidStart: 'DIFFERENT' }) }),
       null,
+    );
+  });
+
+  it('preserves ambient agent and session resolution under a source-only binding', () => {
+    seedMap(5107, { pid: 5107, pid_start: 'START-C', session_id: 'mapped-source-session' });
+    callIdentity.run(
+      { harnessPid: 5107, pidStart: 'START-C', agent: AGENT.CLAUDE },
+      () => callSource.run(WRITE_DECISION_SOURCE.CLI, () => {
+        assert.strictEqual(resolveCallSource(), WRITE_DECISION_SOURCE.CLI);
+        assert.strictEqual(resolveAgent(), AGENT.CLAUDE);
+        assert.strictEqual(resolveSessionId(), 'mapped-source-session');
+      }),
     );
   });
 });

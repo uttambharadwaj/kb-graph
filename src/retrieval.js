@@ -109,11 +109,13 @@ export const isKbNudge = (prompt) => KB_NUDGE.test(prompt || '');
 // fallback below.
 export const callIdentity = new AsyncLocalStorage();
 
-// Optional surface identity bound around a local/direct invocation. Kept
-// separate from ancestry so a CLI caller can identify its write channel
-// without pretending to have a harness session or agent.
+// Write-channel attribution is independent from the harness identity above:
+// binding a CLI source must not mask the ancestry that supplies session and
+// agent attribution.
+export const callSource = new AsyncLocalStorage();
+
 export function resolveCallSource() {
-  return callIdentity.getStore()?.source ?? null;
+  return callSource.getStore() ?? null;
 }
 
 let cachedAncestry = null;
