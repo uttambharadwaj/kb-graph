@@ -315,6 +315,8 @@ COPY . .
 VOLUME /data
 
 ENV KB_DIR=/data
+ENV HOME=/data
+ENV KB_HOST=0.0.0.0
 ENV KB_PORT=3838
 ENV NODE_ENV=production
 
@@ -329,7 +331,7 @@ Build and run:
 docker build -t knowledge-base-server .
 docker run -d \
   --name kb-server \
-  -p 3838:3838 \
+  -p 127.0.0.1:3838:3838 \
   -v kb-data:/data \
   -e KB_PASSWORD=your-password \
   -e OBSIDIAN_VAULT_PATH=/vault \
@@ -337,7 +339,8 @@ docker run -d \
   knowledge-base-server
 ```
 
-Note: The `KB_DIR` env var is not currently wired in `src/paths.js` -- it uses `~/.knowledge-base` hardcoded via `homedir()`. For Docker, either set `HOME=/data` or patch `paths.js` to read `process.env.KB_DIR`.
+`KB_DIR=/data` keeps the indexed database and generated files on the mounted
+volume. `HOME=/data` keeps OAuth state on that volume as well.
 
 ### Recipe 4: Deploy with systemd
 
@@ -452,6 +455,7 @@ BETTER_AUTH_URL=https://your-domain.com
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
 | `KB_PASSWORD` | Yes (first run) | -- | Dashboard password. Set on first start, hashed with bcrypt. |
+| `KB_HOST` | No | `127.0.0.1` | HTTP bind host. Containers need `0.0.0.0` internally; publish the host port on loopback or place it behind a TLS reverse proxy. |
 | `KB_PORT` | No | `3838` | HTTP server port. |
 | `OBSIDIAN_VAULT_PATH` | No | -- | Absolute path to Obsidian vault for indexing and writing notes. Required for `kb_write`, `kb_capture_*`, `kb_classify`, and `kb_synthesize`. |
 | `KB_API_KEY_CLAUDE` | No | -- | API key for Claude agent access via HTTP. |

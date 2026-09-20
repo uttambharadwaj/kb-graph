@@ -12,14 +12,22 @@ import cors from 'cors';
 import authRoutes from './routes/auth-routes.js';
 import apiRoutes from './routes/api.js';
 import { toNodeHandler } from 'better-auth/node';
-import { auth } from './auth-oauth.js';
+import { createOAuthAuth } from './auth-oauth.js';
 import { createApiKeyMiddleware, getApiKeyService } from './middleware/api-key.js';
 import v1Router from './routes/v1.js';
 import openapiRoute from './routes/openapi.js';
 import { mcpHttpHandler, mcpGetHandler } from './mcp-http.js';
+import {
+  formatHttpServerUrl, listenHttpServer, resolveHttpBind, resolveHttpOrigin,
+} from './http-bind.js';
 
-export async function start() {
-  const port = parseInt(process.env.KB_PORT || '3838', 10);
+export async function start({ portOverride } = {}) {
+  const bind = {
+    ...resolveHttpBind(),
+    ...(portOverride === undefined ? {} : { port: portOverride }),
+  };
+  const oauthOrigin = resolveHttpOrigin(bind);
+  const auth = createOAuthAuth({ baseURL: oauthOrigin });
 
   // --- Global error handlers: prevent silent crashes ---
   process.on('unhandledRejection', (reason, promise) => {
@@ -93,7 +101,7 @@ export async function start() {
   const resourceHandler = oAuthProtectedResourceMetadata(auth);
 
   const handleOAuthDiscovery = async (req, res) => {
-    const url = `${process.env.BETTER_AUTH_URL || 'http://localhost:' + port}/.well-known/oauth-authorization-server`;
+    const url = `${oauthOrigin}/.well-known/oauth-authorization-server`;
     const webRes = await discoveryHandler(new Request(url));
     const data = await webRes.json();
     res.json(data);
@@ -101,7 +109,7 @@ export async function start() {
   app.get('/.well-known/oauth-authorization-server', corsMiddleware, handleOAuthDiscovery);
   app.get('/.well-known/openid-configuration', corsMiddleware, handleOAuthDiscovery);
   app.get('/.well-known/oauth-protected-resource', corsMiddleware, async (req, res) => {
-    const url = `${process.env.BETTER_AUTH_URL || 'http://localhost:' + port}${req.originalUrl}`;
+    const url = `${oauthOrigin}${req.originalUrl}`;
     const webRes = await resourceHandler(new Request(url));
     const data = await webRes.json();
     res.json(data);
@@ -189,8 +197,8 @@ export async function start() {
   });
 
   // 4. Start — save server ref for graceful shutdown
-  const server = app.listen(port, () => {
-    console.log(`Knowledge Base server running at http://localhost:${port}`);
+  const server = listenHttpServer(app, bind, () => {
+    console.log(`Knowledge Base server running at ${formatHttpServerUrl(bind)}`);
     writeFileSync(PID_PATH, process.pid.toString());
   });
 
@@ -212,4 +220,5 @@ export async function start() {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  return server;
 }

@@ -3,8 +3,8 @@
 > Generated: 2026-09-20
 
 ## Quick Stats
-- **Files:** 248
-- **Total lines:** 49,627
+- **Files:** 251
+- **Total lines:** 50,030
 
 ## Architecture Overview
 ```
@@ -56,7 +56,7 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| auth-oauth.js | 25 | auth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
+| auth-oauth.js | 24 | createOAuthAuth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 151 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | child-exit.js | 40 | onChildDone | When a spawned child is finished, for callers that need its output. |
 | claude-cli.js | 129 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
@@ -75,6 +75,7 @@ bin/
 | grounding.js | 334 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate... | Grounding: the extractor asserts things its source text never states — |
 | harvest.js | 688 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, buildLessonsPrompt, isPrintModeTranscript... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
 | hint-relevance.js | 290 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
+| http-bind.js | 60 | DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolveHttpHost, resolveHttpPort, resolveHttpBind... | - |
 | ingest.js | 195 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
 | jobs.js | 31 | JOBS, staleAfterHours, STALE_AFTER | The scheduled loops, and how long each may go quiet before that is news. |
 | mcp-factory.js | 53 | createKbServer, createHttpKbServer | The one place an MCP server instance is built. Every surface — stdio |
@@ -98,7 +99,7 @@ bin/
 | retrieval.js | 233 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, isKbNudge... | Read-path telemetry: the write path has always been logged (documents, |
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
 | secret-prompt.js | 34 | askHidden | - |
-| server.js | 216 | start | - |
+| server.js | 225 | start | - |
 | session-capture.js | 348 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
 | session-map.js | 97 | SESSION_MAP_DIR, recordSessionMap, resolveMapEntry | harness_pid -> session_id map: the MCP server process is long-lived and one |
 | shim-hello.js | 63 | HELLO_KEY, HELLO_VERSION, MAX_HELLO_LINE_BYTES, encodeHello, parseHelloLine | The one line `kb mcp-shim` writes before any JSON-RPC: which harness owns |
@@ -165,7 +166,7 @@ bin/
 | session-capture-hook.js | 45 | sessionCaptureHook | Lifecycle hook entry: enqueue only. No extraction, summarization, indexing, |
 | setup-hooks.js | 362 | HOOK_FILES, PUSH_AGENTS, mergeAgentHooks, installAgentHooks, unresolvableHookCommands... | src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook con |
 | setup-jobs.js | 153 | renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
-| setup.js | 656 | parseEnvFile, askSecret, writeSetupEnv, formatSetupSummary, setup | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
+| setup.js | 719 | parseEnvFile, askSecret, buildEnvContent, dockerComposeContent, parseAutoArgs... | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
 | status.js | 42 | status | - |
 | stop.js | 25 | stop | - |
@@ -318,6 +319,7 @@ bin/
 | safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | schema-migrations.test.js | 298 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | serve-shutdown.test.js | 89 | - | - |
+| server-bind.test.js | 258 | - | - |
 | session-capture.test.js | 628 | - | - |
 | session-map.test.js | 174 | - | Backdates a file's mtime by `days` so the sweeper's age check treats it as |
 | setup-env-preserve.test.js | 10 | - | - |
@@ -361,6 +363,7 @@ bin/
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
 | bad-import-order.fixture.js | 6 | - | Reproduces a real incident: a src-reaching import listed before |
+| server-address-child.js | 14 | - | - |
 
 ## tests/helpers/
 

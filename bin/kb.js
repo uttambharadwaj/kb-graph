@@ -15,7 +15,7 @@ const args = process.argv.slice(3);
 
 const COMMANDS = {
   start: {
-    summary: 'Start the dashboard server (default :3838)',
+    summary: 'Start the dashboard server (default 127.0.0.1:3838)',
     run: () => import('../src/server.js').then(m => m.start()),
   },
   stop: {
@@ -265,7 +265,7 @@ const COMMANDS = {
   setup: {
     summary: 'Interactive setup wizard (--auto for agent mode)',
     boolean: ['--auto', '--no-load-jobs'],
-    valueEq: ['--port', '--password', '--vault', '--agents', '--deploy', '--brain', '--domain'],
+    valueEq: ['--port', '--host', '--password', '--vault', '--agents', '--deploy', '--brain', '--domain'],
     run: a => import('../src/cli/setup.js').then(m => m.setup(a)),
   },
   'safety-check': {

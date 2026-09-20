@@ -212,7 +212,7 @@ Re-running setup is safe: existing secrets (password, auth secret, API keys) are
 ### Manual pieces
 
 ```bash
-KB_PASSWORD=yourpassword kb start    # dashboard + REST API on :3838
+KB_PASSWORD=yourpassword kb start    # dashboard + REST API on 127.0.0.1:3838
 kb register                          # MCP registration only
 kb ingest ~/kb-vault                 # ingest a directory
 kb search "docker networking"        # search from the terminal
@@ -262,7 +262,7 @@ each one, because an agent picks a tool from that line and nothing else:
 
 ```
 kb setup               Setup wizard (--auto for agent mode)
-kb start / stop        Dashboard + REST API server (default :3838)
+kb start / stop        Dashboard + REST API server (default 127.0.0.1:3838)
 kb serve               Resident MCP daemon on a unix socket, shared by every
                        session (--status probes a running one). Optional —
                        see docs/daemon-setup.md
@@ -483,6 +483,18 @@ of machine. (`"mcp"` still works as a daemon-free direct registration.)
 
 ### ChatGPT and remote agents (REST)
 
+The HTTP server binds to `127.0.0.1` by default. This is the local trust
+boundary: dashboard cookies, OAuth discovery, health, and the OpenAPI document
+are reachable only from the same machine. To accept remote connections,
+explicitly set `KB_HOST=0.0.0.0` (or a specific interface address).
+
+The server does not terminate TLS. Remote binding must sit behind a
+TLS-terminating reverse proxy such as Caddy or nginx, with firewall/network
+access restricted to intended clients. Set `BETTER_AUTH_URL` to the public
+HTTPS origin and use API-key or OAuth authentication for protected endpoints.
+Containers with a published HTTP port also need `KB_HOST=0.0.0.0`; otherwise
+the process remains loopback-only inside the container.
+
 1. Import the OpenAPI spec from your server's `/openapi.json`
 2. Authenticate with an `X-API-Key` header (keys live in `.env`)
 
@@ -497,6 +509,7 @@ All agents share one brain: what one learns in a session, the others have in the
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `KB_PASSWORD` | Yes (first run) | — | Dashboard login password |
+| `KB_HOST` | No | `127.0.0.1` | HTTP bind host. Set `0.0.0.0` only for intentional remote access behind a TLS reverse proxy |
 | `KB_PORT` | No | 3838 | HTTP server port |
 | `OBSIDIAN_VAULT_PATH` | No | — | Vault path (any markdown directory) |
 | `CLAUDE_PATH` | No | `claude` on PATH | Claude CLI binary, used by harvest/classification |

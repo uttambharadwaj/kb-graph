@@ -95,6 +95,7 @@ Replace the Claude CLI classifier in `src/classify/classifier.js` with an Ollama
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | KB_PASSWORD | -- | Dashboard password (required on first run) |
+| KB_HOST | 127.0.0.1 | HTTP bind host; remote binds require an explicit opt-in and a TLS reverse proxy |
 | KB_PORT | 3838 | HTTP server port |
 | OBSIDIAN_VAULT_PATH | -- | Obsidian vault path for indexing and writes |
 | KB_API_KEY_CLAUDE | -- | API key for Claude remote access |
