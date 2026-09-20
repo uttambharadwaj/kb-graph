@@ -66,6 +66,13 @@ Moving the clone later breaks paths embedded in those integrations. Re-run
 `setup` for hooks/jobs and `node bin/kb.js register --force` for MCP from the
 new checkout.
 
+Cursor must be restarted after registration. Starting from the command's
+current directory, registration synchronizes the nearest ancestor
+`.cursor/mcp.json` knowledge-base override with `~/.cursor/mcp.json`. If either
+entry belongs to another checkout, both writes are refused unless `--force` is
+passed. This restores Cursor agent attribution only; Cursor does not expose a
+conversation/session identity for correlation.
+
 ## What each agent gets
 
 - **Claude Code:** MCP, session briefing, prompt hints, trigger checks,
@@ -200,6 +207,7 @@ node bin/kb.js capture-follow-through --json # checkpoint outcome report
 node bin/kb.js serve --status            # probe the optional daemon
 node bin/kb.js start                     # local dashboard/API
 node bin/kb.js migrate --check           # read-only schema gate
+node bin/kb.js register --agents=cursor  # sync home + workspace MCP config
 ```
 
 `node bin/kb.js --help` lists maintenance and migration commands. `npm link`
