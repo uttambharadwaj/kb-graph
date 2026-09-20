@@ -8,7 +8,7 @@ What problem does it solve or what feature does it add?
 
 ## How was it tested?
 
-- [ ] Ran `kb start` and verified server starts
+- [ ] Ran `npm test`
 - [ ] Tested affected MCP tools
 - [ ] Existing functionality still works
 - [ ] No breaking changes to tool interfaces

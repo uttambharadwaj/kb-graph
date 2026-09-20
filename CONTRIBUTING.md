@@ -1,110 +1,43 @@
-# Contributing to knowledge-base-server
+# Contributing to kb-graph
 
-We welcome contributions. This project is built by AI-augmented developers, for AI-augmented developers. Use your AI agents to help you contribute — that's the whole point.
+Contributions and AI-assisted contributions are welcome. Human contributors
+remain responsible for reviewing generated code, protecting private data, and
+verifying the result.
 
-## The Vision
+## Issues, support, and security
 
-This isn't just an open source project. It's a collectively evolving AI memory system. When you improve this codebase, every user's AI agents get smarter. When you add a new ingestion source, everyone's knowledge pipeline expands. We're building the context layer for AI together.
+GitHub Issues are the project's support and Q&A channel as well as its bug and
+feature tracker. Choose the matching issue template and include a minimal,
+redacted reproduction. GitHub Discussions are deliberately disabled.
 
-## How to Contribute
+Do not open a public issue for a suspected vulnerability. Follow the private
+reporting process in the [security policy](SECURITY.md).
 
-### The AI-First Contribution Pattern
+The repository currently uses these labels:
 
-1. Clone the repo
-2. Tell your AI agent: "Read EXTENDING.md and llms.txt to understand this project"
-3. Ask your agent: "How can we make this better?"
-4. Let your agent analyze the codebase and propose improvements
-5. Review the output (human judgment is the irreplaceable element)
-6. Submit a PR
+- `bug` — confirmed or reproducible defects
+- `documentation` — documentation changes
+- `enhancement` — features and improvements
+- `question` — support and Q&A
+- `good first issue` — approachable contributions
+- `help wanted` — work where maintainer or community help is requested
+- `agent-task` — tasks with context and acceptance criteria for coding agents
 
-We encourage AI-assisted contributions. If your agent wrote the code, that's great — as long as you reviewed it and it works.
+## Contribution workflow
 
-### Types of Contributions We Love
+1. Fork and clone `kb-graph`.
+2. Create a focused feature branch.
+3. Read [llms.txt](llms.txt) and, for extension work,
+   [EXTENDING.md](EXTENDING.md).
+4. Make the change and add or update tests.
+5. Run `npm test`.
+6. Open a pull request describing the reason for the change and the
+   verification performed.
 
-**New Ingestion Sources**
-- RSS feed ingestion
-- Scholarly article (arxiv, papers) ingestion
-- Slack/Discord message export ingestion
-- Browser history ingestion
-- Email ingestion
-- Podcast transcript ingestion
-- Any content source that makes the KB smarter
-
-**New MCP Tools**
-- kb_watch — auto-ingest new files from a directory
-- kb_deduplicate — find and merge duplicate content
-- kb_export — export KB to various formats
-- kb_stats_detailed — advanced analytics on knowledge base content
-
-**Platform Integrations**
-- OpenClaw skill packaging
-- Cursor/Windsurf MCP configs
-- Continue (VS Code) integration
-- Docker Compose templates
-- Kubernetes deployment
-- Cloud deployment guides (AWS, GCP, Azure, Hetzner, DigitalOcean)
-
-**Core Improvements**
-- Performance optimization
-- Better search ranking algorithms
-- Multi-user support
-- WebSocket real-time updates
-- Watch mode for live vault ingestion
-
-**Documentation**
-- Tutorials and guides
-- Video walkthroughs
-- Translation to other languages
-- Architecture diagrams
-- Integration examples
-
-### How to Submit
-
-1. Fork the repo
-2. Create a feature branch: `git checkout -b feature/my-improvement`
-3. Make your changes
-4. Test locally: `npm install && npm link && kb start`
-5. Commit with clear messages: `git commit -m "Add RSS feed ingestion source"`
-6. Push: `git push origin feature/my-improvement`
-7. Open a Pull Request with:
-   - What you changed and why
-   - How you tested it
-   - Whether your AI agent helped (we're curious!)
-
-### PR Requirements
-
-- Code must work (test it locally)
-- New features should include agent-readable docs (update EXTENDING.md or add inline comments)
-- Follow existing code style (ES modules, async/await, Express patterns)
-- No breaking changes to existing MCP tool interfaces (kb_search, kb_list, kb_read, kb_ingest must remain stable)
-- New MCP tools should follow the naming pattern: kb_toolname
-
-### Issue Labels
-
-- `good-first-issue` — Great for newcomers or first-time AI-assisted contributions
-- `agent-task` — Issues specifically designed to be solved by AI agents
-- `ingestion` — New content source integrations
-- `mcp-tool` — New MCP tool additions
-- `integration` — Platform integrations
-- `core` — Core engine improvements
-- `docs` — Documentation improvements
-
-### The agent-task Label
-
-Issues labeled `agent-task` are specifically written for AI agents to solve. They include clear problem descriptions, expected behavior, relevant files, and test criteria.
-
-Tell your agent: "Look at issue #X on this repo and implement it." The issue is written so your agent can understand and solve it.
-
-## The Self-Learning Workflow (How We Build)
-
-This project uses a self-learning development workflow. When you contribute, we encourage you to adopt it too:
-
-1. **Before coding**: Search the KB for relevant context (`kb search "your topic"`)
-2. **While coding**: Let your AI agent use MCP tools to read existing patterns
-3. **After coding**: Capture what you learned (`kb_capture_session` or `kb_capture_fix`)
-4. **On PR merge**: The new knowledge gets indexed and benefits every future contributor
-
-See `docs/workflow/` for templates you can use in your own projects.
+Pull requests should preserve existing MCP interfaces unless the change
+explicitly coordinates a breaking release. Follow the existing ES module and
+async/await patterns. Never commit credentials, local vault content, generated
+`.env` files, or machine-specific paths.
 
 ## Community Guidelines
 
@@ -116,17 +49,24 @@ See `docs/workflow/` for templates you can use in your own projects.
 
 ## Development Setup
 
+Requirements:
+
+- macOS or Linux
+- Node.js 22, 24, or 26
+- an installed, authenticated `claude` CLI for AI-backed curation paths
+
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
 cd kb-graph
-npm install
-npm link
-kb setup          # Interactive wizard configures everything
-# OR manual:
-KB_PASSWORD=dev kb start
+npm ci
+node bin/kb.js setup
+node bin/kb.js status
+npm test
 ```
 
-The server runs on port 3838. Web dashboard at http://localhost:3838.
+`npm link` is optional if you prefer the shorter `kb ...` commands while
+developing.
+
 Agents connect via `kb mcp-shim` (what `kb register` writes): a byte pipe to
 the resident `kb serve` daemon when one is running, a full in-process server
 when none is. See [docs/daemon-setup.md](docs/daemon-setup.md).
@@ -148,6 +88,8 @@ While developing, mind which process serves your code:
 
 `kb stale-servers` lists running servers that predate their own checkout's last
 source change — the ones that will never notice on their own.
+
+Run `npm test` before opening a pull request.
 
 ## License
 

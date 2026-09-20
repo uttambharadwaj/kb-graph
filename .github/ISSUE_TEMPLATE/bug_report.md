@@ -20,11 +20,13 @@ What should have happened.
 **Environment**
 - OS: [e.g., Ubuntu 24.04, macOS 15]
 - Node.js version: [e.g., 22.x]
-- KB Server version/commit: [e.g., latest master]
-- MCP client: [e.g., Claude Code, Codex, Gemini]
+- kb-graph version/commit: [e.g., v2.0.1 or latest main]
+- Agent or MCP client: [e.g., Claude Code, Codex, Cursor, Gemini]
 
 **Logs**
-Paste relevant error output or `journalctl -u kb-server` logs.
+Paste relevant error output after redacting secrets and private data. On macOS,
+scheduled-job logs are under `~/.knowledge-base/logs/`. On Linux, use the
+systemd user journal, for example `journalctl --user -u kb-serve`.
 
 **Did your AI agent help debug this?**
 If yes, what did it find? (We're building a self-learning system -- your debugging context helps everyone.)

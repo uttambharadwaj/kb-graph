@@ -1,7 +1,7 @@
 {
   "name": "kb-graph",
   "version": "2.0.1",
-  "description": "Persistent memory for AI agents — capture, classify, synthesize, retrieve (MCP + REST)",
+  "description": "Shared memory for coding agents, stored in Markdown and SQLite.",
   "type": "module",
   "bin": {
     "kb": "./bin/kb.js"

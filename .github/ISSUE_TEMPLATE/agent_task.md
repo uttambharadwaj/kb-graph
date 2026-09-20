@@ -2,7 +2,7 @@
 name: Agent Task
 about: A task designed to be solved by AI agents
 title: '[Agent Task] '
-labels: agent-task, good-first-issue
+labels: agent-task, good first issue
 assignees: ''
 ---
 
@@ -24,7 +24,7 @@ Why this matters and how it fits into the system.
 
 **How to Start**
 Tell your AI agent:
-> "Read llms.txt and EXTENDING.md in the knowledge-base-server repo, then implement issue #N."
+> "Read llms.txt and EXTENDING.md in the kb-graph repo, then implement issue #N."
 
 **Difficulty**
 - [ ] Easy (< 1 hour with AI)

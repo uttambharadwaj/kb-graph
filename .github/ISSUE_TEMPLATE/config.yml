@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/uttambharadwaj/kb-graph/security/advisories/new
+    about: Report security vulnerabilities privately. Do not open a public issue.
+  - name: Support and questions
+    url: https://github.com/uttambharadwaj/kb-graph/issues/new?template=question.md
+    about: Use the question template for support and Q&A.
