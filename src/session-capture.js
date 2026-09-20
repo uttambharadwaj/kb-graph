@@ -9,8 +9,13 @@ import {
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync,
 } from 'fs';
 import { basename, dirname, join } from 'path';
-import { homedir } from 'os';
 import { KB_DIR, LOGS_DIR } from './paths.js';
+import { PRIVATE_FILE_MODE } from './private-file.js';
+import {
+  defaultTranscriptRoots,
+  isActualSubagentTranscript,
+  isDiscoverableTranscript,
+} from './transcript-paths.js';
 
 export const SESSION_CAPTURE_QUEUE_DIR = join(KB_DIR, 'session-capture-queue');
 export const SESSION_CAPTURE_RECEIPT_DIR = join(KB_DIR, 'session-capture-receipts');
@@ -24,7 +29,6 @@ const DELAY_MS = {
 const RETRY_MS = 5 * 60 * 1000;
 const MAX_RETRY_MS = 6 * 60 * 60 * 1000;
 const LEASE_MS = 10 * 60 * 1000;
-const PRIVATE_FILE_MODE = 0o600;
 
 const reasonRank = reason => ({ activity: 1, precompact: 2, session_end: 3 })[reason] || 0;
 const safeReason = reason => Object.hasOwn(DELAY_MS, reason) ? reason : 'activity';
@@ -109,9 +113,14 @@ function captureLog(event) {
 }
 
 export function captureRequest(hookInput = {}, { agent = 'unknown', reason = 'activity', now = Date.now() } = {}) {
-  const sessionId = hookInput.session_id || hookInput.sessionId || null;
+  const sessionId = hookInput.session_id || hookInput.sessionId
+    || hookInput.conversation_id || hookInput.conversationId || null;
   const transcriptPath = hookInput.transcript_path || hookInput.transcriptPath || null;
   if (!sessionId && !transcriptPath) return null;
+  if (
+    transcriptPath
+    && (!isDiscoverableTranscript(transcriptPath) || isActualSubagentTranscript(transcriptPath))
+  ) return null;
   let observedMtime = null;
   if (transcriptPath) {
     try { observedMtime = statSync(transcriptPath).mtimeMs; } catch { /* daemon may resolve it later */ }
@@ -185,11 +194,14 @@ export function resolveCaptureTranscript(request, searchRoots) {
   if (request.transcriptPath && existsSync(request.transcriptPath)) return request.transcriptPath;
   if (!request.sessionId) return null;
   const exact = `${request.sessionId}.jsonl`;
-  const roots = searchRoots || [join(homedir(), '.claude', 'projects'), join(homedir(), '.codex', 'sessions')];
+  const roots = searchRoots || defaultTranscriptRoots();
   for (const root of roots) {
     for (const path of walkJsonl(root)) {
       const name = basename(path);
       // Claude uses <session>.jsonl; Codex uses rollout-<date>-<session>.jsonl.
+      // Return an exact nested Cursor subagent match too: the processor must
+      // classify and discard it instead of mistaking exclusion for absence
+      // and retrying the request forever.
       if (name === exact || name.endsWith(`-${exact}`)) return path;
     }
   }
@@ -307,6 +319,12 @@ export async function processSessionCaptureQueue({
     try {
       const transcriptPath = resolveCaptureTranscript(request, searchRoots);
       if (!transcriptPath) throw new Error('transcript not found yet');
+      if (!isDiscoverableTranscript(transcriptPath) || isActualSubagentTranscript(transcriptPath)) {
+        result.skipped++;
+        removeOwnedLease(workingPath, leaseOwner);
+        captureLog({ event: 'discarded', key: request.key, reason: 'subagent_transcript' });
+        continue;
+      }
       const mtime = statSync(transcriptPath).mtimeMs;
       const receiptPath = join(SESSION_CAPTURE_RECEIPT_DIR, `${request.key}.json`);
       const receipt = readJson(receiptPath);
@@ -315,7 +333,7 @@ export async function processSessionCaptureQueue({
       } else {
         const summary = await harvest({ onlyPath: transcriptPath, sessionId: request.sessionId, facts: false, maintenance: false });
         if (summary.errors > 0) throw new Error(`harvest reported ${summary.errors} extraction error(s)`);
-        if (summary.coverageComplete === false) {
+        if (summary.coverageComplete !== true) {
           requeueIncomplete(queuePath, workingPath, leaseOwner, request, now);
           continue;
         }

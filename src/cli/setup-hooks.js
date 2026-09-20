@@ -17,9 +17,10 @@ export const HOOK_FILES = {
 
 // Cursor's hooks.json differs in shape, not just path: camelCase event
 // names, flat `{command}` entries instead of `{hooks:[{type,command}]}`,
-// and a top-level `version`. Only sessionStart is installed there —
-// beforeSubmitPrompt has no context field and preToolUse only relays
-// agent_message on deny, so hints and trigger warnings have no channel.
+// and a top-level `version`. Only sessionStart has a verified payload and
+// context contract here: beforeSubmitPrompt cannot inject context, and
+// lifecycle capture stays off until a native session-end fixture pins its
+// identity fields.
 export const PUSH_AGENTS = [AGENT.CLAUDE, AGENT.CODEX];
 
 function hookFilePath(agent, home = homedir()) {

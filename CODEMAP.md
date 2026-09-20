@@ -3,8 +3,8 @@
 > Generated: 2026-09-20
 
 ## Quick Stats
-- **Files:** 254
-- **Total lines:** 51,101
+- **Files:** 255
+- **Total lines:** 51,430
 
 ## Architecture Overview
 ```
@@ -65,7 +65,7 @@ bin/
 | daemon-hook-ops.js | 37 | HOOK_OPS | Maps control-socket op names to the same compute cores the CLI hooks fall |
 | daemon-paths.js | 26 | DAEMON_SOCKET_PATH, CONTROL_SOCKET_PATH, HOOK_OP | Socket path constants, split out of daemon.js so they can be imported by |
 | daemon.js | 396 | probeSocketDetailed, probeSocket, startDaemon | The resident KB service: one process, one unix socket, one MCP connection |
-| db.js | 1581 | DEFAULT_BUSY_TIMEOUT_MS, MIGRATIONS, insertDocument, updateDocument, deleteDocument... | better-sqlite3's own default when no `timeout` option is passed — made |
+| db.js | 1590 | DEFAULT_BUSY_TIMEOUT_MS, MIGRATIONS, insertDocument, updateDocument, deleteDocument... | better-sqlite3's own default when no `timeout` option is passed — made |
 | doc-version.js | 24 | snapshotDocumentVersion | Stable per-retrieval content identity. Prefer the vault index hash because it |
 | extract-meter.js | 93 | hashInput, logExtraction, EXTRACTION_SUMMARY_WINDOW_MS, summarizeExtractions, formatExtractionSummary | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
 | extract.js | 898 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
@@ -73,7 +73,7 @@ bin/
 | facts.js | 338 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
 | grounding.js | 334 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate... | Grounding: the extractor asserts things its source text never states — |
-| harvest.js | 724 | MAX_SESSIONS_PER_RUN, factsRequested, LESSONS_PROMPT, buildLessonsPrompt, isPrintModeTranscript... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
+| harvest.js | 748 | MAX_SESSIONS_PER_RUN, TRANSCRIPT_PARSER_VERSION, factsRequested, LESSONS_PROMPT, buildLessonsPrompt... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
 | hint-relevance.js | 341 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | http-bind.js | 60 | DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolveHttpHost, resolveHttpPort, resolveHttpBind... | - |
 | ingest.js | 195 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
@@ -100,7 +100,7 @@ bin/
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
 | secret-prompt.js | 34 | askHidden | - |
 | server.js | 225 | start | - |
-| session-capture.js | 348 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
+| session-capture.js | 366 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
 | session-map.js | 97 | SESSION_MAP_DIR, recordSessionMap, resolveMapEntry | harness_pid -> session_id map: the MCP server process is long-lived and one |
 | shim-hello.js | 63 | HELLO_KEY, HELLO_VERSION, MAX_HELLO_LINE_BYTES, encodeHello, parseHelloLine | The one line `kb mcp-shim` writes before any JSON-RPC: which harness owns |
 | shim-path-meter.js | 116 | SHIM_PATH_LOG, SHIM_PATH_WINDOW_MS, recordShimPath, recordShimRecovery, summarizeShimPaths... | One row per mcp-shim startup decision. The fallback deliberately keeps KB |
@@ -109,6 +109,7 @@ bin/
 | tiers.js | 344 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
 | tool-meter.js | 61 | readToolResult, metered | One row per MCP tool call. `retrievals` covers what was read and |
 | tools.js | 966 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| transcript-paths.js | 42 | defaultTranscriptRoots, isPrimaryCursorTranscript, isDiscoverableTranscript, isActualSubagentTranscript | - |
 | trigger-match.js | 239 | CORPUS_PATH, TRIGGER_INDEX_PATH, stripHeredocs, commandSegments, patternMatchesSegment... | The command-matching core of the trigger system, split out of |
 | trigger-proposal-rules.js | 8 | TRIGGER_PROPOSAL_RULES | The rules a model must follow when proposing command triggers — shared |
 | trigger-relevance.js | 294 | parseTriggerProposals, loadCommandCorpus, filterTriggers, rebuildTriggerIndex | Command triggers: patterns that let a note warn BEFORE a Bash tool call |
@@ -164,7 +165,7 @@ bin/
 | search-cli.js | 27 | search | - |
 | serve.js | 92 | runServeCli | - |
 | session-capture-hook.js | 45 | sessionCaptureHook | Lifecycle hook entry: enqueue only. No extraction, summarization, indexing, |
-| setup-hooks.js | 362 | HOOK_FILES, PUSH_AGENTS, mergeAgentHooks, installAgentHooks, unresolvableHookCommands... | src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook con |
+| setup-hooks.js | 363 | HOOK_FILES, PUSH_AGENTS, mergeAgentHooks, installAgentHooks, unresolvableHookCommands... | src/cli/setup-hooks.js — install KB briefing/hint hooks into an agent's hook con |
 | setup-jobs.js | 169 | renderPlist, renderSystemdUnits, installJobs | src/cli/setup-jobs.js — install harvest/reindex/synthesis as launchd or systemd  |
 | setup.js | 723 | parseEnvFile, askSecret, buildEnvContent, dockerComposeContent, parseAutoArgs... | fileURLToPath handles Windows drive letters correctly (avoids C:\C:\ duplication |
 | stale-servers.js | 150 | sourceMtime, staleServers, staleRemedy, runStaleServersCli | Two shapes are running at once: a supervisor (`kb.js mcp`) with the real |
@@ -276,7 +277,7 @@ bin/
 | from-preview-migration.test.js | 60 | - | Point the KB at a throwaway dir BEFORE anything opens the real DB. |
 | grounding.test.js | 654 | - | Points KB_DIR and the vault at throwaway dirs — must come before anything |
 | harvest-eval.test.js | 32 | - | Slow behavioral coverage against the real model: |
-| harvest.test.js | 1121 | - | A claude that answers instantly, so the harvest runs end to end without the |
+| harvest.test.js | 1251 | - | A claude that answers instantly, so the harvest runs end to end without the |
 | health-backlog.test.js | 211 | - | The briefing carried "202 notes missing summaries" unchanged for weeks. A |
 | hint-current-state-ranking.test.js | 100 | - | - |
 | hint-live-regressions.test.js | 91 | - | - |
@@ -320,10 +321,10 @@ bin/
 | retrieval.test.js | 397 | - | The ancestry walk itself (ps-backed) is process-ancestry.test.js's job; |
 | runtime-node.test.js | 96 | - | Homebrew's Cellar path names one patch release. Persisting it into a job, |
 | safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
-| schema-migrations.test.js | 319 | - | The meter logged the system's own subprocesses alongside real sessions, and |
+| schema-migrations.test.js | 334 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | serve-shutdown.test.js | 89 | - | - |
 | server-bind.test.js | 333 | - | - |
-| session-capture.test.js | 628 | - | - |
+| session-capture.test.js | 718 | - | - |
 | session-map.test.js | 174 | - | Backdates a file's mtime by `days` so the sweeper's age check treats it as |
 | setup-env-preserve.test.js | 10 | - | - |
 | setup-hooks.test.js | 633 | - | tests/setup-hooks.test.js |

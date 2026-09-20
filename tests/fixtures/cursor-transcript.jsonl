@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"cursor asks for durable capture"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"cursor records the verified result"},{"type":"tool_use","name":"Shell","input":{"command":"token=do-not-store"}}]}}
+{"role":"system","message":{"content":[{"type":"text","text":"internal routing preamble"}]}}
+{"status":"completed","type":"tool_result","output":"secret tool output"}

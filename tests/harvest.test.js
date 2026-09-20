@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, mkdtempSync, writeFileSync, chmodSync, rmSync, utimesSync, statSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync, rmSync, utimesSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -117,6 +117,15 @@ describe('harvest transcript parsing', () => {
     assert.match(extractTranscriptText(raw), /ASSISTANT: codex says hi/);
   });
 
+  it('extracts only user and assistant text from native Cursor rows', () => {
+    const raw = readFileSync(join(import.meta.dirname, 'fixtures', 'cursor-transcript.jsonl'), 'utf8');
+
+    const text = extractTranscriptText(raw);
+    assert.match(text, /USER: cursor asks for durable capture/);
+    assert.match(text, /ASSISTANT: cursor records the verified result/);
+    assert.doesNotMatch(text, /do-not-store|internal routing preamble|secret tool output/);
+  });
+
   it('keeps only user and assistant text from modern Codex response items', () => {
     const raw = [
       {
@@ -193,7 +202,7 @@ describe('harvest candidate selection', () => {
     const unrelatedDir = join(homeDir, '.cursor', 'projects', 'repo', 'other-state');
     mkdirSync(transcriptDir, { recursive: true });
     mkdirSync(unrelatedDir, { recursive: true });
-    const transcript = join(transcriptDir, 'conversation.jsonl');
+    const transcript = join(transcriptDir, 'session.jsonl');
     const unrelated = join(unrelatedDir, 'cache.jsonl');
     writeFileSync(transcript, '{}\n');
     writeFileSync(unrelated, '{}\n');
@@ -242,6 +251,22 @@ describe('harvest candidate selection', () => {
       { type: 'attachment', entrypoint: 'sdk-cli' },
     ]);
     assert.strictEqual(isPrintModeTranscript(buried), false, 'a marker past the scan window must not drop the file');
+  });
+
+  it('discovers primary Cursor transcripts without sweeping nested subagent transcripts', () => {
+    const cursorRoot = mkdtempSync(join(tmpdir(), 'kb-cursor-projects-'));
+    const session = '11111111-2222-4333-8444-555555555555';
+    const sessionDir = join(cursorRoot, 'workspace', 'agent-transcripts', session);
+    const subagentDir = join(sessionDir, 'subagents');
+    mkdirSync(subagentDir, { recursive: true });
+    const primary = join(sessionDir, `${session}.jsonl`);
+    const nested = join(subagentDir, 'review.jsonl');
+    writeFileSync(primary, JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'primary' }] } }));
+    writeFileSync(nested, JSON.stringify({ role: 'assistant', message: { content: [{ type: 'text', text: 'subagent' }] } }));
+
+    const found = findTranscripts({ sinceMs: 0, searchRoots: [cursorRoot] });
+    assert.deepStrictEqual(found.map(candidate => candidate.path), [primary]);
+    rmSync(cursorRoot, { recursive: true, force: true });
   });
 
   // The queue has to drain in arrival order. Taking the newest starves the tail
@@ -932,6 +957,111 @@ describe('harvest candidate selection', () => {
     assert.strictEqual(summary.pending, 1);
     assert.strictEqual(summary.partialProgress, true);
     assert.strictEqual(getDb().prepare("SELECT COUNT(*) n FROM harvest_chunk_log WHERE transcript_path = ? AND pass = 'lessons'").get(path).n, 2);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('reports a large unsupported transcript as retryable instead of watermarking it too short', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-unsupported-transcript-'));
+    const path = join(root, 'unsupported.jsonl');
+    const rows = Array.from({ length: 100 }, (_, index) => JSON.stringify({
+      status: 'completed',
+      type: 'unknown-record',
+      output: `opaque-${index}-${'x'.repeat(80)}`,
+    }));
+    writeTranscript(path, rows.join('\n'));
+
+    const summary = await runHarvest({ onlyPath: path });
+
+    assert.strictEqual(summary.errors, 1);
+    assert.strictEqual(summary.transcriptErrors, 1);
+    assert.strictEqual(summary.tooShort, 0);
+    assert.strictEqual(
+      getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path),
+      undefined,
+      'an unsupported large format must remain retryable',
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not let one known short turn hide a large unsupported turn shape', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-mixed-unsupported-transcript-'));
+    const path = join(root, 'mixed-unsupported.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ role: 'user', message: { content: [{ type: 'text', text: 'known short turn' }] } }),
+      JSON.stringify({ role: 'assistant', content: 'unsupported assistant shape '.repeat(300) }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ onlyPath: path });
+
+    assert.strictEqual(summary.errors, 1);
+    assert.strictEqual(summary.tooShort, 0);
+    assert.strictEqual(
+      getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path),
+      undefined,
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not treat known sidechain rows as unsupported transcript evidence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-large-sidechain-transcript-'));
+    const path = join(root, 'large-sidechain.jsonl');
+    writeTranscript(path, [
+      JSON.stringify({ type: 'user', message: { content: 'known short main-thread turn' } }),
+      JSON.stringify({
+        type: 'assistant',
+        isSidechain: true,
+        message: { content: [{ type: 'text', text: 'subagent detail '.repeat(500) }] },
+      }),
+    ].join('\n'));
+
+    const summary = await runHarvest({ onlyPath: path });
+
+    assert.strictEqual(summary.errors, 0);
+    assert.strictEqual(summary.tooShort, 1);
+    assert.ok(getDb().prepare('SELECT 1 FROM harvest_log WHERE transcript_path = ?').get(path));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('watermarks a genuinely short Cursor transcript with the current parser version', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-short-cursor-'));
+    const path = join(root, 'short-cursor.jsonl');
+    writeTranscript(path, JSON.stringify({
+      role: 'user',
+      message: { content: [{ type: 'text', text: 'brief but valid Cursor session' }] },
+    }));
+
+    const summary = await runHarvest({ onlyPath: path });
+    const row = getDb().prepare(
+      'SELECT parser_version FROM harvest_log WHERE transcript_path = ?'
+    ).get(path);
+
+    assert.strictEqual(summary.tooShort, 1);
+    assert.strictEqual(summary.errors, 0);
+    assert.ok(row.parser_version > 0, 'known short transcripts must not be retried after parser upgrades');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('re-offers a large legacy too-short Cursor watermark once after the parser upgrade', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-legacy-cursor-'));
+    const path = join(root, 'legacy-cursor.jsonl');
+    writeTranscript(path, JSON.stringify({
+      role: 'assistant',
+      message: { content: [{ type: 'text', text: 'cursor durable result. '.repeat(400) }] },
+    }));
+    const mtime = statSync(path).mtimeMs;
+    getDb().prepare(`
+      INSERT OR REPLACE INTO harvest_log
+        (transcript_path, mtime, facts_added, notes_added, parser_version)
+      VALUES (?, ?, NULL, 0, NULL)
+    `).run(path, mtime);
+
+    const summary = await runHarvest({ searchRoots: [root], sinceHours: 24 });
+    const row = getDb().prepare(
+      'SELECT parser_version FROM harvest_log WHERE transcript_path = ?'
+    ).get(path);
+
+    assert.strictEqual(summary.sessions, 1);
+    assert.ok(row.parser_version > 0);
     rmSync(root, { recursive: true, force: true });
   });
 

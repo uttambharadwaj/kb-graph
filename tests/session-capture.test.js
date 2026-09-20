@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startDaemon } from '../src/daemon.js';
 import { LOGS_DIR } from '../src/paths.js';
 import {
-  SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, enqueueSessionCapture,
+  SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, captureRequest, enqueueSessionCapture,
   ensureSessionCaptureDirectories, processSessionCaptureQueue, resolveCaptureTranscript,
   sessionCaptureQueueStatus, writeJsonExclusive,
 } from '../src/session-capture.js';
@@ -124,7 +124,7 @@ describe('session capture queue', () => {
         assert.equal(options.sessionId, 's-1');
         assert.equal(options.facts, false);
         assert.equal(options.maintenance, false);
-        return { sessions: 0, notes: 0, tooShort: 1, errors: 0 };
+        return { sessions: 0, notes: 0, tooShort: 1, errors: 0, coverageComplete: true };
       },
     });
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
@@ -156,6 +156,78 @@ describe('session capture queue', () => {
     assert.equal(request.dueAt, 1001);
   });
 
+  it('uses Cursor conversation identity to resolve a primary transcript', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-capture-'));
+    scratch.push(root);
+    const conversationId = '11111111-2222-4333-8444-555555555555';
+    const transcriptDir = join(root, 'workspace', 'agent-transcripts', conversationId);
+    mkdirSync(transcriptDir, { recursive: true });
+    const path = join(transcriptDir, `${conversationId}.jsonl`);
+    writeFileSync(path, JSON.stringify({
+      role: 'user',
+      message: { content: [{ type: 'text', text: 'cursor lifecycle capture' }] },
+    }));
+
+    const request = captureRequest(
+      { conversation_id: conversationId },
+      { agent: 'cursor', reason: 'session_end', now: 1000 },
+    );
+
+    assert.equal(request.sessionId, conversationId);
+    assert.equal(resolveCaptureTranscript(request, [root]), path);
+  });
+
+  it('refuses a Cursor subagent transcript before it reaches the queue', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-subagent-'));
+    scratch.push(root);
+    const subagentDir = join(root, 'agent-transcripts', 'primary', 'subagents');
+    const path = join(subagentDir, 'review.jsonl');
+    mkdirSync(subagentDir, { recursive: true });
+    writeFileSync(path, JSON.stringify({
+      role: 'assistant',
+      message: { content: [{ type: 'text', text: 'partial subagent reasoning' }] },
+    }));
+
+    const result = enqueueSessionCapture({
+      hookInput: { session_id: 'review', transcript_path: path },
+      agent: 'cursor',
+      reason: 'session_end',
+    }, { now: 1500 });
+
+    assert.equal(result.queued, false);
+    assert.equal(result.reason, 'missing_identity');
+    assert.deepStrictEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+  });
+
+  it('discards an ID-only Cursor subagent request instead of retrying it forever', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-subagent-id-'));
+    scratch.push(root);
+    const subagentDir = join(root, 'agent-transcripts', 'primary', 'subagents');
+    const path = join(subagentDir, 'review-session.jsonl');
+    mkdirSync(subagentDir, { recursive: true });
+    writeFileSync(path, JSON.stringify({
+      role: 'assistant',
+      message: { content: [{ type: 'text', text: 'partial subagent reasoning' }] },
+    }));
+    enqueueSessionCapture({
+      hookInput: { session_id: 'review-session' },
+      agent: 'cursor',
+      reason: 'session_end',
+    }, { now: 1600 });
+
+    const result = await processSessionCaptureQueue({
+      now: 1600,
+      searchRoots: [root],
+      runHarvestFn: async () => {
+        throw new Error('a nested Cursor subagent must never reach harvest');
+      },
+    });
+
+    assert.deepStrictEqual(result, { processed: 0, failed: 0, skipped: 1 });
+    assert.deepStrictEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+    assert.deepStrictEqual(files(SESSION_CAPTURE_RECEIPT_DIR), []);
+  });
+
   it('keeps incomplete harvest coverage queued without consuming a retry attempt', async () => {
     const path = transcript('incomplete.jsonl');
     enqueueSessionCapture({ hookInput: { session_id: 's-incomplete', transcript_path: path }, agent: 'codex', reason: 'session_end' }, { now: 3000 });
@@ -170,6 +242,24 @@ describe('session capture queue', () => {
     assert.equal(request.attempts, 0);
     assert.equal(request.dueAt, 3000 + 5 * 60 * 1000);
     assert.equal(request.lastError, 'harvest coverage incomplete');
+  });
+
+  it('does not accept a harvest result that omits its coverage status', async () => {
+    const path = transcript('missing-coverage.jsonl');
+    enqueueSessionCapture({
+      hookInput: { session_id: 'missing-coverage', transcript_path: path },
+      agent: 'codex',
+      reason: 'session_end',
+    }, { now: 3100 });
+
+    const result = await processSessionCaptureQueue({
+      now: 3100,
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+    });
+
+    assert.deepStrictEqual(result, { processed: 0, failed: 0, skipped: 0 });
+    assert.deepStrictEqual(files(SESSION_CAPTURE_RECEIPT_DIR), []);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
   });
 
   it('backs off incomplete harvest coverage when extraction also failed', async () => {
@@ -213,7 +303,7 @@ describe('session capture queue', () => {
       now: 2100,
       runHarvestFn: async () => {
         calls++;
-        return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
       },
     });
 
@@ -231,7 +321,7 @@ describe('session capture queue', () => {
 
     const result = await processSessionCaptureQueue({
       now: 2200,
-      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true }),
     });
 
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
@@ -252,7 +342,7 @@ describe('session capture queue', () => {
 
     const result = await processSessionCaptureQueue({
       now: 5001,
-      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true }),
     });
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
     assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.working')).length, 0);
@@ -275,7 +365,7 @@ describe('session capture queue', () => {
 
     const result = await processSessionCaptureQueue({
       now: 5001,
-      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true }),
     });
 
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
@@ -295,7 +385,7 @@ describe('session capture queue', () => {
 
     const result = await processSessionCaptureQueue({
       now: Date.now(),
-      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true }),
     });
 
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
@@ -315,7 +405,7 @@ describe('session capture queue', () => {
     const result = await processSessionCaptureQueue({
       runHarvestFn: async () => {
         harvests++;
-        return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
       },
     });
 
@@ -370,7 +460,7 @@ describe('session capture queue', () => {
     utimesSync(workingPath, old, old);
     const result = await processSessionCaptureQueue({
       now: Date.now(),
-      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0 }),
+      runHarvestFn: async () => ({ sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true }),
     });
 
     assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
@@ -493,7 +583,7 @@ describe('session capture queue', () => {
     const harvest = async () => {
       calls++;
       await delay(20);
-      return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+      return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
     };
 
     const results = await Promise.all([
@@ -558,7 +648,7 @@ describe('session capture queue', () => {
         runHarvestFn: async () => {
           markHarvestStarted();
           await new Promise(resolve => { releaseHarvest = resolve; });
-          return { sessions: 1, notes: 1, tooShort: 0, errors: 0 };
+          return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
         },
       });
       const startedOrFinished = await Promise.race([
@@ -607,7 +697,7 @@ describe('session capture queue', () => {
       captureProcessor: () => processSessionCaptureQueue({
         runHarvestFn: async () => {
           harvestCalls++;
-          return { sessions: 0, notes: 0, tooShort: 1, errors: 0 };
+          return { sessions: 0, notes: 0, tooShort: 1, errors: 0, coverageComplete: true };
         },
       }),
     });

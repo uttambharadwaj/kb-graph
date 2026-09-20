@@ -5,7 +5,7 @@
 // go through kb_extract's consolidation (dedup + retire-on-contradiction).
 import { createHash } from 'crypto';
 import { readdirSync, readFileSync, statSync, existsSync, openSync, readSync, closeSync } from 'fs';
-import { join, basename } from 'path';
+import { basename, join } from 'path';
 import { homedir } from 'os';
 import { getDb, setMeta } from './db.js';
 import {
@@ -18,6 +18,12 @@ import { sqlTimestamp } from './facts.js';
 import { runClaudeJSON } from './claude-cli.js';
 import { writeNote } from './write-note.js';
 import { HARVEST_SOURCE_PREFIX } from './tiers.js';
+import {
+  defaultTranscriptRoots,
+  isActualSubagentTranscript,
+  isDiscoverableTranscript,
+} from './transcript-paths.js';
+export { isActualSubagentTranscript } from './transcript-paths.js';
 
 // Derived, not copied: a chunk wider than kb_extract's window would be
 // truncated there, and this caller reads only added/candidates so the
@@ -31,6 +37,7 @@ const LESSON_CHARS = LESSONS_HEAD_CHARS + LESSONS_TAIL_CHARS;
 const MAX_LESSON_CHUNKS_PER_RUN = 2;
 const MAX_LEGACY_BACKFILL_CANDIDATES = 1000;
 export const MAX_SESSIONS_PER_RUN = 30;
+export const TRANSCRIPT_PARSER_VERSION = 2;
 
 // A transcript still being appended to belongs to a session that is still
 // happening, and harvesting it writes lessons the human is in the middle of
@@ -111,21 +118,6 @@ export function isPrintModeTranscript(path) {
   }
 }
 
-export function isActualSubagentTranscript(path) {
-  let fd;
-  try {
-    fd = openSync(path, 'r');
-    const read = readSync(fd, headBuffer, 0, headBuffer.length, 0);
-    const head = headBuffer.toString('utf8', 0, read);
-    return /"thread_source"\s*:\s*"subagent"/.test(head)
-      || /"source"\s*:\s*\{\s*"subagent"\s*:\s*\{\s*"thread_spawn"/.test(head);
-  } catch {
-    return false;
-  } finally {
-    if (fd !== undefined) try { closeSync(fd); } catch { /* already gone */ }
-  }
-}
-
 export const harvestsPrintModeSessions = () =>
   ['1', 'true', 'yes'].includes((process.env.KB_HARVEST_SDK_SESSIONS || '').toLowerCase());
 
@@ -139,28 +131,13 @@ function* walkJsonl(dir) {
   }
 }
 
-function defaultTranscriptRoots(homeDir) {
-  const cursorProjects = join(homeDir, '.cursor', 'projects');
-  let cursorRoots = [];
-  try {
-    cursorRoots = readdirSync(cursorProjects, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => join(cursorProjects, entry.name, 'agent-transcripts'));
-  } catch { /* Cursor is not installed or has no projects yet */ }
-
-  return [
-    join(homeDir, '.claude', 'projects'),
-    join(homeDir, '.codex', 'sessions'),
-    ...cursorRoots,
-  ];
-}
-
 export function findTranscripts({ sinceMs, searchRoots, homeDir = homedir() }) {
   const roots = (searchRoots || defaultTranscriptRoots(homeDir)).filter(existsSync);
 
   const out = [];
   for (const root of roots) {
     for (const path of walkJsonl(root)) {
+      if (!isDiscoverableTranscript(path)) continue;
       try {
         const mtime = statSync(path).mtimeMs;
         if (sinceMs === undefined || mtime >= sinceMs) out.push({ path, mtime });
@@ -182,36 +159,52 @@ function blocksToText(content) {
     .join('\n');
 }
 
-// Pull user/assistant text turns out of a session JSONL. Handles Claude Code
-// lines ({type:'user'|'assistant', message:{...}}, main thread only), Codex
-// rollout lines ({payload:{type:'message', role, content}}) and Cursor lines
-// ({role, message:{content}}); lines that
-// match neither shape are skipped, so new formats degrade to "nothing" not a crash.
-export function extractTranscriptText(raw) {
+function isTranscriptRole(role) {
+  return role === 'user' || role === 'assistant';
+}
+
+// Pull user/assistant text turns out of a session JSONL. Handles Claude Code,
+// Codex rollouts, and Cursor's top-level {role, message} rows. The caller also
+// needs to know whether an empty result came from a known-but-short transcript
+// or an unsupported format, because only the former is safe to watermark.
+function parseTranscript(raw) {
   const parts = [];
+  let recognizedTurns = 0;
+  let unsupportedTurns = 0;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
 
     let role = null, text = '';
-    if ((obj.type === 'user' || obj.type === 'assistant') && obj.message && !obj.isSidechain) {
+    const declaredRole = !obj.isSidechain && [obj.type, obj.payload?.role, obj.role]
+      .some(isTranscriptRole);
+    if (isTranscriptRole(obj.type) && obj.message && !obj.isSidechain) {
       role = obj.type;
       text = blocksToText(obj.message.content);
     } else if (obj.payload?.type === 'message' && obj.payload.role) {
       role = obj.payload.role;
       text = blocksToText(obj.payload.content);
-    } else if ((obj.role === 'user' || obj.role === 'assistant') && obj.message) {
-      // Cursor agent-transcripts: top-level role, no type.
+    } else if (isTranscriptRole(obj.role) && obj.message && !obj.isSidechain) {
       role = obj.role;
       text = blocksToText(obj.message.content);
     }
 
-    if ((role === 'user' || role === 'assistant') && text.trim() && !text.startsWith('<system-reminder>')) {
-      parts.push(`${role.toUpperCase()}: ${text.trim()}`);
+    if (isTranscriptRole(role)) {
+      recognizedTurns++;
+      const trimmedText = text.trim();
+      if (trimmedText && !trimmedText.startsWith('<system-reminder>')) {
+        parts.push(`${role.toUpperCase()}: ${trimmedText}`);
+      }
+    } else if (declaredRole) {
+      unsupportedTurns++;
     }
   }
-  return parts.join('\n\n');
+  return { text: parts.join('\n\n'), recognizedTurns, unsupportedTurns };
+}
+
+export function extractTranscriptText(raw) {
+  return parseTranscript(raw).text;
 }
 
 export function chunkText(text) {
@@ -317,7 +310,8 @@ function hasCompleteCoverage(db, transcriptPath, text, wantFacts) {
 }
 
 function isHarvestableTranscript(path) {
-  return (harvestsPrintModeSessions() || !isPrintModeTranscript(path))
+  return isDiscoverableTranscript(path)
+    && (harvestsPrintModeSessions() || !isPrintModeTranscript(path))
     && !isActualSubagentTranscript(path);
 }
 
@@ -437,7 +431,16 @@ export const harvestExtractOptions = options => ({
 async function harvestTranscript(path, mtime, {
   vaultPath, dryRun, facts: wantFacts, db = getDb(), extract = kbExtract,
 }) {
-  const text = extractTranscriptText(readFileSync(path, 'utf-8'));
+  const raw = readFileSync(path, 'utf-8');
+  const { text, recognizedTurns, unsupportedTurns } = parseTranscript(raw);
+  if (
+    raw.length >= MIN_TEXT_CHARS
+    && (recognizedTurns === 0 || (text.length < MIN_TEXT_CHARS && unsupportedTurns > 0))
+  ) {
+    throw new Error(
+      `unsupported transcript format (${raw.length} chars, ${recognizedTurns} recognized, ${unsupportedTurns} unsupported turns)`
+    );
+  }
   if (text.length < MIN_TEXT_CHARS) {
     return {
       skipped: 'too_short', facts: 0, notes: 0, coverageComplete: true, coveragePending: 0, partialProgress: false,
@@ -547,10 +550,24 @@ async function harvestTranscript(path, mtime, {
 // see it again. Keying only on mtime would make turning the flag on a no-op
 // for everything already swept.
 export function stillPending(db, candidates, wantFacts) {
-  const seen = db.prepare('SELECT mtime, facts_added FROM harvest_log WHERE transcript_path = ?');
+  const seen = db.prepare(
+    'SELECT mtime, facts_added, notes_added, parser_version FROM harvest_log WHERE transcript_path = ?'
+  );
+  const hasChunks = db.prepare('SELECT 1 FROM harvest_chunk_log WHERE transcript_path = ? LIMIT 1');
   return candidates.filter(c => {
     const row = seen.get(c.path);
     if (!row || row.mtime < c.mtime) return true;
+    const parserVersion = row.parser_version ?? 0;
+    if (
+      parserVersion < TRANSCRIPT_PARSER_VERSION
+      && row.facts_added === null
+      && row.notes_added === 0
+      && !hasChunks.get(c.path)
+    ) {
+      try {
+        if (statSync(c.path).size >= MIN_TEXT_CHARS) return true;
+      } catch { /* raced deletion; discovery will drop it on the next pass */ }
+    }
     return wantFacts && row.facts_added === null;
   });
 }
@@ -615,7 +632,12 @@ export async function runHarvest({
       if (r.skipped) {
         summary.tooShort++;
         // Watermark short sessions too — no point re-reading them nightly.
-        if (!dryRun) db.prepare('INSERT OR REPLACE INTO harvest_log (transcript_path, mtime) VALUES (?, ?)').run(path, mtime);
+        if (!dryRun) {
+          db.prepare(`
+            INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, parser_version)
+            VALUES (?, ?, ?)
+          `).run(path, mtime, TRANSCRIPT_PARSER_VERSION);
+        }
         continue;
       }
       summary.sessions++;
@@ -632,8 +654,10 @@ export async function runHarvest({
         const notesAdded = completedChunkTotal(db, path, 'lessons', 'notes_added');
         const factsAdded = wantFacts ? completedChunkTotal(db, path, 'facts', 'facts_added') : null;
         db.prepare(
-          'INSERT OR REPLACE INTO harvest_log (transcript_path, mtime, facts_added, notes_added) VALUES (?, ?, ?, ?)'
-        ).run(path, mtime, factsAdded, notesAdded);
+          `INSERT OR REPLACE INTO harvest_log
+            (transcript_path, mtime, facts_added, notes_added, parser_version)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(path, mtime, factsAdded, notesAdded, TRANSCRIPT_PARSER_VERSION);
         try {
           const outcomeRecorder = recordOutcomes || (await import('./retrieval-outcomes.js')).recordRetrievalOutcomesForSession;
           await outcomeRecorder({ sessionId: candidateSessionId, transcriptPath: path, transcriptMtime: mtime });

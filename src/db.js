@@ -831,6 +831,15 @@ export const MIGRATIONS = [{
     addColumn(db, 'model_calls', 'response_ready_ms', 'INTEGER');
     addColumn(db, 'model_calls', 'shutdown_tail_ms', 'INTEGER');
   },
+}, {
+  version: 28,
+  // A parser upgrade can make a transcript useful after an older version
+  // watermarked it as too short. Keep the parser generation on the watermark
+  // so those rows are re-offered once without retrying known-short sessions
+  // forever.
+  name: 'transcript parser generation on harvest watermarks',
+  applied: db => !hasTable(db, 'harvest_log') || hasColumn(db, 'harvest_log', 'parser_version'),
+  up: db => addColumn(db, 'harvest_log', 'parser_version', 'INTEGER'),
 }];
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
