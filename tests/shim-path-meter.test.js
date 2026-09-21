@@ -3,7 +3,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import {
-  formatShimPathSummary, recordShimPath, recordShimRecovery, SHIM_PATH_LOG, summarizeShimPaths,
+  formatShimPathSummary,
+  recordShimPath,
+  recordShimRecovery,
+  recordShimRecoveryAttempt,
+  SHIM_PATH_LOG,
+  SHIM_RECOVERY_STAGES,
+  summarizeShimPaths,
 } from '../src/shim-path-meter.js';
 
 describe('mcp-shim path telemetry', () => {
@@ -18,6 +24,7 @@ describe('mcp-shim path telemetry', () => {
       fallback: 1,
       fallback_reasons: { unresponsive: 1 },
       recoveries: { started: 0, restored: 0, abandoned: 0, unresolved: 0 },
+      recovery_failures: {},
     });
     assert.equal(
       formatShimPathSummary(summary),
@@ -37,6 +44,32 @@ describe('mcp-shim path telemetry', () => {
       formatShimPathSummary(summary),
       'shim paths (last 24h): daemon 0/0, fallback 0; daemon restarts: restored 1/2, unresolved 1',
     );
+  });
+
+  it('distinguishes connection and handshake recovery failures', () => {
+    writeFileSync(SHIM_PATH_LOG, '');
+    recordShimRecoveryAttempt({
+      recoveryId: 'connect',
+      attempt: 1,
+      stage: SHIM_RECOVERY_STAGES.CONNECT,
+      durationMs: 3,
+      errorCode: 'ECONNREFUSED',
+    });
+    recordShimRecoveryAttempt({
+      recoveryId: 'handshake',
+      attempt: 1,
+      stage: SHIM_RECOVERY_STAGES.HANDSHAKE,
+      durationMs: 30000,
+      errorCode: 'TIMEOUT',
+    });
+
+    const summary = summarizeShimPaths();
+    assert.deepEqual(summary.recovery_failures, {
+      'connect:ECONNREFUSED': 1,
+      'handshake:TIMEOUT': 1,
+    });
+    assert.match(formatShimPathSummary(summary), /connect:ECONNREFUSED 1/);
+    assert.match(formatShimPathSummary(summary), /handshake:TIMEOUT 1/);
   });
 
   it('ignores malformed, future, and expired rows', () => {

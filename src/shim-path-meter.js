@@ -7,6 +7,10 @@ import { join } from 'path';
 
 export const SHIM_PATH_LOG = join(LOGS_DIR, 'mcp-shim-paths.jsonl');
 export const SHIM_PATH_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const SHIM_RECOVERY_STAGES = Object.freeze({
+  CONNECT: 'connect',
+  HANDSHAKE: 'handshake',
+});
 
 function appendEvent(event) {
   try {
@@ -42,6 +46,17 @@ export function recordShimRecovery({ recoveryId, outcome, attempts, durationMs, 
   });
 }
 
+export function recordShimRecoveryAttempt({ recoveryId, attempt, stage, durationMs, errorCode = null }) {
+  appendEvent({
+    event: 'shim_recovery_attempt',
+    recovery_id: recoveryId,
+    attempt,
+    stage,
+    duration_ms: durationMs,
+    error_code: errorCode,
+  });
+}
+
 export function summarizeShimPaths({
   now = new Date(),
   windowMs = SHIM_PATH_WINDOW_MS,
@@ -53,6 +68,7 @@ export function summarizeShimPaths({
     fallback: 0,
     fallback_reasons: {},
     recoveries: { started: 0, restored: 0, abandoned: 0, unresolved: 0 },
+    recovery_failures: {},
   };
   const recoveries = new Map();
   let lines;
@@ -72,6 +88,11 @@ export function summarizeShimPaths({
       const outcomes = recoveries.get(row.recovery_id) ?? new Set();
       outcomes.add(row.outcome);
       recoveries.set(row.recovery_id, outcomes);
+      continue;
+    }
+    if (row.event === 'shim_recovery_attempt' && row.stage) {
+      const failure = `${row.stage}:${row.error_code || 'unknown'}`;
+      summary.recovery_failures[failure] = (summary.recovery_failures[failure] ?? 0) + 1;
       continue;
     }
     if (row.event === 'shim_path' && ['daemon', 'fallback'].includes(row.path)) {
@@ -98,12 +119,21 @@ export function summarizeShimPaths({
   return summary;
 }
 
-export function formatShimPathSummary(summary) {
-  if (!summary?.total && !summary?.recoveries?.started) return 'shim paths (last 24h): no observations';
-  const reasons = Object.entries(summary.fallback_reasons ?? {})
+function formatCounts(counts) {
+  return Object.entries(counts ?? {})
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([reason, count]) => `${reason} ${count}`)
+    .map(([label, count]) => `${label} ${count}`)
     .join(', ');
+}
+
+export function formatShimPathSummary(summary) {
+  const failures = formatCounts(summary?.recovery_failures);
+  if (!summary?.total
+    && !summary?.recoveries?.started
+    && !failures) {
+    return 'shim paths (last 24h): no observations';
+  }
+  const reasons = formatCounts(summary.fallback_reasons);
   const paths = `shim paths (last 24h): daemon ${summary.daemon}/${summary.total}, fallback ${summary.fallback}`
     + (reasons ? ` (${reasons})` : '');
   const recovery = summary.recoveries?.started
@@ -111,5 +141,5 @@ export function formatShimPathSummary(summary) {
       + (summary.recoveries.unresolved ? `, unresolved ${summary.recoveries.unresolved}` : '')
       + (summary.recoveries.abandoned ? `, abandoned ${summary.recoveries.abandoned}` : '')
     : '';
-  return paths + recovery;
+  return paths + recovery + (failures ? `; recovery failures: ${failures}` : '');
 }

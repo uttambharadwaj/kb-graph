@@ -6,13 +6,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createServer } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/server';
 import packageJson from '../package.json' with { type: 'json' };
+import { reconnectDelay } from '../src/cli/mcp-shim.js';
 import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
 import { resolveHarnessAncestry } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
-import { SHIM_PATH_LOG } from '../src/shim-path-meter.js';
+import { SHIM_PATH_LOG, SHIM_RECOVERY_STAGES } from '../src/shim-path-meter.js';
 import { startWedgedDaemon } from './helpers/wedged-daemon.js';
 
 // Drives `kb mcp-shim` as a real child process against a real in-process
@@ -83,8 +86,15 @@ function collectStderr(child) {
   return () => text;
 }
 
+function readShimPathEvents() {
+  return readFileSync(SHIM_PATH_LOG, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+}
+
 function lastShimPathEvent() {
-  return JSON.parse(readFileSync(SHIM_PATH_LOG, 'utf8').trim().split('\n').at(-1));
+  return readShimPathEvents().at(-1);
 }
 
 /**
@@ -155,6 +165,11 @@ async function until(condition, what) {
 }
 
 describe('kb mcp-shim', () => {
+  it('never jitters reconnect delay past the configured maximum', () => {
+    assert.strictEqual(reconnectDelay(20, 100, 2_000, () => 1), 2_000);
+    assert.strictEqual(reconnectDelay(1, 100, 2_000, () => 0), 75);
+  });
+
   it('forwards initialize, tools/list and tools/call through the daemon socket', { timeout: CASE_TIMEOUT_MS }, async () => {
     const daemon = await startTestDaemon({ socketPath: freshSocketPath() });
     const child = spawnShim([`--socket=${daemon.socketPath}`]);
@@ -190,10 +205,9 @@ describe('kb mcp-shim', () => {
     const driver = jsonRpcDriver(child);
     try {
       await initialize(driver);
-      // Two instances: the liveness probe's short-lived connection, then the
-      // real pipe connection — in that order, since the shim awaits the
-      // probe before ever dialing the second socket. The last one is ours.
-      await until(() => instances.length === 2, 'the daemon to build server instances for the probe and the real connection');
+      // The readiness preface must not instantiate an MCP server. The only
+      // instance belongs to the real client connection.
+      await until(() => instances.length === 1, 'the daemon to build the real connection server instance');
 
       await instances.at(-1).sendToolListChanged();
       await withDeadline(
@@ -206,9 +220,51 @@ describe('kb mcp-shim', () => {
     }
   });
 
+  it('retries a cold daemon at startup instead of falling back', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    let rejectFirstProbe;
+    const firstProbe = new Promise((resolve) => { rejectFirstProbe = resolve; });
+    const rejectingServer = createServer((socket) => {
+      socket.destroy();
+      rejectFirstProbe();
+    });
+    await new Promise((resolve, reject) => {
+      rejectingServer.once('error', reject);
+      rejectingServer.listen(socketPath, resolve);
+    });
+
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '2000',
+      KB_SHIM_PROBE_ATTEMPT_TIMEOUT_MS: '200',
+    });
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    let daemon = null;
+    try {
+      await withDeadline(firstProbe, 5_000, 'the first startup probe');
+      await new Promise((resolve, reject) => rejectingServer.close((error) => error ? reject(error) : resolve()));
+
+      daemon = await startTestDaemon({ socketPath });
+      await initialize(driver);
+
+      assert.ok(!stderr().includes('serving in-process'), stderr());
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'daemon', reason: 'cold_ready' },
+      );
+    } finally {
+      child.kill();
+      await new Promise(resolve => rejectingServer.close(() => resolve()));
+      if (daemon) {
+        liveDaemons.delete(daemon);
+        await daemon.close().catch(() => {});
+      }
+    }
+  });
+
   it('falls back to the in-process server when the daemon is unreachable, keeping stdout protocol-only', { timeout: CASE_TIMEOUT_MS }, async () => {
     const socketPath = freshSocketPath(); // nobody is listening here
-    const child = spawnShim([`--socket=${socketPath}`]);
+    const child = spawnShim([`--socket=${socketPath}`], { KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '300' });
     const stderr = collectStderr(child);
     const driver = jsonRpcDriver(child);
     try {
@@ -217,7 +273,7 @@ describe('kb mcp-shim', () => {
       await until(() => stderr().includes('kb mcp-shim: daemon unreachable, serving in-process'), 'the fallback stderr line');
       assert.deepStrictEqual(
         { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
-        { path: 'fallback', reason: 'unreachable' },
+        { path: 'fallback', reason: 'connection_refused' },
       );
     } finally {
       child.kill();
@@ -254,7 +310,7 @@ describe('kb mcp-shim', () => {
       await until(() => stderr().includes('kb mcp-shim: daemon unresponsive, serving in-process'), 'the unresponsive fallback stderr line');
       assert.deepStrictEqual(
         { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
-        { path: 'fallback', reason: 'unresponsive' },
+        { path: 'fallback', reason: 'readiness_timeout' },
       );
     } finally {
       child.kill();
@@ -262,7 +318,7 @@ describe('kb mcp-shim', () => {
     }
   });
 
-  it('honors KB_SHIM_PROBE_TIMEOUT_MS as the probe deadline', () => {
+  it('honors the startup readiness deadline independently from reconnect handshakes', () => {
     // Reads the exported constant in a fresh process rather than timing a
     // real fallback against wall-clock — a loaded test runner makes any
     // absolute-duration assertion flaky, and this proves the same thing: the
@@ -271,7 +327,11 @@ describe('kb mcp-shim', () => {
       const url = pathToFileURL(MCP_SHIM_MODULE).href;
       // Base env deliberately excludes any ambient KB_SHIM_PROBE_TIMEOUT_MS
       // so the unset case is a real unset, not an accident of this shell.
-      const { KB_SHIM_PROBE_TIMEOUT_MS: _unused, ...baseEnv } = process.env;
+      const {
+        KB_SHIM_PROBE_TIMEOUT_MS: _legacyUnused,
+        KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: _unused,
+        ...baseEnv
+      } = process.env;
       const result = spawnSync(process.execPath, ['-e', `import(${JSON.stringify(url)}).then(m => console.log(m.PROBE_TIMEOUT_MS))`], {
         env: { ...baseEnv, ...envOverride },
         encoding: 'utf8',
@@ -280,8 +340,9 @@ describe('kb mcp-shim', () => {
       return Number(result.stdout.trim());
     };
 
-    assert.strictEqual(readTimeoutMs(), 2000, 'defaults to 2000ms when unset');
-    assert.strictEqual(readTimeoutMs({ KB_SHIM_PROBE_TIMEOUT_MS: '150' }), 150);
+    assert.strictEqual(readTimeoutMs(), 8000, 'defaults to an 8s cold-start window when unset');
+    assert.strictEqual(readTimeoutMs({ KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '150' }), 150);
+    assert.strictEqual(readTimeoutMs({ KB_SHIM_PROBE_TIMEOUT_MS: '175' }), 175, 'retains the old env override');
   });
 
   it('keeps an initialized session usable when the daemon restarts', { timeout: CASE_TIMEOUT_MS }, async () => {
@@ -312,10 +373,7 @@ describe('kb mcp-shim', () => {
         driver.notifications.some((notification) => notification.method === 'notifications/tools/list_changed'),
         'recovery must invalidate the client\'s cached tool list',
       );
-      const recoveryRows = readFileSync(SHIM_PATH_LOG, 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line))
+      const recoveryRows = readShimPathEvents()
         .filter((row) => row.event === 'shim_recovery');
       const restored = recoveryRows.findLast((row) => row.outcome === 'restored');
       assert.ok(restored, 'a successful recovery must be metered');
@@ -325,6 +383,215 @@ describe('kb mcp-shim', () => {
       );
     } finally {
       child.kill();
+    }
+  });
+
+  it('uses the recovery handshake budget independently from the connect budget', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    const delayedServerFactory = async () => {
+      await delay(200);
+      const server = new McpServer({ name: 'slow-handshake-test', version: '1.0.0' });
+      server.registerTool('noop', { description: 'recovery probe', inputSchema: {} }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+      return server;
+    };
+    const daemon = await startTestDaemon({ socketPath, serverFactory: delayedServerFactory });
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_CONNECT_TIMEOUT_MS: '50',
+      KB_SHIM_RECOVERY_HANDSHAKE_TIMEOUT_MS: '1000',
+      KB_SHIM_RECONNECT_DELAY_MS: '10',
+    });
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    let replacement = null;
+    try {
+      await initialize(driver);
+
+      liveDaemons.delete(daemon);
+      await daemon.close();
+      await until(() => stderr().includes('daemon connection closed unexpectedly; reconnecting'), 'the shim to enter recovery');
+
+      replacement = await startTestDaemon({ socketPath, serverFactory: delayedServerFactory });
+      await until(() => stderr().includes('daemon connection restored'), 'a slow recovery handshake to finish');
+
+      const list = await driver.call('tools/list');
+      assert.ok(list.result.tools.some((tool) => tool.name === 'noop'));
+    } finally {
+      child.kill();
+      if (replacement) {
+        liveDaemons.delete(replacement);
+        await replacement.close().catch(() => {});
+      }
+    }
+  });
+
+  it('abandons an in-flight recovery on stdin EOF without restoring an orphan', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    const daemon = await startTestDaemon({ socketPath });
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_CONNECT_TIMEOUT_MS: '100',
+      KB_SHIM_RECOVERY_HANDSHAKE_TIMEOUT_MS: '5000',
+      KB_SHIM_RECONNECT_DELAY_MS: '10',
+    });
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    let replacementServer = null;
+
+    try {
+      await initialize(driver);
+      liveDaemons.delete(daemon);
+      await daemon.close();
+      await until(() => stderr().includes('daemon connection closed unexpectedly; reconnecting'), 'the shim to enter recovery');
+
+      let resolveReplay;
+      const replaySeen = new Promise((resolve) => { resolveReplay = resolve; });
+      let resolveReplacementClosed;
+      const replacementClosed = new Promise((resolve) => { resolveReplacementClosed = resolve; });
+      replacementServer = createServer((socket) => {
+        let buffer = '';
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => {
+          buffer += chunk;
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            let message;
+            try { message = JSON.parse(line); } catch { continue; }
+            if (message.method === 'initialize') resolveReplay({ message, socket });
+          }
+        });
+        socket.once('close', resolveReplacementClosed);
+      });
+      await new Promise((resolve, reject) => {
+        replacementServer.once('error', reject);
+        replacementServer.listen(socketPath, resolve);
+      });
+
+      const replay = await withDeadline(replaySeen, 5_000, 'the replacement initialize replay');
+      child.stdout.pause();
+      replay.socket.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'backpressure',
+        result: { payload: 'x'.repeat(2 * 1024 * 1024) },
+      })}\n`);
+      await until(() => child.stdout.readableLength > 0, 'the shim stdout to become backpressured');
+
+      child.stdin.end();
+      let abandoned;
+      await until(() => {
+        abandoned = readShimPathEvents().findLast(row => row.event === 'shim_recovery'
+          && row.pid === child.pid
+          && row.outcome === 'abandoned');
+        return abandoned != null;
+      }, 'the in-flight recovery to be abandoned');
+      assert.strictEqual(child.exitCode, null, 'stdout backpressure must keep the cancellation race observable');
+
+      replay.socket.write(`${JSON.stringify({
+        jsonrpc: '2.0',
+        id: replay.message.id,
+        result: {},
+      })}\n`);
+      await withDeadline(replacementClosed, 5_000, 'the cancelled recovery socket to close');
+
+      const outcomes = readShimPathEvents()
+        .filter(row => row.event === 'shim_recovery' && row.recovery_id === abandoned.recovery_id)
+        .map(row => row.outcome);
+      assert.deepStrictEqual(outcomes, ['started', 'abandoned']);
+
+      child.stdout.resume();
+      const { code } = await withDeadline(waitForExit(child), 5_000, 'the cancelled shim to exit');
+      assert.strictEqual(code, 0);
+    } finally {
+      child.stdout.resume();
+      child.kill();
+      if (replacementServer) {
+        await new Promise(resolve => replacementServer.close(() => resolve()));
+      }
+    }
+  });
+
+  it('bounds a 15-shim legacy-timeout wave without handshake retry amplification', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    let serverBuilds = 0;
+    const makeServer = (buildDelayMs = 0) => () => {
+      serverBuilds++;
+      const deadline = Date.now() + buildDelayMs;
+      while (Date.now() < deadline) {
+        // Models synchronous per-connection registration work. Under the old
+        // 2s deadline, the tail of 15 simultaneous handshakes timed out and
+        // retried, multiplying the queued work and producing EPIPE bursts.
+      }
+      const server = new McpServer({ name: 'stampede-test', version: '1.0.0' });
+      server.registerTool('noop', { description: 'restart probe', inputSchema: {} }, async () => ({
+        content: [{ type: 'text', text: 'ok' }],
+      }));
+      return server;
+    };
+    const daemon = await startTestDaemon({ socketPath, serverFactory: makeServer() });
+    const children = Array.from({ length: 15 }, () => spawnShim([`--socket=${socketPath}`], {
+      // Models the already-running shim generation present during rollout.
+      KB_SHIM_RECOVERY_HANDSHAKE_TIMEOUT_MS: '2000',
+    }));
+    const stderrs = children.map(collectStderr);
+    const drivers = children.map(jsonRpcDriver);
+    let replacement = null;
+    try {
+      await Promise.all(drivers.map(initialize));
+
+      const recoveryStartedAt = Date.now();
+      liveDaemons.delete(daemon);
+      await daemon.close();
+      await until(
+        () => stderrs.every((stderr) => stderr().includes('daemon connection closed unexpectedly; reconnecting')),
+        'all 15 shims to enter recovery',
+      );
+
+      const daemonErrors = [];
+      replacement = await startTestDaemon({
+        socketPath,
+        serverFactory: makeServer(150),
+        onError: (err) => daemonErrors.push(err),
+      });
+      serverBuilds = 0;
+      await until(
+        () => stderrs.every((stderr) => stderr().includes('daemon connection restored')),
+        'all 15 shims to restore',
+      );
+      const recoveryDurationMs = Date.now() - recoveryStartedAt;
+
+      const lists = await Promise.all(drivers.map((driver) => driver.call('tools/list')));
+      assert.ok(lists.every((list) => list.result.tools.some((tool) => tool.name === 'noop')));
+
+      const childPids = new Set(children.map((child) => child.pid));
+      const restored = readShimPathEvents()
+        .filter((row) => row.event === 'shim_recovery'
+          && row.outcome === 'restored'
+          && childPids.has(row.pid)
+          && new Date(row.ts).getTime() >= recoveryStartedAt);
+      assert.strictEqual(restored.length, 15, 'every shim must emit a restored denominator row');
+      assert.ok(restored.every((row) => row.attempts <= 3), JSON.stringify(restored));
+      const handshakeFailures = readShimPathEvents()
+        .filter((row) => row.event === 'shim_recovery_attempt'
+          && row.stage === SHIM_RECOVERY_STAGES.HANDSHAKE
+          && childPids.has(row.pid)
+          && new Date(row.ts).getTime() >= recoveryStartedAt);
+      assert.ok(
+        handshakeFailures.length <= children.length,
+        `each shim may time out once, but the wave must not multiply: ${JSON.stringify(handshakeFailures)}`,
+      );
+      assert.ok(serverBuilds <= children.length * 2, `server builds amplified: ${serverBuilds}`);
+      assert.ok(recoveryDurationMs < 8000, `15-shim recovery exceeded 8s SLO: ${recoveryDurationMs}ms`);
+      assert.ok(
+        daemonErrors.every((err) => err.code !== 'EPIPE' && err.message !== 'write EPIPE'),
+        `one-attempt recovery must not leave timed-out writes: ${daemonErrors.map((err) => err.message).join(', ')}`,
+      );
+    } finally {
+      for (const child of children) child.kill();
+      if (replacement) {
+        liveDaemons.delete(replacement);
+        await replacement.close().catch(() => {});
+      }
     }
   });
 

@@ -4,7 +4,20 @@ import assert from 'node:assert';
 import { PassThrough } from 'node:stream';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { AGENT } from '../src/process-ancestry.js';
-import { HELLO_KEY, HELLO_VERSION, MAX_HELLO_LINE_BYTES, encodeHello, parseHelloLine } from '../src/shim-hello.js';
+import {
+  DAEMON_PROBE_KEY,
+  DAEMON_PROBE_VERSION,
+  DAEMON_READY_KEY,
+  HELLO_KEY,
+  HELLO_VERSION,
+  MAX_HELLO_LINE_BYTES,
+  encodeDaemonProbe,
+  encodeDaemonReady,
+  encodeHello,
+  isDaemonProbeLine,
+  isDaemonReadyLine,
+  parseHelloLine,
+} from '../src/shim-hello.js';
 
 const stripNewline = (line) => {
   assert.ok(line.endsWith('\n'), 'a hello must be newline-terminated or the daemon never sees a complete line');
@@ -14,6 +27,17 @@ const stripNewline = (line) => {
 const roundTrip = (ancestry) => parseHelloLine(stripNewline(encodeHello(ancestry)));
 
 describe('shim hello encode/parse', () => {
+  it('round-trips the lightweight daemon readiness preface', () => {
+    const probe = stripNewline(encodeDaemonProbe());
+    const ready = stripNewline(encodeDaemonReady());
+    assert.deepStrictEqual(JSON.parse(probe), { [DAEMON_PROBE_KEY]: DAEMON_PROBE_VERSION });
+    assert.deepStrictEqual(JSON.parse(ready), { [DAEMON_READY_KEY]: DAEMON_PROBE_VERSION });
+    assert.strictEqual(isDaemonProbeLine(probe), true);
+    assert.strictEqual(isDaemonReadyLine(ready), true);
+    assert.strictEqual(isDaemonProbeLine(ready), false);
+    assert.strictEqual(isDaemonReadyLine(probe), false);
+  });
+
   it('round-trips a full identity', () => {
     const ancestry = { harnessPid: 4242, pidStart: 'Sun Aug 23 09:14:02 2026', agent: AGENT.CODEX };
     assert.deepStrictEqual(roundTrip(ancestry), ancestry);
@@ -119,6 +143,26 @@ describe('an old daemon\'s SDK transport, fed a hello line', () => {
     assert.strictEqual(closed, false, 'a non-JSON-RPC line must not tear the connection down');
     assert.strictEqual(stdout.readableLength, 0, 'nothing is written back to the client for a hello line');
 
+    await transport.close();
+  });
+
+  it('skips the new readiness preface and still receives the initialize after it', async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const transport = new StdioServerTransport(stdin, stdout);
+    const messages = [];
+    const errors = [];
+    transport.onmessage = (message) => messages.push(message);
+    transport.onerror = (error) => errors.push(error);
+    await transport.start();
+
+    const initialize = { jsonrpc: '2.0', id: 0, method: 'initialize', params: {} };
+    stdin.write(encodeDaemonProbe());
+    stdin.write(`${JSON.stringify(initialize)}\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepStrictEqual(messages, [initialize]);
+    assert.strictEqual(errors.length, 1, 'the old SDK rejects only the private preface');
     await transport.close();
   });
 });

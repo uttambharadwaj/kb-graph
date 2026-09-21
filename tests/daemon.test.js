@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'node:events';
+import { connect } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import packageJson from '../package.json' with { type: 'json' };
@@ -65,6 +66,19 @@ function freshSocketPath() {
   const dir = mkdtempSync(join(tmpdir(), 'kb-sock-'));
   scratchDirs.push(dir);
   return join(dir, 'd.sock');
+}
+
+function initializeLine(clientName) {
+  return `${JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: clientName, version: '1.0.0' },
+    },
+  })}\n`;
 }
 
 // node:test has no default per-test timeout, so an unbounded wait on a
@@ -166,6 +180,93 @@ describe('resident daemon', () => {
     } finally {
       await first.close();
       await second.close();
+      await closeDaemon(daemon);
+    }
+  });
+
+  it('does not build a full server for a queued connection that disconnects', { timeout: CASE_TIMEOUT_MS }, async () => {
+    let builds = 0;
+    let releaseBuilds;
+    let resolveFourEntered;
+    const holdBuilds = new Promise((resolve) => { releaseBuilds = resolve; });
+    const fourEntered = new Promise((resolve) => { resolveFourEntered = resolve; });
+    const serverFactory = async () => {
+      builds += 1;
+      if (builds === 4) resolveFourEntered();
+      await holdBuilds;
+      return new McpServer({ name: 'queued-connection-test', version: '1.0.0' });
+    };
+
+    const daemon = await startTestDaemon({ socketPath: freshSocketPath(), serverFactory });
+    const sockets = Array.from({ length: 5 }, () => connect(daemon.socketPath));
+    const initialize = initializeLine('queued-connection-test');
+
+    try {
+      await Promise.all(sockets.map(socket => withDeadline(
+        new Promise((resolve, reject) => {
+          socket.once('connect', resolve);
+          socket.once('error', reject);
+        }),
+        5_000,
+        'a queued test socket to connect',
+      )));
+      const responses = sockets.slice(0, 4).map(socket => new Promise((resolve, reject) => {
+        socket.once('data', resolve);
+        socket.once('error', reject);
+      }));
+      for (const socket of sockets) socket.write(initialize);
+
+      await withDeadline(fourEntered, 5_000, 'the build gate to fill');
+      assert.strictEqual(builds, 4, 'the fifth connection must remain queued');
+
+      const queuedClosed = new Promise(resolve => sockets[4].once('close', resolve));
+      sockets[4].destroy();
+      await withDeadline(queuedClosed, 5_000, 'the queued socket to close');
+      await withDeadline((async () => {
+        while (daemon.connectionCount() !== 4) await delay(0);
+      })(), 5_000, 'the daemon to observe the queued disconnect');
+
+      releaseBuilds();
+      await withDeadline(Promise.all(responses), 5_000, 'the admitted connections to initialize');
+      await delay(0);
+      assert.strictEqual(builds, 4, 'a disconnected queued socket must skip full registration');
+    } finally {
+      releaseBuilds();
+      for (const socket of sockets) socket.destroy();
+      await closeDaemon(daemon);
+    }
+  });
+
+  it('suppresses expected peer-close errors and forwards real transport failures', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const reported = [];
+    let transportOptions;
+    let resolveServed;
+    const served = new Promise((resolve) => { resolveServed = resolve; });
+    const daemon = await startTestDaemon({
+      socketPath: freshSocketPath(),
+      onError: error => reported.push(error.code),
+      serveConnection: (_factory, options) => {
+        transportOptions = options;
+        resolveServed();
+        return { close: async () => {} };
+      },
+    });
+    const socket = connect(daemon.socketPath);
+
+    try {
+      await withDeadline(new Promise((resolve, reject) => {
+        socket.once('connect', resolve);
+        socket.once('error', reject);
+      }), 5_000, 'the transport-error test socket to connect');
+      socket.write(initializeLine('transport-error-test'));
+      await withDeadline(served, 5_000, 'the daemon to wire transport errors');
+
+      for (const code of ['EPIPE', 'ECONNRESET', 'EPROTO']) {
+        transportOptions.onerror(Object.assign(new Error(code), { code }));
+      }
+      assert.deepStrictEqual(reported, ['EPROTO']);
+    } finally {
+      socket.destroy();
       await closeDaemon(daemon);
     }
   });

@@ -21,8 +21,51 @@ import { CONTROL_SOCKET_PATH, DAEMON_SOCKET_PATH } from './daemon-paths.js';
 import { HOOK_OPS } from './daemon-hook-ops.js';
 import { createKbServer } from './mcp-factory.js';
 import { callIdentity } from './retrieval.js';
-import { MAX_HELLO_LINE_BYTES, parseHelloLine } from './shim-hello.js';
+import {
+  MAX_HELLO_LINE_BYTES,
+  encodeDaemonReady,
+  isDaemonProbeLine,
+  parseHelloLine,
+} from './shim-hello.js';
 import { ensureSessionCaptureDirectories, processSessionCaptureQueue } from './session-capture.js';
+
+const DEFAULT_SERVER_BUILD_CONCURRENCY = 4;
+const SERVER_BUILD_CONCURRENCY = Number(process.env.KB_DAEMON_SERVER_BUILD_CONCURRENCY)
+  || DEFAULT_SERVER_BUILD_CONCURRENCY;
+const DISCARDED_CONNECTION_SERVER_NAME = 'knowledge-base-discarded-connection';
+const EXPECTED_PEER_CLOSE_CODES = new Set(['ECONNRESET', 'EPIPE']);
+
+function createYieldingGate(concurrency) {
+  let active = 0;
+  const waiters = [];
+
+  const release = () => {
+    active--;
+    const next = waiters.shift();
+    if (!next) return;
+    // Reserve the slot before yielding so a new caller cannot overbook it.
+    active++;
+    setImmediate(() => next(release));
+  };
+
+  const acquire = () => new Promise((resolve) => {
+    if (active < concurrency) {
+      active++;
+      resolve(release);
+      return;
+    }
+    waiters.push(resolve);
+  });
+
+  return async (work) => {
+    const releaseSlot = await acquire();
+    try {
+      return await work();
+    } finally {
+      releaseSlot();
+    }
+  };
+}
 
 // Re-exported for existing importers (serve.js, mcp-shim.js) — the constants
 // themselves live in daemon-paths.js so trigger-hook.js's cold path can
@@ -161,12 +204,13 @@ async function bindSocket(server, socketPath) {
  * before `_stdin.on('data', ...)`, verified in node_modules), so nothing is
  * emitted into the gap.
  *
- * `onReady(null)` for anything that is not a hello: an older shim, an
- * in-process client speaking straight JSON-RPC, `kb serve --status`, the
- * shim's own liveness probe. Those get exactly today's behaviour — the walk
+ * `onProbe()` handles the shim's lightweight readiness preface without
+ * constructing an MCP server. `onReady(null)` handles anything that is not a
+ * hello or probe: an older shim, an in-process client speaking straight
+ * JSON-RPC, or `kb serve --status`. Those get the legacy behaviour — the walk
  * from the daemon's own ancestry, which resolves to NULL.
  */
-function readShimHello(socket, onReady) {
+function readShimHello(socket, onReady, onProbe) {
   let buffer = Buffer.alloc(0);
 
   const finish = (identity, rest) => {
@@ -187,7 +231,13 @@ function readShimHello(socket, onReady) {
       if (buffer.length > MAX_HELLO_LINE_BYTES) finish(null, buffer);
       return;
     }
-    const identity = parseHelloLine(buffer.subarray(0, newline).toString('utf8'));
+    const line = buffer.subarray(0, newline).toString('utf8');
+    if (isDaemonProbeLine(line)) {
+      socket.off('data', onData);
+      onProbe();
+      return;
+    }
+    const identity = parseHelloLine(line);
     // Not a hello means the line belongs to the client: give the WHOLE
     // buffer back, newline included, not just what followed it.
     finish(identity, identity ? buffer.subarray(newline + 1) : buffer);
@@ -219,6 +269,7 @@ export async function startDaemon({
   capturePollMs = 1000,
   captureProcessor = () => processSessionCaptureQueue(),
   ensureCaptureDirectories = ensureSessionCaptureDirectories,
+  serveConnection = serveStdio,
 } = {}) {
   // Validated for both before binding either — a daemon must not half-start.
   await claimSocket(socketPath);
@@ -254,9 +305,24 @@ export async function startDaemon({
     (identity ? (...args) => callIdentity.run(identity, () => handler(...args)) : handler);
   // The SDK calls the factory with { era }; the daemon adds the wrapper whose
   // counter the shutdown drain waits on, so a call in flight is never cut off.
-  const buildServer = (identity) => (context) => (serverFactory ?? createKbServer)({
-    ...context,
-    wrapHandler: (handler) => track(bindIdentity(identity, handler)),
+  // Building every connection's tool server synchronously lets a retrying
+  // old shim monopolize the event loop: timed-out handshakes queue more builds,
+  // readiness probes starve, and the retry wave amplifies itself. Bound each
+  // batch and yield before admitting the next one. A socket that disappeared
+  // while queued gets a cheap disposable instance so serveStdio can finish its
+  // torn-down path without doing the abandoned registration work.
+  const runServerBuild = createYieldingGate(SERVER_BUILD_CONCURRENCY);
+  const buildServer = (identity, socket) => (context) => runServerBuild(() => {
+    if (socket.destroyed) {
+      return createKbServer({
+        name: DISCARDED_CONNECTION_SERVER_NAME,
+        tools: () => [],
+      });
+    }
+    return (serverFactory ?? createKbServer)({
+      ...context,
+      wrapHandler: (handler) => track(bindIdentity(identity, handler)),
+    });
   });
 
   const connections = new Set();
@@ -276,12 +342,22 @@ export async function startDaemon({
       entry.handle?.close().catch(onError);
     });
 
-    readShimHello(socket, (identity) => {
-      entry.handle = serveStdio(buildServer(identity), {
-        transport: new StdioServerTransport(socket, socket),
-        onerror: onError,
-      });
-    });
+    readShimHello(
+      socket,
+      (identity) => {
+        entry.handle = serveConnection(buildServer(identity, socket), {
+          transport: new StdioServerTransport(socket, socket),
+          // A legacy shim may abandon a handshake at its old two-second
+          // deadline. That peer churn is already represented in shim recovery
+          // telemetry; logging the transport's late write as a daemon fault
+          // turns one expected retry into an EPIPE burst.
+          onerror: (error) => {
+            if (!EXPECTED_PEER_CLOSE_CODES.has(error?.code)) onError(error);
+          },
+        });
+      },
+      () => socket.end(encodeDaemonReady()),
+    );
   });
 
   // One request per connection: read up to the first newline, dispatch,

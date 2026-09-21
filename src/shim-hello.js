@@ -16,6 +16,9 @@ import { AGENTS } from './process-ancestry.js';
 // MCP SDK would recognize is exactly what that client sends.
 export const HELLO_KEY = 'kb_shim_hello';
 export const HELLO_VERSION = 1;
+export const DAEMON_PROBE_KEY = 'kb_daemon_probe';
+export const DAEMON_READY_KEY = 'kb_daemon_ready';
+export const DAEMON_PROBE_VERSION = 1;
 
 // The hello is ~120 bytes. The bound is not about the hello — it is the point
 // past which a first line with no newline in it is declared NOT a hello, so a
@@ -33,6 +36,31 @@ export const MAX_HELLO_LINE_BYTES = 8 * 1024;
  */
 export function encodeHello({ harnessPid = null, pidStart = null, agent = null } = {}) {
   return `${JSON.stringify({ [HELLO_KEY]: HELLO_VERSION, harnessPid, pidStart, agent })}\n`;
+}
+
+export function encodeDaemonProbe() {
+  return `${JSON.stringify({ [DAEMON_PROBE_KEY]: DAEMON_PROBE_VERSION })}\n`;
+}
+
+export function encodeDaemonReady() {
+  return `${JSON.stringify({ [DAEMON_READY_KEY]: DAEMON_PROBE_VERSION })}\n`;
+}
+
+function hasProtocolVersion(line, key) {
+  try {
+    const parsed = JSON.parse(line);
+    return parsed !== null && typeof parsed === 'object' && parsed[key] === DAEMON_PROBE_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+export function isDaemonProbeLine(line) {
+  return hasProtocolVersion(line, DAEMON_PROBE_KEY);
+}
+
+export function isDaemonReadyLine(line) {
+  return hasProtocolVersion(line, DAEMON_READY_KEY);
 }
 
 /**
