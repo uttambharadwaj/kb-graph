@@ -21,7 +21,11 @@ function dryRunPack() {
 }
 
 test('package metadata and lifecycle are safe for public global installs', () => {
-  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.match(
+    pkg.version,
+    /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/,
+    'public artifact versions must use stable x.y.z SemVer',
+  );
   assert.equal(lock.version, pkg.version);
   assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.license, 'MIT');
