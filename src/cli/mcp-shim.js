@@ -136,6 +136,7 @@ export function reconnectDelay(
   random = Math.random,
 ) {
   const ceiling = Math.min(baseMs * (2 ** Math.min(attempts - 1, 10)), maxMs);
+  // Clamp after jitter so the configured maximum remains a hard ceiling.
   return Math.min(maxMs, Math.max(1, Math.round(ceiling * (0.75 + random() * 0.5))));
 }
 
