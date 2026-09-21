@@ -37,8 +37,22 @@ describe('public documentation contract', () => {
   it('keeps the README concise and honest about data egress', () => {
     assert.doesNotMatch(readme, /Nothing leaves your machine|No external services/i);
     assert.match(readme, /may send selected transcript or note content/i);
-    assert.match(readme, /not currently published on npm/i);
+    assert.match(readme, /npm install -g kb-graph/i);
     assert.match(readme, /register --force/);
+  });
+
+  it('documents the supported install and durable-state boundaries', () => {
+    for (const doc of [readme, onboarding]) {
+      assert.match(doc, /npm install -g kb-graph/i);
+      assert.match(doc, /npx[\s\S]{0,80}not supported|Do not use npx/i);
+      assert.match(doc, /better-sqlite3[\s\S]{0,180}(?:compiler|node-gyp)/i);
+      assert.match(doc, /KB_DIR[\s\S]{0,180}(?:models|embedding)/i);
+      assert.match(doc, /global (?:npm )?prefix|Node\/global prefix/i);
+      assert.match(doc, /(?:setup|register) --force|(?:setup|register)[\s\S]{0,80}install path/i);
+      assert.match(doc, /restart[\s\S]{0,120}(?:agent|Cursor)/i);
+      assert.match(doc, /Docker Compose[\s\S]{0,100}source-only[\s\S]{0,100}Dockerfile/i);
+    }
+    assert.doesNotMatch(readme, /img\.shields\.io\/npm|npmjs\.com\/package/);
   });
 
   it('documents the shipped runtimes and every scheduled writer', () => {

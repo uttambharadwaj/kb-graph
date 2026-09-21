@@ -1,12 +1,44 @@
 {
   "name": "kb-graph",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Shared memory for coding agents, stored in Markdown and SQLite.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uttambharadwaj/kb-graph.git"
+  },
+  "homepage": "https://github.com/uttambharadwaj/kb-graph#readme",
+  "bugs": {
+    "url": "https://github.com/uttambharadwaj/kb-graph/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "knowledge-base",
+    "mcp",
+    "memory",
+    "sqlite"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "kb": "./bin/kb.js"
   },
-  "main": "./src/index.js",
+  "files": [
+    ".env.example",
+    "bin/init-vault.sh",
+    "bin/kb-checkpoint-hook.js",
+    "bin/kb-trigger-hook.js",
+    "bin/kb.js",
+    "bin/weekly-synthesis.js",
+    "docs/",
+    "eval/checkpoint-replay-v1.json",
+    "llms.txt",
+    "openapi.json",
+    "skills/",
+    "src/"
+  ],
   "scripts": {
     "pretest": "npm run test:preflight",
     "test": "npm run test:suite",

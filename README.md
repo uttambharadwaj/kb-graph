@@ -21,11 +21,36 @@ your authenticated Claude CLI and may send selected transcript or note content
 to its configured provider. The embedding model is downloaded on first use,
 then runs locally.
 
-## Install from source
+## Install
 
-kb-graph is not currently published on npm. Clone it into a stable location:
-generated registrations and scheduled jobs contain the checkout's absolute
-path.
+Requirements:
+
+- macOS or Linux
+- Node.js 22, 24, or 26
+- an installed, authenticated `claude` CLI for AI curation
+- network access on first embedding use to download the model
+
+The supported npm installation is global:
+
+```bash
+npm install -g kb-graph
+kb setup
+kb status
+```
+
+`npx kb-graph` and project-local dependency installs are not supported. Setup
+persists the installed CLI's absolute path in agent registrations, hooks, and
+scheduled jobs; an ephemeral npx path is not a durable runtime.
+
+`better-sqlite3` is a native dependency. npm normally downloads a prebuilt
+binary; platforms without one need Python, `make`, and a C/C++ compiler for
+the node-gyp fallback. The npm tarball does not contain the embedding model.
+The first semantic operation downloads it to
+`${KB_DIR:-~/.knowledge-base}/models`, which can be substantially larger than
+the package itself.
+
+Source installation remains supported. Keep the clone at a stable path because
+setup embeds that path in the same integrations:
 
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
@@ -35,15 +60,11 @@ node bin/kb.js setup
 node bin/kb.js status
 ```
 
-Requirements:
-
-- macOS or Linux
-- Node.js 22, 24, or 26
-- an installed, authenticated `claude` CLI for AI curation
-- network access on first embedding use to download the model
-
-After `.env` is written, setup treats later integrations as best-effort and
-reports each result. Review its summary, then open a new configured agent
+The generated Docker Compose option is source-only and assumes the operator
+provides a Dockerfile; the npm artifact does not ship a container build. After
+setup writes
+`${KB_DIR:-~/.knowledge-base}/.env`, later integrations are best-effort and
+reported individually. Review the summary, then open a new configured agent
 session. Claude Code, Codex, and Cursor should receive a **KB BRIEFING** at
 session start.
 
@@ -52,12 +73,12 @@ users should read [Upgrading to 2.0](docs/UPGRADING-2.0.md).
 
 ## What setup changes
 
-Depending on your answers, `node bin/kb.js setup`:
+Depending on your answers, `kb setup` (or `node bin/kb.js setup` from source):
 
-- creates or updates this checkout's owner-only `.env`;
+- creates or updates the owner-only `${KB_DIR:-~/.knowledge-base}/.env`;
 - creates a Markdown vault (Obsidian is optional);
 - registers MCP for Claude Code, Gemini, and Cursor;
-- tells Codex users to run `node bin/kb.js register --agents=codex`, which
+- tells Codex users to run `kb register --agents=codex`, which
   prints the hand-managed `config.toml` block;
 - installs supported hooks for Claude Code, Codex, and Cursor;
 - installs four launchd or systemd-user jobs;
@@ -65,9 +86,11 @@ Depending on your answers, `node bin/kb.js setup`:
   customizations; and
 - optionally configures the HTTP server as a service.
 
-Moving the clone later breaks paths embedded in those integrations. Re-run
-`setup` for hooks/jobs and `node bin/kb.js register --force` for MCP from the
-new checkout.
+Moving a source clone, changing Node versions when a version manager uses
+per-version global prefixes, or reinstalling globally under a different prefix
+breaks paths embedded in those integrations. From the new install, re-run
+`kb setup` for hooks/jobs and `kb register --force` for MCP. Then restart
+Cursor and other agent clients.
 
 Cursor must be restarted after registration. Starting from the command's
 current directory, registration synchronizes the nearest ancestor
@@ -203,18 +226,18 @@ session briefing reports loop health; inspect the logs for per-run details.
 ## Everyday commands
 
 ```bash
-node bin/kb.js search "credential cache" # terminal search
-node bin/kb.js status                    # store and HTTP server status
-node bin/kb.js harvest --dry-run         # preview transcript work
-node bin/kb.js capture-follow-through --json # checkpoint outcome report
-node bin/kb.js serve --status            # probe the optional daemon
-node bin/kb.js start                     # local dashboard/API
-node bin/kb.js migrate --check           # read-only schema gate
-node bin/kb.js register --agents=cursor  # sync home + workspace MCP config
+kb search "credential cache"        # terminal search
+kb status                           # store and HTTP server status
+kb harvest --dry-run                # preview transcript work
+kb capture-follow-through --json    # checkpoint outcome report
+kb serve --status                   # probe the optional daemon
+kb start                            # local dashboard/API
+kb migrate --check                  # read-only schema gate
+kb register --agents=cursor         # sync home + workspace MCP config
 ```
 
-`node bin/kb.js --help` lists maintenance and migration commands. `npm link`
-is optional if you prefer the shorter `kb ...` form.
+`kb --help` lists maintenance and migration commands. Source users can replace
+`kb` with `node bin/kb.js`; `npm link` is optional.
 
 All 26 stdio tools are documented here so clients and maintainers can audit the
 surface:
@@ -237,13 +260,16 @@ available over HTTP; seven administrative tools remain local-only. See
 
 `kb_write`, `kb_ingest`, REST ingest, and harvest own their fail-closed
 similarity check. `kb_check_duplicate` is an exploratory check, not a mandatory
-preflight. The bulk CLI command `node bin/kb.js ingest <path>` instead skips
+preflight. The bulk CLI command `kb ingest <path>` instead skips
 only filenames it has already imported; it does not silently drop a requested
 file because its content resembles an existing note.
 
 ## Data, privacy, and backups
 
-- Primary application data lives in `~/.knowledge-base/`.
+- Primary application data lives in `${KB_DIR:-~/.knowledge-base}/`.
+- Setup configuration, the generated `.env`, databases, logs, and the embedding
+  model cache live under `KB_DIR`, outside the npm package. Global upgrades do
+  not replace them.
 - The vault path is configured by `OBSIDIAN_VAULT_PATH`; it is plain Markdown.
 - Retrieval uses SQLite FTS5 and `all-MiniLM-L6-v2` locally.
 - Claude-backed write-time operations can send selected content to your Claude
@@ -260,16 +286,19 @@ file because its content resembles an existing note.
 - [Resident daemon](docs/daemon-setup.md)
 - [Obsidian and vault layout](docs/OBSIDIAN-SETUP.md)
 - [Skills vs MCP](docs/SKILL-VS-MCP.md)
-- [Extending tools, schema, and HTTP](EXTENDING.md)
-- [Contributing](CONTRIBUTING.md)
+- [Extending tools, schema, and HTTP](https://github.com/uttambharadwaj/kb-graph/blob/main/EXTENDING.md)
+- [Contributing](https://github.com/uttambharadwaj/kb-graph/blob/main/CONTRIBUTING.md)
 
 CI validates Node 22, 24, and 26. Green CI is not deployment proof: releases,
 deploy-line reconciliation, database migration, and daemon rollout are manual
 operator steps.
 
-For an update: pull, run `node bin/kb.js migrate --check`, apply pending changes
-with `node bin/kb.js migrate`, then restart `kb start` and `kb serve`. Existing
-databases fail loudly rather than auto-migrating when opened by newer code.
+For a global update, run `npm install -g kb-graph@latest`; for source, pull and
+run `npm ci`. Then run `kb migrate --check`, apply pending changes with
+`kb migrate`, and restart `kb start`, `kb serve`, and configured agent
+sessions. Re-run `kb setup` when the install path, Node/global prefix, or
+scheduled-job environment changes. Existing databases fail loudly rather than
+auto-migrating when opened by newer code.
 
 ## Lineage and license
 

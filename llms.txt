@@ -1,4 +1,4 @@
-# knowledge-base-server
+# kb-graph
 
 > Portable AI knowledge base with SQLite FTS5, semantic search, Obsidian vault sync, and MCP server interface for multi-agent retrieval and self-learning.
 
@@ -6,12 +6,18 @@ A personal knowledge base server that AI agents use to persist memory across ses
 
 ## Quick Setup
 
-1. Clone the repo and install dependencies: `npm install`
-2. Start the server: `node bin/kb.js start` (prompts for dashboard password on first run)
-3. Set `KB_PASSWORD` env var to skip the interactive prompt
-4. Register as MCP server for Claude Code: `node bin/kb.js register`
+1. Install globally: `npm install -g kb-graph`
+2. Configure state and integrations: `kb setup`
+3. Verify the installation: `kb status`
+4. (Optional) Start the local dashboard/API: `kb start`
 5. (Optional) Set `OBSIDIAN_VAULT_PATH` to enable vault indexing and note writing
 6. (Optional) Set API keys for remote access: `KB_API_KEY_CLAUDE`, `KB_API_KEY_OPENAI`, `KB_API_KEY_GEMINI`
+
+Global npm and source-clone installations are supported. npx and project-local
+dependency installs are not. Mutable state, `.env`, and the embedding cache
+live under `${KB_DIR:-~/.knowledge-base}` rather than inside the package. See
+README.md for source installation, native build prerequisites, and upgrade
+steps.
 
 ## MCP Tools
 
@@ -76,7 +82,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 ## Integration Patterns
 
 ### Claude Code (local, stdio)
-Register with `node bin/kb.js register`. Uses stdio MCP transport. All 26 tools available.
+Register with `kb register`. Uses stdio MCP transport. All 26 tools available.
 
 ### Claude.ai (remote, HTTP MCP)
 Connect via remote MCP at `https://your-domain.com/mcp`. Authenticates with API key or OAuth. Admin-only tools are filtered out.
@@ -88,7 +94,7 @@ Import OpenAPI spec from `https://your-domain.com/openapi.json`. Authenticate wi
 Use the REST API at `/api/v1/` with `X-API-Key` header. Endpoints: `/search`, `/search/smart`, `/context`, `/documents`, `/documents/:id`, `/ingest`, `/capture/session`, `/capture/fix`, `/capture/web`.
 
 ### Ollama / Local Models
-Replace the Claude CLI classifier in `src/classify/classifier.js` with an Ollama HTTP call. See EXTENDING.md Recipe 1.
+Replace the Claude CLI classifier in `src/classify/classifier.js` with an Ollama HTTP call. See Recipe 1 in https://github.com/uttambharadwaj/kb-graph/blob/main/EXTENDING.md.
 
 ## Environment Variables
 
@@ -108,8 +114,8 @@ Replace the Claude CLI classifier in `src/classify/classifier.js` with an Ollama
 
 ## Files to Read for Full Context
 
-- CODEMAP.md -- Full architecture map with file purposes, exports, and data flows (~140 lines)
-- EXTENDING.md -- Deep customization guide with patterns, recipes, and the intelligence pipeline
+- https://github.com/uttambharadwaj/kb-graph/blob/main/CODEMAP.md -- Full architecture map with file purposes, exports, and data flows
+- https://github.com/uttambharadwaj/kb-graph/blob/main/EXTENDING.md -- Deep customization guide with patterns, recipes, and the intelligence pipeline
 - openapi.json -- OpenAPI 3.1 spec for the REST API
-- kb-server.service -- systemd service template
+- https://github.com/uttambharadwaj/kb-graph/blob/main/kb-server.service.example -- source-install systemd service example
 - package.json -- Dependencies and entry points

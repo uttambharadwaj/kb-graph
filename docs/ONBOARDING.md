@@ -1,7 +1,22 @@
 # Onboarding
 
 Requirements: macOS or Linux, Node.js 22/24/26, and an authenticated `claude`
-CLI for AI curation. The embedding model downloads on first semantic use.
+CLI for AI curation. Storage and retrieval remain local; curation commands can
+send selected content to the Claude provider. Install globally:
+
+```bash
+npm install -g kb-graph
+kb setup
+kb status
+```
+
+For npm, only global installation is supported. Do not use npx or add kb-graph
+as a project dependency: setup persists absolute executable paths that must
+remain stable. `better-sqlite3` uses a native binary; when npm has no prebuilt
+binary for the platform, installation needs Python, `make`, and a C/C++
+compiler.
+
+Source installation is also supported:
 
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
@@ -11,9 +26,13 @@ node bin/kb.js setup
 node bin/kb.js status
 ```
 
-The project is currently installed from source, not npm. Keep the checkout at a
-stable path: setup writes its absolute path into agent registrations and
-scheduled jobs.
+Keep a source checkout at a stable path. The generated Docker Compose option
+is source-only and requires an operator-provided Dockerfile. npm and source
+setup both store mutable state outside the install under
+`${KB_DIR:-~/.knowledge-base}`: `.env`, the database, logs, and the
+`models/` embedding cache. The model downloads on first semantic use and is not
+part of the npm tarball, so its disk use is additional. Package upgrades do not
+replace that state.
 
 ## Verify the install
 
@@ -21,7 +40,7 @@ Run the checks that match the agents you selected:
 
 ```bash
 # Store and HTTP server status
-node bin/kb.js status
+kb status
 
 # MCP registration files (run the checks for selected agents)
 grep -q 'knowledge-base' ~/.claude.json && echo 'Claude MCP configured'
@@ -48,7 +67,8 @@ systemctl --user list-timers | grep 'kb-'               # Linux
 
 Expect jobs named `harvest`, `reindex`, `synthesis`, and `reconcile`. Codex MCP
 registration is hand-managed: paste the block printed by
-`node bin/kb.js register --agents=codex` into `~/.codex/config.toml`.
+`kb register --agents=codex` into `~/.codex/config.toml`. Source users can
+replace `kb` with `node bin/kb.js` in these verification commands.
 
 Lifecycle hooks enqueue capture requests; processing that queue requires the
 optional resident daemon described in
@@ -60,7 +80,7 @@ a **KB BRIEFING**. Then ask the agent to save a synthetic onboarding note and
 verify it:
 
 ```bash
-node bin/kb.js search onboarding
+kb search onboarding
 ```
 
 ## What runs automatically
@@ -94,9 +114,15 @@ journalctl --user -u kb-reconcile.service
 
 `setup` reports individual failures and can finish with a partial installation.
 Read its summary rather than assuming every step succeeded. Re-running setup
-preserves generated secrets but rewrites `.env` from its template; back up
-custom variables first.
+preserves generated secrets but rewrites `KB_DIR/.env` from its template; back
+up custom variables first.
 
 Storage and retrieval are local. Harvesting and other AI curation invoke the
 authenticated Claude CLI and may send selected transcript or note content to
 its configured provider.
+
+After an npm upgrade or source update, run `kb migrate --check`, apply pending
+migrations, and restart `kb start`, `kb serve`, and agent sessions. Re-run
+`kb setup` and `kb register --force` after moving a source checkout or when a
+Node version manager changes the global npm prefix; the prior registrations
+still point at the old absolute path. Restart Cursor after re-registration.
