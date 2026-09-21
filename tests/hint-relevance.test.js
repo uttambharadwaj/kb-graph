@@ -342,26 +342,23 @@ describe('bounded natural-phrasing expansion', () => {
     );
     insert.run('Beacon vocabulary one', 'beacon vocabulary', 'note', 'misc', null);
     insert.run('Beacon vocabulary two', 'beacon vocabulary', 'note', 'misc', null);
-    for (let index = 0; index < 10; index++) {
-      insert.run(
-        `Arousal overflow candidate ${String(index).padStart(2, '0')}`,
-        'arousal overflow',
+    const supplementalIds = [];
+    for (let index = 0; index < 11; index++) {
+      supplementalIds.push(insert.run(
+        `Arousal arousal candidate ${String(index).padStart(2, '0')}`,
+        'bounded supplemental candidate',
         'note',
         'misc',
-        null,
-      );
+        'beacon',
+      ).lastInsertRowid);
     }
-    const beyondCap = insert.run(
-      'Arousal overflow target with deliberately longer title',
-      'arousal overflow',
-      'note',
-      'misc',
-      'beacon',
-    ).lastInsertRowid;
+    const supplementalIdSet = new Set(supplementalIds);
+    const hits = relevantNotes('arouse beacon', { limit: 50 });
 
-    assert.ok(
-      !relevantNotes('arouse beacon', { limit: 50 }).some(hit => hit.id === beyondCap),
-      'the eleventh supplemental candidate bypassed the cap',
+    assert.equal(
+      hits.filter(hit => supplementalIdSet.has(hit.id)).length,
+      10,
+      'the supplemental result count did not match the configured cap',
     );
   });
 });
