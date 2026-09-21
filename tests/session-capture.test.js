@@ -1,7 +1,8 @@
 import './helpers/tmp-kb.js';
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync,
   realpathSync, statSync, symlinkSync, utimesSync, writeFileSync,
@@ -13,10 +14,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { startDaemon } from '../src/daemon.js';
 import { LOGS_DIR } from '../src/paths.js';
 import {
-  SESSION_CAPTURE_DECLINE_REASON, SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR,
-  SESSION_CAPTURE_RECEIPT_DIR, captureRequest, enqueueSessionCapture,
-  ensureSessionCaptureDirectories, processSessionCaptureQueue, resolveCaptureTranscript,
-  sessionCaptureQueueStatus, writeJsonExclusive,
+  CURSOR_CAPTURE_DISABLED_MARKER, CURSOR_CAPTURE_ENABLED_MARKER,
+  SESSION_CAPTURE_DECLINE_REASON, SESSION_CAPTURE_LOG,
+  SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, captureRequest,
+  enqueueSessionCapture, ensureSessionCaptureDirectories,
+  processSessionCaptureQueue, resolveCaptureTranscript, sessionCaptureQueueStatus,
+  writeJsonExclusive,
 } from '../src/session-capture.js';
 import {
   MAX_SESSION_CAPTURE_STDIN_BYTES,
@@ -26,9 +29,15 @@ import {
 const CURSOR_CONVERSATION_ID = '11111111-2222-4333-8444-555555555555';
 const OTHER_CURSOR_CONVERSATION_ID = '99999999-8888-4777-8666-555555555555';
 const scratch = [];
+beforeEach(() => {
+  writeFileSync(CURSOR_CAPTURE_ENABLED_MARKER, '');
+  rmSync(CURSOR_CAPTURE_DISABLED_MARKER, { force: true });
+});
 afterEach(() => {
   rmSync(SESSION_CAPTURE_QUEUE_DIR, { recursive: true, force: true });
   rmSync(SESSION_CAPTURE_RECEIPT_DIR, { recursive: true, force: true });
+  rmSync(CURSOR_CAPTURE_ENABLED_MARKER, { force: true });
+  rmSync(CURSOR_CAPTURE_DISABLED_MARKER, { force: true });
   for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -221,6 +230,68 @@ describe('session capture queue', () => {
     assert.equal(request.transcriptPath, path);
     assert.equal(request.reason, 'session_end');
     assert.equal(request.dueAt, 1001);
+  });
+
+  it('keeps Cursor provider capture default-off and lets the disabled marker win', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-gate-'));
+    scratch.push(root);
+    const path = cursorTranscript(root, CURSOR_CONVERSATION_ID);
+    const payload = {
+      hookInput: cursorPayload(CURSOR_CONVERSATION_ID, path),
+      agent: 'cursor',
+      reason: 'activity',
+    };
+
+    rmSync(CURSOR_CAPTURE_ENABLED_MARKER);
+    assert.equal(
+      enqueueSessionCapture(payload, { now: 900, cursorTranscriptRoot: root }).reason,
+      SESSION_CAPTURE_DECLINE_REASON.CURSOR_CAPTURE_NOT_ENABLED,
+    );
+    assert.deepEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+
+    writeFileSync(CURSOR_CAPTURE_ENABLED_MARKER, '');
+    writeFileSync(CURSOR_CAPTURE_DISABLED_MARKER, '');
+    assert.equal(
+      enqueueSessionCapture(payload, { now: 901, cursorTranscriptRoot: root }).reason,
+      SESSION_CAPTURE_DECLINE_REASON.CURSOR_CAPTURE_DISABLED,
+    );
+    assert.deepEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+
+    rmSync(CURSOR_CAPTURE_DISABLED_MARKER);
+    assert.equal(
+      enqueueSessionCapture(payload, { now: 902, cursorTranscriptRoot: root }).queued,
+      true,
+    );
+    writeFileSync(CURSOR_CAPTURE_DISABLED_MARKER, '');
+    const codexPath = transcript('cursor-kill-switch-neighbor.jsonl');
+    assert.equal(enqueueSessionCapture({
+      hookInput: { session_id: 'codex-neighbor', transcript_path: codexPath },
+      agent: 'codex',
+      reason: 'session_end',
+    }, { now: 40 * 60 * 1000 }).queued, true);
+    let harvests = 0;
+    assert.deepEqual(await processSessionCaptureQueue({
+      now: 41 * 60 * 1000,
+      cursorTranscriptRoot: root,
+      runHarvestFn: async options => {
+        harvests++;
+        assert.equal(options.agent, 'codex');
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
+      },
+    }), { processed: 1, failed: 0, skipped: 0 });
+    assert.equal(harvests, 1, 'the kill switch must not starve other agents behind Cursor work');
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
+
+    rmSync(CURSOR_CAPTURE_DISABLED_MARKER);
+    rmSync(CURSOR_CAPTURE_ENABLED_MARKER);
+    assert.deepEqual(await processSessionCaptureQueue({
+      now: 42 * 60 * 1000,
+      cursorTranscriptRoot: root,
+      runHarvestFn: async () => {
+        throw new Error('an opted-out Cursor queue item must not reach the provider');
+      },
+    }), { processed: 0, failed: 0, skipped: 0 });
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
   });
 
   it('uses observed Cursor lifecycle identities to resolve a primary transcript', () => {
@@ -455,14 +526,36 @@ describe('session capture queue', () => {
     const secondId = OTHER_CURSOR_CONVERSATION_ID;
     const first = cursorTranscript(root, firstId, 'window-one');
     const second = cursorTranscript(root, secondId, 'window-two');
-    for (const [id, path] of [[firstId, first], [firstId, first], [secondId, second]]) {
-      assert.equal(enqueueSessionCapture({
-        hookInput: cursorPayload(id, path),
-        agent: 'cursor',
-        reason: 'activity',
-      }, { now: 1800, cursorTranscriptRoot: root }).queued, true);
-    }
-    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 2);
+
+    const firstStop = enqueueSessionCapture({
+      hookInput: cursorPayload(firstId, first),
+      agent: 'cursor',
+      reason: 'activity',
+    }, { now: 1800, cursorTranscriptRoot: root });
+    const firstPreCompact = enqueueSessionCapture({
+      hookInput: cursorPayload(firstId, first, 'preCompact'),
+      agent: 'cursor',
+      reason: 'precompact',
+    }, { now: 1800, cursorTranscriptRoot: root });
+    const secondStop = enqueueSessionCapture({
+      hookInput: cursorPayload(secondId, second),
+      agent: 'cursor',
+      reason: 'activity',
+    }, { now: 1800, cursorTranscriptRoot: root });
+
+    assert.equal(firstStop.queued, true);
+    assert.equal(firstPreCompact.key, firstStop.key);
+    assert.notEqual(secondStop.key, firstStop.key);
+    const expectedFirstKey = createHash('sha256').update(`cursor\0${firstId}`).digest('hex');
+    assert.equal(firstStop.key, expectedFirstKey);
+    const queueFiles = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    assert.equal(queueFiles.length, 2);
+    assert.ok(queueFiles.includes(`${firstStop.key}.json`));
+    const firstRequest = JSON.parse(
+      readFileSync(join(SESSION_CAPTURE_QUEUE_DIR, `${firstStop.key}.json`), 'utf8'),
+    );
+    assert.equal(firstRequest.reason, 'precompact');
+    assert.equal(firstRequest.dueAt, 1800 + (5 * 60 * 1000));
   });
 
   it('keeps incomplete harvest coverage queued without consuming a retry attempt', async () => {

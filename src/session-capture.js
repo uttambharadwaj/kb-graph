@@ -29,11 +29,15 @@ export const SESSION_CAPTURE_DECLINE_REASON = Object.freeze({
   INPUT_TOO_LARGE: 'input_too_large',
   MALFORMED_JSON: 'malformed_json',
   MISSING_IDENTITY: 'missing_identity',
+  CURSOR_CAPTURE_DISABLED: 'cursor_capture_disabled',
+  CURSOR_CAPTURE_NOT_ENABLED: 'cursor_capture_not_enabled',
 });
 
 export const SESSION_CAPTURE_QUEUE_DIR = join(KB_DIR, 'session-capture-queue');
 export const SESSION_CAPTURE_RECEIPT_DIR = join(KB_DIR, 'session-capture-receipts');
 export const SESSION_CAPTURE_LOG = join(LOGS_DIR, 'session-capture.log');
+export const CURSOR_CAPTURE_ENABLED_MARKER = join(KB_DIR, 'cursor-capture-enabled');
+export const CURSOR_CAPTURE_DISABLED_MARKER = join(KB_DIR, 'cursor-capture-disabled');
 
 const DELAY_MS = {
   session_end: 0,
@@ -130,6 +134,16 @@ function declineCapture(reason, details = {}) {
   return { output: null, plan: null, queued: false, reason, ...details };
 }
 
+function cursorCaptureDeclineReason() {
+  if (existsSync(CURSOR_CAPTURE_DISABLED_MARKER)) {
+    return SESSION_CAPTURE_DECLINE_REASON.CURSOR_CAPTURE_DISABLED;
+  }
+  if (!existsSync(CURSOR_CAPTURE_ENABLED_MARKER)) {
+    return SESSION_CAPTURE_DECLINE_REASON.CURSOR_CAPTURE_NOT_ENABLED;
+  }
+  return null;
+}
+
 function createCaptureRequest(hookInput, {
   agent = 'unknown',
   reason = 'activity',
@@ -200,6 +214,10 @@ export function enqueueSessionCapture(payload, {
   const host = validateHookHost(hookInput, payload?.agent);
   if (!host.ok) {
     return declineCapture(host.reason);
+  }
+  if (payload?.agent === AGENT.CURSOR) {
+    const reason = cursorCaptureDeclineReason();
+    if (reason) return declineCapture(reason);
   }
   const capture = createCaptureRequest(hookInput, {
     agent: payload?.agent,
@@ -385,7 +403,10 @@ export async function processSessionCaptureQueue({
 } = {}) {
   const harvest = runHarvestFn || (await import('./harvest.js')).runHarvest;
   const result = { processed: 0, failed: 0, skipped: 0 };
-  for (const { name, request } of dueQueueFiles(now).slice(0, limit)) {
+  const processable = dueQueueFiles(now).filter(
+    ({ request }) => request.agent !== AGENT.CURSOR || !cursorCaptureDeclineReason(),
+  );
+  for (const { name, request } of processable.slice(0, limit)) {
     const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, name);
     const claim = claimQueueItem(queuePath, request, now);
     if (!claim) continue;

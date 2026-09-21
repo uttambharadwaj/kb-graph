@@ -17,11 +17,12 @@ export const HOOK_FILES = {
 
 // Cursor's hooks.json differs in shape, not just path: camelCase event
 // names, flat `{command}` entries instead of `{hooks:[{type,command}]}`,
-// and a top-level `version`. Only sessionStart has a verified payload and
-// context contract here: beforeSubmitPrompt cannot inject context, and
-// lifecycle capture stays off until a native session-end fixture pins its
-// identity fields.
+// and a top-level `version`. sessionStart supplies briefing context. Native
+// Desktop stop and preCompact supply the verified primary transcript identity
+// used by default-off capture; sessionEnd is deliberately excluded because
+// Cursor 3.21.16 emits it only during window teardown, without a usable path.
 export const PUSH_AGENTS = [AGENT.CLAUDE, AGENT.CODEX];
+const CAPTURE_AGENTS = [...PUSH_AGENTS, AGENT.CURSOR];
 
 function hookFilePath(agent, home = homedir()) {
   const parts = HOOK_FILES[agent];
@@ -68,10 +69,11 @@ const HOOK_SPECS = [
   },
   {
     event: 'PreCompact',
+    eventName: { [AGENT.CURSOR]: 'preCompact' },
     matcher: { [AGENT.CLAUDE]: 'manual|auto', [AGENT.CODEX]: null },
     subcommand: 'session-capture-hook',
     extraArgs: ['--reason=precompact'],
-    agents: PUSH_AGENTS,
+    agents: CAPTURE_AGENTS,
   },
   {
     event: 'SessionEnd',
@@ -82,10 +84,11 @@ const HOOK_SPECS = [
   },
   {
     event: 'Stop',
+    eventName: { [AGENT.CURSOR]: 'stop' },
     matcher: null,
     subcommand: 'session-capture-hook',
     extraArgs: ['--reason=activity'],
-    agents: [AGENT.CODEX],
+    agents: [AGENT.CODEX, AGENT.CURSOR],
   },
   {
     event: 'SessionStart',
