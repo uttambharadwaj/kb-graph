@@ -1,9 +1,16 @@
-import {
+import { fileURLToPath } from 'node:url';
+process.env.KB_DIR ||= fileURLToPath(new URL('../.cache/test-state', import.meta.url));
+process.env.KB_EMBEDDING_CACHE_DIR ||= fileURLToPath(
+  new URL('../.cache/test-embedding', import.meta.url),
+);
+
+const {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
   generatePreflightEmbedding,
+  resolveEmbeddingCacheDir,
   resolveEmbeddingLoadTimeoutMs,
-} from '../src/embeddings/embed.js';
+} = await import('../src/embeddings/embed.js');
 
 const runtime = {
   node: process.version,
@@ -13,11 +20,8 @@ const runtime = {
 };
 
 try {
-  const [{ default: Database }, { env: transformersEnv }] = await Promise.all([
-    import('better-sqlite3'),
-    import('@huggingface/transformers'),
-  ]);
-  const cacheDir = process.env.KB_EMBEDDING_CACHE_DIR?.trim() || transformersEnv.cacheDir;
+  const { default: Database } = await import('better-sqlite3');
+  const cacheDir = resolveEmbeddingCacheDir();
 
   const db = new Database(':memory:');
   const sqliteVersion = db.prepare('SELECT sqlite_version() AS version').get().version;
@@ -59,7 +63,7 @@ try {
   console.error(JSON.stringify({
     ...runtime,
     status: 'failed',
-    cacheDir: process.env.KB_EMBEDDING_CACHE_DIR?.trim() || null,
+    cacheDir: resolveEmbeddingCacheDir(),
     error: err instanceof Error ? err.message : String(err),
   }));
   throw err;

@@ -1,13 +1,11 @@
-import 'dotenv/config';
-import { homedir } from 'os';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
+import { ACTIVE_KB_DIR, DEFAULT_KB_DIR } from './env.js';
 
 // tests/helpers/tmp-kb.js checks this to prove it ran before we did.
 globalThis.__KB_PATHS_LOADED__ = true;
 
-const REAL_DEFAULT_KB_DIR = join(homedir(), '.knowledge-base');
-export const KB_DIR = process.env.KB_DIR || REAL_DEFAULT_KB_DIR;
+export const KB_DIR = ACTIVE_KB_DIR;
 
 // ESM evaluates a module's imports before its own top-level code, regardless
 // of source position, so "set env before the import" fixtures run too late.
@@ -15,7 +13,7 @@ export const KB_DIR = process.env.KB_DIR || REAL_DEFAULT_KB_DIR;
 // NODE_TEST_CONTEXT is an undocumented node:test internal (Node 22: "child-v8");
 // if a Node upgrade renames it this check silently disarms — tmp-kb.js's
 // load-order flag is the version-independent backstop.
-if (process.env.NODE_TEST_CONTEXT && KB_DIR === REAL_DEFAULT_KB_DIR) {
+if (process.env.NODE_TEST_CONTEXT && KB_DIR === DEFAULT_KB_DIR) {
   throw new Error(
     'kb-graph: test process resolved KB_DIR to the real ~/.knowledge-base. ' +
     'A src module was likely imported before tests/helpers/tmp-kb.js set ' +

@@ -1,4 +1,11 @@
-import { readFileSync } from 'fs';
+import './helpers/tmp-kb.js';
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync, mkdtempSync, readFileSync, rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
@@ -31,6 +38,7 @@ describe('test runtime contract', () => {
     assert.ok(workflow.indexOf('npm run test:preflight') < workflow.indexOf('npm run test:suite'));
     assert.match(workflow, /KB_EMBEDDING_CACHE_DIR:/);
     assert.match(workflow, /node: \[22, 24, 26\]/);
+    assert.match(workflow, /package-smoke:[\s\S]+scripts\/smoke-tarball\.sh/);
   });
 
   it('runs one cancellable matrix per PR and keeps a post-merge main run', () => {
@@ -45,6 +53,8 @@ describe('test runtime contract', () => {
     const actions = [...workflow.matchAll(/uses:\s+([^@\s]+)@([^\s#]+)/g)]
       .map(([, name, revision]) => ({ name, revision }));
     assert.deepStrictEqual(actions, [
+      { name: 'actions/checkout', revision: '3d3c42e5aac5ba805825da76410c181273ba90b1' },
+      { name: 'actions/setup-node', revision: '820762786026740c76f36085b0efc47a31fe5020' },
       { name: 'actions/checkout', revision: '3d3c42e5aac5ba805825da76410c181273ba90b1' },
       { name: 'actions/setup-node', revision: '820762786026740c76f36085b0efc47a31fe5020' },
       { name: 'actions/cache', revision: '55cc8345863c7cc4c66a329aec7e433d2d1c52a9' },
@@ -76,6 +86,23 @@ describe('test runtime contract', () => {
       generatePreflightEmbedding('cold-cache probe', 1, { importTransformers }),
       /timed out after 1ms/,
     );
+  });
+
+  it('isolates preflight state before importing the runtime', () => {
+    const home = mkdtempSync(join(tmpdir(), 'kb-preflight-home-'));
+    const { KB_DIR: _kbDir, HOME: _home, ...env } = process.env;
+    try {
+      const result = spawnSync(process.execPath, ['scripts/test-preflight.mjs'], {
+        cwd: fileURLToPath(new URL('..', import.meta.url)),
+        env: { ...env, HOME: home, KB_EMBEDDING_PREFLIGHT_TIMEOUT_MS: '120000' },
+        encoding: 'utf8',
+        timeout: 120000,
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(existsSync(join(home, '.knowledge-base')), false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('keeps the Better Auth MCP plugin on the legacy plugins export path', async () => {

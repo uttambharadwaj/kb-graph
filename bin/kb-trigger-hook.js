@@ -8,8 +8,9 @@
 // binary setup-hooks.js writes into the installed command is already the
 // right one, so there is nothing to re-exec. `kb trigger-hook` (bin/kb.js)
 // stays as the debuggable path for manual invocation; only the installed
-// hook command points here. src/paths.js still loads dotenv/config on its
-// own, so env vars behave identically either way.
+// hook command points here. src/paths.js still loads the shared environment
+// bootstrap on its own, including durable KB_DIR/.env with a checkout .env
+// fallback, so env vars behave identically either way.
 //
 // The import is dynamic and wrapped in try/catch: a module-load failure
 // anywhere in the chain (trigger-hook.js, trigger-match.js, paths.js's own

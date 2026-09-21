@@ -41,6 +41,14 @@ test('mergeAgentHooks adds retrieval, continuity, and asynchronous capture hooks
   assert.equal(merged.hooks.SessionEnd[0].hooks[0].command, 'env NODE_OPTIONS= /usr/local/bin/node /opt/kb/bin/kb.js session-capture-hook --reason=session_end');
 });
 
+test('generated hooks preserve a custom KB_DIR', () => {
+  const merged = mergeAgentHooks({}, { ...OPTS, kbDir: "/home/user/KB's state" });
+  assert.equal(
+    merged.hooks.SessionStart[0].hooks[0].command,
+    'env NODE_OPTIONS= KB_DIR=\'/home/user/KB\'"\'"\'s state\' /usr/local/bin/node /opt/kb/bin/kb.js wakeup-hook',
+  );
+});
+
 test('mergeAgentHooks replaces the legacy inline preservation command instead of leaving an invalid second hook', () => {
   const legacy = "printf '%s\\n' 'CRITICAL PRESERVATION INSTRUCTIONS FOR THIS SUMMARY:'; echo 'Git state at compaction:'";
   const existing = { hooks: { PreCompact: [{ hooks: [{ type: 'command', command: legacy }] }] } };

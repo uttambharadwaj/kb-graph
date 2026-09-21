@@ -21,9 +21,11 @@ import {
 import {
   buildEnvContent,
   dockerComposeContent,
+  launchdServiceContent,
   parseAutoArgs,
   resolvePersistedHttpHost,
   resolvePersistedHttpPort,
+  systemdServiceContent,
 } from '../src/cli/setup.js';
 
 const LIVE_PROJECT_ENV = fileURLToPath(new URL('../.env', import.meta.url));
@@ -50,7 +52,7 @@ function createSetupCliSandbox(prefix) {
     : null;
 
   return {
-    projectEnv: join(project, '.env'),
+    projectEnv: join(home, 'kb-data', '.env'),
     run(args) {
       return spawnSync(
         process.execPath,
@@ -244,6 +246,18 @@ test('generated containers expose HTTP only on host loopback', () => {
   });
   assert.match(compose, /"127\.0\.0\.1:3838:3838"/);
   assert.match(compose, /KB_HOST: 0\.0\.0\.0/);
+  assert.ok(compose.includes(`env_file:\n      - ${JSON.stringify(join(process.env.KB_DIR, '.env'))}`));
+});
+
+test('generated services preserve custom KB_DIR paths', () => {
+  assert.match(
+    systemdServiceContent({ kbDir: '/home/u/100% "kb"' }),
+    /Environment="KB_DIR=\/home\/u\/100%% \\"kb\\""/,
+  );
+  assert.match(
+    launchdServiceContent({ kbDir: '/home/u/KB & notes' }),
+    /<key>KB_DIR<\/key>\s*<string>\/home\/u\/KB &amp; notes<\/string>/,
+  );
 });
 
 test('the setup CLI rejects unsafe hosts without touching live configuration', () => {

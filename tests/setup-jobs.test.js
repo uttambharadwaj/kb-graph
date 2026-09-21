@@ -7,7 +7,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { JOBS, renderPlist, renderSystemdUnits, installJobs } from '../src/cli/setup-jobs.js';
 
-const OPTS = { nodeBin: '/usr/local/bin/node', kbRoot: '/opt/kb', vaultPath: '/home/u/kb-vault', claudePath: '/usr/local/bin/claude', logsDir: '/home/u/.knowledge-base/logs' };
+const OPTS = {
+  nodeBin: '/usr/local/bin/node',
+  kbRoot: '/opt/kb',
+  kbDir: '/home/u/custom-kb',
+  vaultPath: '/home/u/kb-vault',
+  claudePath: '/usr/local/bin/claude',
+  logsDir: '/home/u/.knowledge-base/logs',
+};
 
 test('JOBS defines harvest, reindex, synthesis, reconcile', () => {
   assert.deepEqual(JOBS.map(j => j.name), ['harvest', 'reindex', 'synthesis', 'reconcile']);
@@ -50,6 +57,7 @@ test('renderPlist mirrors the reference install', () => {
   assert.match(harvest, /<string>\/opt\/kb\/bin\/kb\.js<\/string>\s*<string>harvest<\/string>/);
   assert.match(harvest, /<key>Hour<\/key><integer>3<\/integer><key>Minute<\/key><integer>30<\/integer>/);
   assert.match(harvest, /<key>OBSIDIAN_VAULT_PATH<\/key>\s*<string>\/home\/u\/kb-vault<\/string>/);
+  assert.match(harvest, /<key>KB_DIR<\/key>\s*<string>\/home\/u\/custom-kb<\/string>/);
   assert.match(harvest, /<key>CLAUDE_PATH<\/key>\s*<string>\/usr\/local\/bin\/claude<\/string>/);
   assert.match(harvest, /<key>PATH<\/key>\s*<string>\/usr\/local\/bin:\/opt\/homebrew\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin<\/string>/);
 
@@ -83,6 +91,7 @@ test('renderSystemdUnits produces service+timer with matching cadences', () => {
   const { service, timer } = renderSystemdUnits(JOBS[0], OPTS);
   assert.match(service, /ExecStart=\/usr\/local\/bin\/node \/opt\/kb\/bin\/kb\.js harvest/);
   assert.match(service, /Environment="OBSIDIAN_VAULT_PATH=\/home\/u\/kb-vault"/);
+  assert.match(service, /Environment="KB_DIR=\/home\/u\/custom-kb"/);
   assert.match(service, /Environment="PATH=\/usr\/local\/bin:\/opt\/homebrew\/bin:\/usr\/bin:\/bin:\/usr\/sbin:\/sbin"/);
   assert.match(timer, /OnCalendar=\*-\*-\* 03:30:00/);
   const reindexTimer = renderSystemdUnits(JOBS[1], OPTS).timer;

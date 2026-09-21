@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { stableNodePath } from './runtime-node.js';
 import { AGENT } from '../process-ancestry.js';
+import { KB_DIR } from '../paths.js';
 import { fileURLToPath } from 'url';
 import { writePrivateFile, writePrivateFiles } from '../private-file.js';
 
@@ -27,7 +28,7 @@ export function mcpServerConfig(agent = null) {
     // Agent hosts may carry private Node preloads in NODE_OPTIONS. The KB
     // runtime does not depend on them, and a deleted preload would kill Node
     // before the shim can connect or fall back.
-    env: { NODE_OPTIONS: '' },
+    env: { NODE_OPTIONS: '', KB_DIR },
   };
 }
 
@@ -171,6 +172,7 @@ export function codexRegistrationSnippet() {
     '',
     `[mcp_servers.${KB_MCP_SERVER_NAME}.env]`,
     'NODE_OPTIONS = ""',
+    `KB_DIR = ${q(KB_DIR)}`,
   ].join('\n');
 }
 

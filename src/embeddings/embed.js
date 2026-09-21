@@ -1,3 +1,6 @@
+import { join } from 'path';
+import { KB_DIR } from '../paths.js';
+
 let pipeline = null;
 let pipelinePromise = null; // Mutex: prevents concurrent model loads
 
@@ -17,6 +20,10 @@ export function resolveEmbeddingLoadTimeoutMs(raw) {
     throw new Error(`embedding load timeout must be at most ${MAX_EMBEDDING_LOAD_TIMEOUT_MS}ms`);
   }
   return timeoutMs;
+}
+
+export function resolveEmbeddingCacheDir(raw = process.env.KB_EMBEDDING_CACHE_DIR) {
+  return String(raw ?? '').trim() || join(KB_DIR, 'models');
 }
 
 export async function withEmbeddingLoadTimeout(load, loadTimeoutMs) {
@@ -46,8 +53,7 @@ async function getEmbedder(loadTimeoutMs = DEFAULT_EMBEDDING_LOAD_TIMEOUT_MS, {
 
   pipelinePromise = (async () => {
     const { env, pipeline: createPipeline } = await importTransformers();
-    const cacheDir = process.env.KB_EMBEDDING_CACHE_DIR?.trim();
-    if (cacheDir) env.cacheDir = cacheDir;
+    env.cacheDir = resolveEmbeddingCacheDir();
 
     // Race model load against the caller's timeout. Promise.race does not
     // cancel the loser, so the timer must be cleared explicitly — left pending

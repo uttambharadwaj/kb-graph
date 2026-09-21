@@ -10,6 +10,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { register } from '../src/cli/register.js';
 import { registerSetupAgent } from '../src/cli/setup.js';
+import { KB_DIR } from '../src/paths.js';
 import {
   codexRegistrationSnippet,
   findCursorWorkspaceConfig,
@@ -58,7 +59,7 @@ describe('MCP registration', () => {
     assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
       command: stableNodePath(),
       args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
-      env: { NODE_OPTIONS: '' },
+      env: { NODE_OPTIONS: '', KB_DIR },
     });
   });
 
@@ -97,7 +98,7 @@ describe('MCP registration', () => {
       assert.deepStrictEqual(config.mcpServers['knowledge-base'], {
         command: stableNodePath(),
         args: [KB_ENTRYPOINT_PATH, 'mcp-shim'],
-        env: { NODE_OPTIONS: '' },
+        env: { NODE_OPTIONS: '', KB_DIR },
       });
     }
   });
@@ -148,7 +149,7 @@ describe('codex registration', () => {
     assert.ok(snippet.includes(`args = [${JSON.stringify(KB_ENTRYPOINT_PATH)}, "mcp-shim"]`));
     assert.ok(snippet.includes(`cwd = ${JSON.stringify(join(KB_ENTRYPOINT_PATH, '..', '..'))}`));
     assert.match(snippet, /^startup_timeout_sec = 20\.0$/m);
-    assert.match(snippet, /^\[mcp_servers\.knowledge-base\.env\]\nNODE_OPTIONS = ""$/m);
+    assert.match(snippet, /^\[mcp_servers\.knowledge-base\.env\]\nNODE_OPTIONS = ""\nKB_DIR = ".+"$/m);
   });
 });
 
@@ -205,7 +206,7 @@ describe('registering from a second checkout', () => {
     assert.strictEqual(registeredPath(homeDir), KB_ENTRYPOINT_PATH);
     assert.deepStrictEqual(
       JSON.parse(readFileSync(path, 'utf8')).mcpServers['knowledge-base'].env,
-      { KB_REPO_ROOTS: '/workspace/repos', NODE_OPTIONS: '' },
+      { KB_REPO_ROOTS: '/workspace/repos', NODE_OPTIONS: '', KB_DIR },
     );
   });
 
@@ -235,6 +236,7 @@ describe('registering from a second checkout', () => {
     assert.deepStrictEqual(updated.env, {
       KB_REPO_ROOTS: '/workspace/repos',
       NODE_OPTIONS: '',
+      KB_DIR,
     });
   });
 
@@ -419,7 +421,7 @@ describe('Cursor workspace registration', () => {
         disabled: true,
         command: stableNodePath(),
         args: [KB_ENTRYPOINT_PATH, 'mcp-shim', '--agent=cursor'],
-        env: { PRESERVED: 'yes', NODE_OPTIONS: '' },
+        env: { PRESERVED: 'yes', NODE_OPTIONS: '', KB_DIR },
       });
     }
   });

@@ -2,7 +2,7 @@
 import { writeFileSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { execFileSync } from 'child_process';
-import { LOGS_DIR } from '../paths.js';
+import { KB_DIR, LOGS_DIR } from '../paths.js';
 import { JOBS } from '../jobs.js';
 
 export { JOBS };
@@ -20,14 +20,14 @@ const xmlEscape = s => String(s)
 // systemd Environment=: % is a specifier, " ends the quoted value
 const sdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
 
-// A scheduled job inherits nothing — no shell profile, and dotenv resolves .env
-// against the launcher's cwd (/ under launchd), not the install. Whatever the
-// job needs has to be written into the unit here, and changing it later means
-// re-running `kb setup`.
+// A scheduled job inherits no shell profile. The runtime loads KB_DIR/.env,
+// but PATH and executable locations still have to be written into the unit;
+// changing these snapshots later means re-running `kb setup`.
 const optInEnabled = value =>
   ['1', 'true', 'yes'].includes(String(value ?? '').toLowerCase());
 
 const jobEnv = (job, opts) => ({
+  ...(opts.kbDir ? { KB_DIR: opts.kbDir } : {}),
   OBSIDIAN_VAULT_PATH: opts.vaultPath,
   CLAUDE_PATH: opts.claudePath ?? '',
   // Scheduled jobs inherit little or no shell profile. Preserve the
@@ -109,8 +109,11 @@ export function installJobs({
   harvestSdkSessions = process.env.KB_HARVEST_SDK_SESSIONS,
   load = true,
   logsDir = LOGS_DIR,
+  kbDir = KB_DIR,
 }) {
-  const opts = { nodeBin, kbRoot, vaultPath, claudePath, harvestFacts, harvestSdkSessions, logsDir };
+  const opts = {
+    nodeBin, kbRoot, vaultPath, claudePath, harvestFacts, harvestSdkSessions, logsDir, kbDir,
+  };
   const steps = [];
   // launchd does not create the directory it is told to redirect into; a
   // missing one makes the job fail before it runs, with nowhere to say so.

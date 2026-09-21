@@ -123,13 +123,17 @@ const agentSuffix = (agent) => agent === AGENT.CLAUDE ? '' : ` ${AGENT_FLAG} ${a
 // any hook code can fail open. KB hooks do not depend on host-level Node
 // instrumentation, so run them with an explicitly clean option set.
 const HOOK_ENV_PREFIX = 'env NODE_OPTIONS= ';
+const shellQuote = value => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 
-const commandFor = (spec, { nodeBin, kbJsPath, agent }) => {
+const commandFor = (spec, {
+  nodeBin, kbJsPath, agent, kbDir,
+}) => {
   const target = spec.script
     ? join(dirname(kbJsPath), spec.script)
     : `${kbJsPath} ${spec.subcommand}`;
   const extraArgs = spec.extraArgs?.length ? ` ${spec.extraArgs.join(' ')}` : '';
-  return `${HOOK_ENV_PREFIX}${nodeBin} ${target}${extraArgs}${agentSuffix(agent)}`;
+  const kbDirEnv = kbDir ? `KB_DIR=${shellQuote(kbDir)} ` : '';
+  return `${HOOK_ENV_PREFIX}${kbDirEnv}${nodeBin} ${target}${extraArgs}${agentSuffix(agent)}`;
 };
 
 // The agent a command was installed for, read the same way readAgentFlag
@@ -175,7 +179,9 @@ const clearsNodeOptions = (command) => command.startsWith(HOOK_ENV_PREFIX);
 // Pure merge: dedup by the spec's own identity so re-runs and prior manual
 // installs never duplicate. Direct-Node installs are replaced: they inherit
 // the host's NODE_OPTIONS and can die before the hook's fail-open code loads.
-export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLAUDE }) {
+export function mergeAgentHooks(settings, {
+  nodeBin, kbJsPath, agent = AGENT.CLAUDE, kbDir,
+}) {
   const next = structuredClone(settings ?? {});
   next.hooks = next.hooks ?? {};
   const flat = agent === AGENT.CURSOR;
@@ -184,7 +190,9 @@ export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLA
     if (!spec.agents.includes(agent)) continue;
     const event = eventFor(spec, agent);
     const entries = (next.hooks[event] = next.hooks[event] ?? []);
-    const replacement = commandFor(spec, { nodeBin, kbJsPath, agent });
+    const replacement = commandFor(spec, {
+      nodeBin, kbJsPath, agent, kbDir,
+    });
     const matcher = matcherFor(spec, agent);
     const currentInstalls = entries.flatMap(group =>
       (flat ? [group] : (group.hooks ?? []))
@@ -246,7 +254,9 @@ export function mergeAgentHooks(settings, { nodeBin, kbJsPath, agent = AGENT.CLA
   return next;
 }
 
-export function installAgentHooks({ home, nodeBin, kbJsPath, agent = AGENT.CLAUDE }) {
+export function installAgentHooks({
+  home, nodeBin, kbJsPath, agent = AGENT.CLAUDE, kbDir,
+}) {
   const path = hookFilePath(agent, home);
   mkdirSync(dirname(path), { recursive: true });
   let settings = {};
@@ -261,7 +271,12 @@ export function installAgentHooks({ home, nodeBin, kbJsPath, agent = AGENT.CLAUD
     backup = `${path}.kb-backup`;
     copyFileSync(path, backup);
   }
-  const json = JSON.stringify(mergeAgentHooks(settings, { nodeBin, kbJsPath, agent }), null, 2) + '\n';
+  const json = JSON.stringify(mergeAgentHooks(
+    settings,
+    {
+      nodeBin, kbJsPath, agent, kbDir,
+    },
+  ), null, 2) + '\n';
   // Write-to-temp-then-rename so a crash can't half-write the config.
   writeFileSync(`${path}.kb-tmp`, json);
   renameSync(`${path}.kb-tmp`, path);

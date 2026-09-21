@@ -4,7 +4,7 @@
 // contradictions, merge candidates, stale entries, gaps), and writes the
 // ANSWER into the vault — not the prompt.
 
-import 'dotenv/config';
+import '../src/env.js';
 import {
   getRecentNotes, generateSynthesisPrompt, generateAnalysisRequest,
   getNearDupPairs, writeSynthesisNote,

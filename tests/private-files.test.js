@@ -10,7 +10,7 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIG_PATH } from '../src/paths.js';
+import { CONFIG_PATH, KB_DIR } from '../src/paths.js';
 import { setPassword } from '../src/auth.js';
 import * as setup from '../src/cli/setup.js';
 import { writePrivateFile, writePrivateFiles } from '../src/private-file.js';
@@ -85,7 +85,7 @@ test('setup summary never renders passwords or API keys', () => {
   });
 
   assert.doesNotMatch(text, /dashboard-secret|agent-api-secret/);
-  assert.match(text, /Credentials:\s+stored in \.env/);
+  assert.match(text, new RegExp(`Credentials:\\s+stored in ${join(KB_DIR, '.env')}`));
 });
 
 test('interactive secret prompts do not render their default value', async () => {

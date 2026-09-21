@@ -3,10 +3,10 @@
 // One table drives dispatch, the command list, per-command help, and flag
 // validation, so a command cannot gain a flag that `--help` fails to mention.
 
+import '../src/env.js';
 import { lockPreferredNodeRuntime } from '../src/cli/runtime-node.js';
 import { acceptFlags, runEntryPoint, wantsHelp } from '../src/cli/flags.js';
 import { PENDING_EXIT } from '../src/schema.js';
-import 'dotenv/config';
 
 await lockPreferredNodeRuntime(import.meta.url);
 
