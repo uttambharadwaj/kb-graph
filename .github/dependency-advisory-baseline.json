@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "advisories": [
+    {
+      "package": "sharp",
+      "advisoryId": "GHSA-f88m-g3jw-g9cj",
+      "severity": "high",
+      "direct": false,
+      "fixAvailability": "semver-major",
+      "reason": "The vulnerable native image codecs are installed through Transformers.js, but kb-graph invokes only the text feature-extraction pipeline. Upgrading Transformers.js is tracked separately because npm currently offers only a semver-major remediation.",
+      "affectedSurface": "@huggingface/transformers@3.8.1 -> sharp@0.34.5; runtime embedding generation uses Xenova/all-MiniLM-L6-v2 text input and does not call image decoding.",
+      "owner": "Product Foundation",
+      "trackingIssues": [
+        "PF-3887",
+        "PF-3890"
+      ],
+      "reviewedAt": "2026-09-21",
+      "expiresOn": "2026-12-21"
+    },
+    {
+      "package": "sharp",
+      "advisoryId": "GHSA-rgj7-g3m4-5g8c",
+      "severity": "high",
+      "direct": false,
+      "fixAvailability": "semver-major",
+      "reason": "The vulnerable native image codecs are installed through Transformers.js, but kb-graph invokes only the text feature-extraction pipeline. Upgrading Transformers.js is tracked separately because npm currently offers only a semver-major remediation.",
+      "affectedSurface": "@huggingface/transformers@3.8.1 -> sharp@0.34.5; runtime embedding generation uses Xenova/all-MiniLM-L6-v2 text input and does not call image decoding.",
+      "owner": "Product Foundation",
+      "trackingIssues": [
+        "PF-3887",
+        "PF-3890"
+      ],
+      "reviewedAt": "2026-09-21",
+      "expiresOn": "2026-12-21"
+    }
+  ]
+}

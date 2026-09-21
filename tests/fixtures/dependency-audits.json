@@ -1,0 +1,144 @@
+{
+  "clean": {
+    "vulnerabilities": {}
+  },
+  "current": {
+    "vulnerabilities": {
+      "@huggingface/transformers": {
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          "sharp"
+        ],
+        "fixAvailable": {
+          "name": "@huggingface/transformers",
+          "version": "4.3.0",
+          "isSemVerMajor": true
+        }
+      },
+      "sharp": {
+        "severity": "high",
+        "isDirect": false,
+        "via": [
+          {
+            "name": "sharp",
+            "dependency": "sharp",
+            "url": "https://github.com/advisories/GHSA-f88m-g3jw-g9cj",
+            "severity": "high"
+          },
+          {
+            "name": "sharp",
+            "dependency": "sharp",
+            "url": "https://github.com/advisories/GHSA-rgj7-g3m4-5g8c",
+            "severity": "high"
+          }
+        ],
+        "fixAvailable": {
+          "name": "@huggingface/transformers",
+          "version": "4.3.0",
+          "isSemVerMajor": true
+        }
+      }
+    }
+  },
+  "newQualifying": {
+    "vulnerabilities": {
+      "direct-risk": {
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          {
+            "name": "direct-risk",
+            "dependency": "direct-risk",
+            "url": "https://github.com/advisories/GHSA-2345-6789-cfgh",
+            "severity": "high"
+          }
+        ],
+        "fixAvailable": false
+      },
+      "transitive-risk": {
+        "severity": "critical",
+        "isDirect": false,
+        "via": [
+          {
+            "name": "transitive-risk",
+            "dependency": "transitive-risk",
+            "url": "https://github.com/advisories/GHSA-jmpq-rvwx-2345",
+            "severity": "critical"
+          }
+        ],
+        "fixAvailable": false
+      }
+    }
+  },
+  "malformed": {
+    "vulnerabilities": {
+      "broken-wrapper": {
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          "missing-package"
+        ],
+        "fixAvailable": false
+      }
+    }
+  },
+  "networkFailure": {
+    "error": {
+      "code": "EAI_AGAIN",
+      "summary": "network unavailable"
+    }
+  },
+  "registryFailure": {
+    "error": {
+      "code": "E403",
+      "summary": "registry denied"
+    }
+  },
+  "fixableDirect": {
+    "vulnerabilities": {
+      "direct-risk": {
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          {
+            "name": "direct-risk",
+            "dependency": "direct-risk",
+            "url": "https://github.com/advisories/GHSA-3456-789c-fghj",
+            "severity": "high"
+          }
+        ],
+        "fixAvailable": {
+          "name": "direct-risk",
+          "version": "2.0.1",
+          "isSemVerMajor": false
+        }
+      }
+    }
+  },
+  "transitiveNoFix": {
+    "vulnerabilities": {
+      "direct-parent": {
+        "severity": "high",
+        "isDirect": true,
+        "via": [
+          "transitive-risk"
+        ],
+        "fixAvailable": false
+      },
+      "transitive-risk": {
+        "severity": "high",
+        "isDirect": false,
+        "via": [
+          {
+            "name": "transitive-risk",
+            "dependency": "transitive-risk",
+            "url": "https://github.com/advisories/GHSA-4567-89cf-ghjm",
+            "severity": "high"
+          }
+        ],
+        "fixAvailable": false
+      }
+    }
+  }
+}
