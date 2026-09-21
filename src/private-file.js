@@ -23,6 +23,7 @@ export function writePrivateFile(path, content) {
   assertNotSymbolicLink(path);
   const temporaryPath = privateTemporaryPath(path);
   let operationError;
+  let committed = false;
   try {
     writeFileSync(temporaryPath, content, {
       flag: 'wx',
@@ -31,14 +32,17 @@ export function writePrivateFile(path, content) {
     chmodSync(temporaryPath, PRIVATE_FILE_MODE);
     assertNotSymbolicLink(path);
     renameSync(temporaryPath, path);
+    committed = true;
   } catch (err) {
     operationError = err;
     throw err;
   } finally {
-    try {
-      rmSync(temporaryPath, { force: true });
-    } catch (err) {
-      if (!operationError) throw err;
+    if (!committed) {
+      try {
+        rmSync(temporaryPath, { force: true });
+      } catch (err) {
+        if (!operationError) throw err;
+      }
     }
   }
 }

@@ -13,6 +13,7 @@ import { canonicalPredicate } from './predicates.js';
 import { authoredBody } from './embeddings/embed.js';
 import { FTS_OUTCOME_TIE_BUCKET, compareByOutcomeSignal } from './outcome-ranking.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
+import { sessionCaptureQueueStatus } from './session-capture.js';
 
 let db = null;
 
@@ -1564,10 +1565,12 @@ export function getHealth({ recordBacklog = false } = {}) {
   // quiet weekend used to look identical to a broken launchd job. Fall back to
   // the log for installs whose last run predates the heartbeat.
   const harvest = getMeta('last_harvest');
+  const harvestErrors = Number(getMeta('last_harvest_errors')?.value || 0);
   const harvestLogged = db.prepare("SELECT MAX(harvested_at) t FROM harvest_log").get()?.t || null;
   const lastHarvest = harvest?.updated_at || harvestLogged;
   const harvestAge = lastHarvest ? (Date.now() - new Date(lastHarvest + 'Z').getTime()) / 3600000 : null;
   const synthesis = getMeta('last_synthesis');
+  const captureQueue = sessionCaptureQueueStatus();
   const hookErrors = lineCount(HOOK_ERROR_LOG);
   const reconcile = getMeta('last_reconcile');
   const reconcileError = getMeta('last_reconcile_error');
@@ -1597,6 +1600,9 @@ export function getHealth({ recordBacklog = false } = {}) {
   const reindexAge = ageHours(reindex);
   if (reindexAge === null || reindexAge > STALE_AFTER.reindex) warnings.push(`reindex heartbeat ${reindexAge === null ? 'never recorded' : Math.round(reindexAge) + 'h old'} — check com.kb.reindex launchd job`);
   if (harvestAge === null || harvestAge > STALE_AFTER.harvest) warnings.push(`harvest ${harvestAge === null ? 'never ran' : Math.round(harvestAge) + 'h ago'} — check com.kb.harvest launchd job`);
+  if (harvestErrors > 0) warnings.push(`last harvest had ${harvestErrors} extraction error${harvestErrors === 1 ? '' : 's'} — check harvest.err; failed sessions remain queued for retry`);
+  if (captureQueue.failed > 0) warnings.push(`${captureQueue.failed} automatic session capture${captureQueue.failed === 1 ? '' : 's'} waiting on retry — check session-capture.log`);
+  else if (captureQueue.oldestOverdueMs > 5 * 60 * 1000) warnings.push(`${captureQueue.due} automatic session capture${captureQueue.due === 1 ? '' : 's'} overdue — check the resident KB daemon`);
   const synthAge = ageHours(synthesis);
   if (synthAge === null || synthAge > STALE_AFTER.synthesis) warnings.push(`synthesis ${synthAge === null ? 'never recorded' : Math.round(synthAge / 24) + 'd ago'} — check com.kb.synthesis launchd job`);
   const reconcileAge = ageHours(reconcile);
@@ -1610,6 +1616,7 @@ export function getHealth({ recordBacklog = false } = {}) {
     last_harvest: lastHarvest,
     last_synthesis: synthesis?.updated_at || null,
     last_reconcile: reconcile?.updated_at || null,
+    session_capture_queue: captureQueue,
     ok: warnings.length === 0,
     warnings,
   };

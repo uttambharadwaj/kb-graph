@@ -82,17 +82,22 @@ describe('bootstrapping a fresh database', () => {
         caller, model, ok, duration_ms, prompt_chars, response_chars
       ) VALUES ('extract', 'test-model', 1, 42, 10, 20)
     `).run();
+    const before = kb.prepare('SELECT * FROM model_calls').get();
 
     applyMigrations(kb, KB_MIGRATIONS);
 
     const row = kb.prepare(`
-      SELECT caller, response_ready_ms, shutdown_tail_ms FROM model_calls
+      SELECT
+        id, caller, model, ok, duration_ms, error, prompt_chars,
+        response_chars, created_at, response_ready_ms, shutdown_tail_ms
+      FROM model_calls
     `).get();
     assert.deepStrictEqual(row, {
-      caller: 'extract',
+      ...before,
       response_ready_ms: null,
       shutdown_tail_ms: null,
     });
+    assert.equal(kb.prepare('SELECT COUNT(*) AS count FROM model_calls').get().count, 1);
   });
 
   it('adds transcript parser versions without rewriting existing harvest watermarks', () => {

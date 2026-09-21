@@ -111,6 +111,29 @@ describe('hook failure growth', () => {
   });
 });
 
+describe('unattended failure state stays visible', () => {
+  it('reports harvest extraction failures and includes the session-capture queue census', () => {
+    getDb().prepare(`
+      INSERT INTO meta (key, value, updated_at)
+      VALUES ('last_harvest_errors', '2', datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run();
+
+    const health = getHealth();
+
+    assert.ok(
+      health.warnings.some(warning => warning.includes('last harvest had 2 extraction errors')),
+      'a successful scheduler heartbeat must not hide failed extraction work',
+    );
+    assert.deepStrictEqual(health.session_capture_queue, {
+      queued: 0,
+      due: 0,
+      failed: 0,
+      oldestOverdueMs: 0,
+    });
+  });
+});
+
 // A tolerance chosen independently of the cadence it watches will drift wider
 // than it. The harvest's was 48h against a 24h period, so one dead night was
 // indistinguishable from a night that worked and the briefing read OK through
