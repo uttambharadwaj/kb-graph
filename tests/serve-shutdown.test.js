@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { connectDaemonClient } from '../src/daemon-client.js';
+import { restartMarkerPath } from '../src/daemon-restart.js';
 
 const TIMEOUT_MS = 90_000;
 
@@ -34,6 +35,7 @@ test('SIGTERM exits cleanly after the native embedding runtime has loaded', { ti
       ...process.env,
       KB_DIR: kbDir,
       OBSIDIAN_VAULT_PATH: vaultPath,
+      KB_SERVE_RESTART_ON_SIGNAL: '1',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -80,6 +82,7 @@ test('SIGTERM exits cleanly after the native embedding runtime has loaded', { ti
     assert.doesNotMatch(stderr, /libc\+\+abi|mutex lock failed|Abort trap/, stderr);
     assert.equal(existsSync(socketPath), false, 'the MCP socket must be removed');
     assert.equal(existsSync(controlSocketPath), false, 'the control socket must be removed');
+    assert.equal(existsSync(restartMarkerPath(socketPath)), true, 'SIGTERM must mark the planned replacement');
   } finally {
     child.kill('SIGKILL');
     await exited;

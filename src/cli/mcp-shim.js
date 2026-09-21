@@ -25,6 +25,11 @@ import {
   recordShimRecovery,
   recordShimRecoveryAttempt,
 } from '../shim-path-meter.js';
+import {
+  DEFAULT_RESTART_GRACE_TIMEOUT_MS,
+  DEFAULT_RESTART_MARKER_MAX_AGE_MS,
+  readRecentDaemonRestart,
+} from '../daemon-restart.js';
 
 const DEFAULT_STARTUP_READINESS_TIMEOUT_MS = 8000;
 const DEFAULT_PROBE_ATTEMPT_TIMEOUT_MS = 1000;
@@ -47,6 +52,10 @@ export const PROBE_ATTEMPT_TIMEOUT_MS = Number(process.env.KB_SHIM_PROBE_ATTEMPT
 export const CONNECT_TIMEOUT_MS = Number(process.env.KB_SHIM_CONNECT_TIMEOUT_MS) || DEFAULT_CONNECT_TIMEOUT_MS;
 export const RECOVERY_HANDSHAKE_TIMEOUT_MS = Number(process.env.KB_SHIM_RECOVERY_HANDSHAKE_TIMEOUT_MS)
   || DEFAULT_RECOVERY_HANDSHAKE_TIMEOUT_MS;
+export const RESTART_GRACE_TIMEOUT_MS = Number(process.env.KB_SHIM_RESTART_GRACE_TIMEOUT_MS)
+  || DEFAULT_RESTART_GRACE_TIMEOUT_MS;
+export const RESTART_MARKER_MAX_AGE_MS = Number(process.env.KB_SHIM_RESTART_MARKER_MAX_AGE_MS)
+  || DEFAULT_RESTART_MARKER_MAX_AGE_MS;
 // Compatibility export for callers that only checked the old single deadline.
 export const PROBE_TIMEOUT_MS = STARTUP_READINESS_TIMEOUT_MS;
 export const RECONNECT_DELAY_MS = Number(process.env.KB_SHIM_RECONNECT_DELAY_MS) || DEFAULT_RECONNECT_DELAY_MS;
@@ -141,19 +150,26 @@ export function reconnectDelay(
 }
 
 async function waitForDaemonReady(socketPath) {
-  const deadline = Date.now() + STARTUP_READINESS_TIMEOUT_MS;
+  const ordinaryDeadline = Date.now() + STARTUP_READINESS_TIMEOUT_MS;
+  let deadline = ordinaryDeadline;
+  let restartGraceUsed = false;
   let attempts = 0;
   let last = { state: 'unreachable', errorCode: null, protocol: null };
   do {
+    const restartMarker = readRecentDaemonRestart(socketPath, { maxAgeMs: RESTART_MARKER_MAX_AGE_MS });
+    if (restartMarker) {
+      deadline = Math.max(deadline, restartMarker.startedAt + RESTART_GRACE_TIMEOUT_MS);
+    }
     attempts++;
     const remainingMs = Math.max(1, deadline - Date.now());
     last = await probeDaemonAlive(socketPath, Math.min(PROBE_ATTEMPT_TIMEOUT_MS, remainingMs));
-    if (last.state === 'alive') return { ...last, attempts };
+    restartGraceUsed ||= deadline > ordinaryDeadline && Date.now() > ordinaryDeadline;
+    if (last.state === 'alive') return { ...last, attempts, restartGraceUsed };
     const remainingAfterAttemptMs = deadline - Date.now();
     if (remainingAfterAttemptMs <= 0) break;
     await sleep(Math.min(reconnectDelay(attempts, 50, 250), remainingAfterAttemptMs));
   } while (Date.now() < deadline);
-  return { ...last, attempts };
+  return { ...last, attempts, restartGraceUsed };
 }
 
 const FALLBACK_REASONS = {
@@ -166,6 +182,12 @@ function fallbackMetricReason({ state, errorCode }) {
   if (['ECONNREFUSED', 'ENOENT'].includes(errorCode)) return 'connection_refused';
   if (errorCode === 'TIMEOUT') return 'connection_timeout';
   return 'connection_error';
+}
+
+function daemonReadyMetricReason(liveness) {
+  if (liveness.restartGraceUsed) return 'cold_restart_ready';
+  if (liveness.attempts > 1) return 'cold_ready';
+  return liveness.protocol;
 }
 
 async function serveInProcess(reason, identity, { startedAt, metricReason = reason, errorCode = null }) {
@@ -500,7 +522,9 @@ export async function runMcpShimCli(args) {
   if (liveness.state !== 'alive') {
     return serveInProcess(liveness.state, identity, {
       startedAt,
-      metricReason: fallbackMetricReason(liveness),
+      metricReason: liveness.restartGraceUsed
+        ? 'restart_readiness_timeout'
+        : fallbackMetricReason(liveness),
       errorCode: liveness.errorCode,
     });
   }
@@ -534,7 +558,7 @@ export async function runMcpShimCli(args) {
   // node_modules, pinned by tests/shim-hello.test.js.
   recordShimPath({
     path: 'daemon',
-    reason: liveness.attempts > 1 ? 'cold_ready' : liveness.protocol,
+    reason: daemonReadyMetricReason(liveness),
     durationMs: Date.now() - startedAt,
   });
   const socket = connection.socket;

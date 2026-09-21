@@ -2,7 +2,7 @@ import './helpers/tmp-kb.js';
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -11,8 +11,10 @@ import { createServer } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/server';
 import packageJson from '../package.json' with { type: 'json' };
 import { reconnectDelay } from '../src/cli/mcp-shim.js';
+import { startReplacementDaemon } from '../src/cli/serve.js';
 import { getDb } from '../src/db.js';
 import { startDaemon } from '../src/daemon.js';
+import { markDaemonRestart, restartMarkerPath } from '../src/daemon-restart.js';
 import { resolveHarnessAncestry } from '../src/process-ancestry.js';
 import { SESSION_MAP_DIR } from '../src/session-map.js';
 import { SHIM_PATH_LOG, SHIM_RECOVERY_STAGES } from '../src/shim-path-meter.js';
@@ -315,6 +317,106 @@ describe('kb mcp-shim', () => {
     } finally {
       child.kill();
       await wedged.close();
+    }
+  });
+
+  it('waits through an explicitly marked cold restart without changing the ordinary startup deadline', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    markDaemonRestart(socketPath);
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '150',
+      KB_SHIM_RESTART_GRACE_TIMEOUT_MS: '5000',
+      KB_SHIM_RESTART_MARKER_MAX_AGE_MS: '5000',
+      KB_SHIM_PROBE_ATTEMPT_TIMEOUT_MS: '100',
+    });
+    const stderr = collectStderr(child);
+    const driver = jsonRpcDriver(child);
+    try {
+      const initialized = initialize(driver);
+      await delay(1500);
+      await startTestDaemon({ socketPath });
+
+      const init = await withDeadline(initialized, 5_000, 'the replacement daemon to answer initialize');
+      assert.deepStrictEqual(init.result.serverInfo, { name: 'knowledge-base', version: packageJson.version });
+      assert.ok(!stderr().includes('serving in-process'), stderr());
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'daemon', reason: 'cold_restart_ready' },
+      );
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('ignores a stale restart marker and preserves fallback availability', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    markDaemonRestart(socketPath, { now: Date.now() - 10_000 });
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '150',
+      KB_SHIM_RESTART_GRACE_TIMEOUT_MS: '2000',
+      KB_SHIM_RESTART_MARKER_MAX_AGE_MS: '1000',
+      KB_SHIM_PROBE_ATTEMPT_TIMEOUT_MS: '100',
+    });
+    const driver = jsonRpcDriver(child);
+    try {
+      const init = await withDeadline(initialize(driver), 5_000, 'the fallback server to answer initialize');
+      assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'fallback', reason: 'connection_refused' },
+      );
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('bounds a marked restart when the replacement daemon never appears', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    markDaemonRestart(socketPath);
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '150',
+      KB_SHIM_RESTART_GRACE_TIMEOUT_MS: '2500',
+      KB_SHIM_RESTART_MARKER_MAX_AGE_MS: '5000',
+      KB_SHIM_PROBE_ATTEMPT_TIMEOUT_MS: '100',
+    });
+    const driver = jsonRpcDriver(child);
+    try {
+      const init = await withDeadline(initialize(driver), 5_000, 'the bounded restart grace to fall back');
+      assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'fallback', reason: 'restart_readiness_timeout' },
+      );
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('consumes a successful replacement marker before a later crash', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const socketPath = freshSocketPath();
+    markDaemonRestart(socketPath);
+    const daemon = await startReplacementDaemon(socketPath, {
+      start: path => startTestDaemon({ socketPath: path }),
+    });
+    assert.equal(existsSync(restartMarkerPath(socketPath)), false);
+
+    await daemon.close();
+    liveDaemons.delete(daemon);
+    const child = spawnShim([`--socket=${socketPath}`], {
+      KB_SHIM_STARTUP_READINESS_TIMEOUT_MS: '300',
+      KB_SHIM_RESTART_GRACE_TIMEOUT_MS: '5000',
+      KB_SHIM_RESTART_MARKER_MAX_AGE_MS: '5000',
+    });
+    const driver = jsonRpcDriver(child);
+    try {
+      const init = await withDeadline(initialize(driver), 5_000, 'ordinary fallback after the replacement crash');
+      assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
+      assert.deepStrictEqual(
+        { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
+        { path: 'fallback', reason: 'connection_refused' },
+      );
+    } finally {
+      child.kill();
     }
   });
 
