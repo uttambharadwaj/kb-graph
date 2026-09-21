@@ -16,7 +16,7 @@ const fixtures = JSON.parse(readFileSync(
   new URL('./fixtures/dependency-audits.json', import.meta.url),
   'utf8',
 ));
-const reviewedBaseline = JSON.parse(readFileSync(
+const productionBaseline = JSON.parse(readFileSync(
   new URL('../.github/dependency-advisory-baseline.json', import.meta.url),
   'utf8',
 ));
@@ -46,11 +46,24 @@ function acceptedEntry(advisory) {
   };
 }
 
+const fixtureReviewedBaseline = {
+  schemaVersion: 1,
+  advisories: extractQualifyingAdvisories(fixtures.removedSharpAdvisories).map(acceptedEntry),
+};
+
 describe('dependency advisory policy', () => {
-  it('accepts a clean audit against an empty baseline', () => {
-    const result = evaluateAudit(fixtures.clean, emptyBaseline(), AS_OF);
+  it('accepts a clean audit against the empty production baseline', () => {
+    assert.deepEqual(productionBaseline.advisories, []);
+    const result = evaluateAudit(fixtures.clean, productionBaseline, AS_OF);
     assert.equal(result.ok, true);
     assert.deepEqual(result.observed, []);
+  });
+
+  it('rejects the removed sharp advisories if the dependency graph regresses', () => {
+    const result = evaluateAudit(fixtures.removedSharpAdvisories, productionBaseline, AS_OF);
+    assert.equal(result.ok, false);
+    assert.match(result.errors.join('\n'), /new high advisory sharp:GHSA-f88m-g3jw-g9cj/);
+    assert.match(result.errors.join('\n'), /new high advisory sharp:GHSA-rgj7-g3m4-5g8c/);
   });
 
   it('rejects newly introduced high and critical advisory identities', () => {
@@ -70,17 +83,17 @@ describe('dependency advisory policy', () => {
   });
 
   it('fails loud when a removed advisory leaves a stale exception', () => {
-    const result = evaluateAudit(fixtures.clean, reviewedBaseline, AS_OF);
+    const result = evaluateAudit(fixtures.clean, fixtureReviewedBaseline, AS_OF);
     assert.equal(result.ok, false);
     assert.equal(result.errors.filter(error => error.startsWith('stale baseline exception')).length, 2);
   });
 
   it('treats a changed GHSA identity as both new and stale', () => {
-    const report = clone(fixtures.current);
+    const report = clone(fixtures.removedSharpAdvisories);
     report.vulnerabilities.sharp.via[1].url =
       'https://github.com/advisories/GHSA-w234-x567-cf89';
 
-    const result = evaluateAudit(report, reviewedBaseline, AS_OF);
+    const result = evaluateAudit(report, fixtureReviewedBaseline, AS_OF);
     assert.equal(result.ok, false);
     assert.match(result.errors.join('\n'), /new high advisory sharp:GHSA-w234-x567-cf89/);
     assert.match(result.errors.join('\n'), /stale baseline exception sharp:GHSA-rgj7-g3m4-5g8c/);
@@ -92,11 +105,11 @@ describe('dependency advisory policy', () => {
       ['direct', true],
       ['fixAvailable', false],
     ]) {
-      const report = clone(fixtures.current);
+      const report = clone(fixtures.removedSharpAdvisories);
       if (field === 'severity') report.vulnerabilities.sharp.via[0].severity = value;
       else if (field === 'direct') report.vulnerabilities.sharp.isDirect = value;
       else report.vulnerabilities.sharp[field] = value;
-      const result = evaluateAudit(report, reviewedBaseline, AS_OF);
+      const result = evaluateAudit(report, fixtureReviewedBaseline, AS_OF);
       assert.equal(result.ok, false, `${field} drift must fail`);
       assert.match(result.errors.join('\n'), new RegExp(`changed ${field === 'fixAvailable' ? 'fixAvailability' : field}`));
     }
@@ -203,16 +216,16 @@ describe('dependency advisory policy', () => {
     assert.equal(result.ok, true);
   });
 
-  it('accepts the exact reviewed current advisory set and rejects expiry', () => {
-    assert.equal(evaluateAudit(fixtures.current, reviewedBaseline, AS_OF).ok, true);
+  it('accepts the exact synthetic advisory set and rejects expiry', () => {
+    assert.equal(evaluateAudit(fixtures.removedSharpAdvisories, fixtureReviewedBaseline, AS_OF).ok, true);
     assert.throws(
-      () => evaluateAudit(fixtures.current, reviewedBaseline, { asOf: '2026-12-22' }),
+      () => evaluateAudit(fixtures.removedSharpAdvisories, fixtureReviewedBaseline, { asOf: '2026-12-22' }),
       error => error instanceof PolicyDataError && /expired on 2026-12-21/.test(error.message),
     );
   });
 
   it('rejects broad, duplicate, incomplete, impossible, and future-dated exceptions', () => {
-    const valid = reviewedBaseline.advisories[0];
+    const valid = fixtureReviewedBaseline.advisories[0];
     const invalidBaselines = [
       { ...valid, package: '*' },
       { ...valid, advisoryId: 'GHSA-3456' },
@@ -225,7 +238,7 @@ describe('dependency advisory policy', () => {
     for (const baseline of invalidBaselines) {
       assert.throws(() => validateBaseline(baseline, AS_OF), PolicyDataError);
     }
-    assert.doesNotThrow(() => validateBaseline(reviewedBaseline, { asOf: '2026-12-21' }));
+    assert.doesNotThrow(() => validateBaseline(fixtureReviewedBaseline, { asOf: '2026-12-21' }));
   });
 
   it('keeps the workflow pinned, fork-safe, and scoped away from unrelated pull requests', () => {

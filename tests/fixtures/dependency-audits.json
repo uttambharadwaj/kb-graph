@@ -2,7 +2,7 @@
   "clean": {
     "vulnerabilities": {}
   },
-  "current": {
+  "removedSharpAdvisories": {
     "vulnerabilities": {
       "@huggingface/transformers": {
         "severity": "high",
