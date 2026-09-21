@@ -47,16 +47,17 @@ const MIN_PREFIX_LEN = 4;
 // actually relies on: plurals, past tense, and agent nouns (`index/indexer`,
 // `review/reviewer`).
 const INFLECTION_SUFFIXES = new Set(['s', 'es', 'ed', 'er']);
-// Reviewed exceptions stay closed rather than turning every ambiguous `-ves`
-// verb into an `-f/-fe` noun (`leaves` must not become `leaf`).
-const REVIEWED_DERIVATION_FORMS = new Map([
-  ['loaf', ['loaves']],
-  ['loaves', ['loaf']],
+// Keep derivation closed to reviewed, semantically equivalent `-se`/`-sal`
+// pairs. A suffix-wide rule confuses real words such as reprise/reprisal and
+// callose/callosal; each supported verb needs positive evidence.
+const REVIEWED_SE_SAL_VERBS = new Set([
+  'appraise',
+  'arouse',
+  'dispose',
+  'propose',
+  'rehearse',
+  'recuse',
 ]);
-// The regular noun/verb derivation is bounded below. `approve` is excluded by
-// reviewed replay evidence: treating it as `approval` surfaced approval-policy
-// notes under ordinary PR approvals.
-const DERIVATION_BLOCKERS = new Set(['approve', 'approval']);
 
 // A current state or durable decision is more useful than accumulated lessons
 // when both are equally strong identity matches. This never turns silence into
@@ -134,14 +135,14 @@ function covered(term, promptTerms, prefixable) {
 }
 
 function derivationForms(term) {
-  const forms = [term, ...(REVIEWED_DERIVATION_FORMS.get(term) || [])];
-  if (DERIVATION_BLOCKERS.has(term)) return forms;
-  if (/[sv]e$/u.test(term) && term.length > 5) {
-    forms.push(`${term.slice(0, -1)}al`);
-  } else if (/[sv]al$/u.test(term) && term.length > 6) {
-    forms.push(`${term.slice(0, -2)}e`);
+  if (REVIEWED_SE_SAL_VERBS.has(term)) {
+    return [term, `${term.slice(0, -1)}al`];
   }
-  return [...new Set(forms)];
+  if (term.endsWith('sal') && term.length > 6) {
+    const verb = `${term.slice(0, -2)}e`;
+    if (REVIEWED_SE_SAL_VERBS.has(verb)) return [term, verb];
+  }
+  return [term];
 }
 
 // df for many terms in one statement; terms absent from the index are absent
@@ -334,6 +335,16 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
       derivationForms(a).includes(b) || derivationForms(b).includes(a)
     ));
   const familiesOf = (entries, includeDerivations) => {
+    if (!includeDerivations) {
+      const families = [];
+      for (const entry of entries) {
+        const home = families.find(family =>
+          family.some(member => related(member.term, entry.term, false)));
+        if (home) home.push(entry); else families.push([entry]);
+      }
+      return families;
+    }
+
     const remaining = [...entries];
     const families = [];
     while (remaining.length) {
