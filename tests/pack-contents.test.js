@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8'));
 const llms = readFileSync(resolve(root, 'llms.txt'), 'utf8');
 
 function dryRunPack() {
@@ -20,7 +21,9 @@ function dryRunPack() {
 }
 
 test('package metadata and lifecycle are safe for public global installs', () => {
-  assert.equal(pkg.version, '2.1.0');
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
   assert.equal(pkg.license, 'MIT');
   assert.equal(pkg.repository?.url, 'git+https://github.com/uttambharadwaj/kb-graph.git');
   assert.equal(pkg.homepage, 'https://github.com/uttambharadwaj/kb-graph#readme');

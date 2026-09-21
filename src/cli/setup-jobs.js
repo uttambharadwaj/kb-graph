@@ -13,12 +13,12 @@ function command(job, { nodeBin, kbRoot }) {
   return [nodeBin, join(kbRoot, entry), ...rest];
 }
 
-const xmlEscape = s => String(s)
+export const xmlEscape = s => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
 // systemd Environment=: % is a specifier, " ends the quoted value
-const sdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
+export const systemdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
 
 // A scheduled job inherits no shell profile. The runtime loads KB_DIR/.env,
 // but PATH and executable locations still have to be written into the unit;
@@ -81,7 +81,7 @@ Description=KB ${job.name}
 [Service]
 Type=oneshot
 ExecStart=${command(job, opts).join(' ')}
-${Object.entries(jobEnv(job, opts)).map(([k, v]) => `Environment="${k}=${sdEscape(v)}"`).join('\n')}
+${Object.entries(jobEnv(job, opts)).map(([k, v]) => `Environment="${k}=${systemdEscape(v)}"`).join('\n')}
 `;
   const trigger = job.schedule.interval
     ? `OnBootSec=${job.schedule.interval}\nOnUnitActiveSec=${job.schedule.interval}`

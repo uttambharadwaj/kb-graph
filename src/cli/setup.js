@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { SUPPORTED_AGENTS, registerAgents } from './mcp-register.js';
 import { HOOK_FILES, PUSH_AGENTS, installAgentHooks } from './setup-hooks.js';
-import { installJobs } from './setup-jobs.js';
+import { installJobs, systemdEscape, xmlEscape } from './setup-jobs.js';
 import { stableNodePath } from './runtime-node.js';
 import { writePrivateFile } from '../private-file.js';
 import { askHidden } from '../secret-prompt.js';
@@ -31,10 +31,6 @@ const PROJECT_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '..',
 
 function out(text) { process.stdout.write(text); }
 function outln(text = '') { process.stdout.write(text + '\n'); }
-const xmlEscape = value => String(value)
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-const systemdEscape = value => String(value).replace(/%/g, '%%').replace(/"/g, '\\"');
 
 function genHex(bytes = 32) { return randomBytes(bytes).toString('hex'); }
 function genBase64(bytes = 32) { return randomBytes(bytes).toString('base64'); }
