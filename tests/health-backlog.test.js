@@ -112,6 +112,21 @@ describe('hook failure growth', () => {
 });
 
 describe('unattended failure state stays visible', () => {
+  it('does not treat capture harvest rows as the scheduled heartbeat', () => {
+    const db = getDb();
+    db.prepare("DELETE FROM meta WHERE key = 'last_harvest'").run();
+    db.prepare(`
+      INSERT OR REPLACE INTO harvest_log
+        (transcript_path, mtime, facts_added, notes_added, harvested_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+    `).run('/tmp/capture-only.jsonl', Date.now(), 0, 0);
+
+    assert.ok(
+      getHealth().warnings.some(warning => warning.includes('harvest never ran')),
+      'capture recovery must not make the nightly maintenance loop look healthy',
+    );
+  });
+
   it('reports harvest extraction failures and includes the session-capture queue census', () => {
     getDb().prepare(`
       INSERT INTO meta (key, value, updated_at)

@@ -482,6 +482,19 @@ describe('harvest candidate selection', () => {
     db.prepare(
       'INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP'
     ).run('harvest_backfill_cursor_path', original);
+    db.prepare(`
+      INSERT INTO meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run('last_harvest', 'scheduled-run', '2000-01-01 00:00:00');
+    db.prepare(`
+      INSERT INTO meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run('last_harvest_errors', '3', '2000-01-01 00:00:00');
+    const heartbeatBefore = db.prepare(
+      "SELECT key, value, updated_at FROM meta WHERE key IN ('last_harvest', 'last_harvest_errors') ORDER BY key"
+    ).all();
     try {
       const path = join(root, 'rollout-2026-09-08T00-07-00-old.jsonl');
       writeFileSync(path, JSON.stringify({
@@ -504,6 +517,12 @@ describe('harvest candidate selection', () => {
       assert.strictEqual(
         db.prepare("SELECT value FROM meta WHERE key = 'harvest_backfill_cursor_path'").get().value,
         original,
+      );
+      assert.deepStrictEqual(
+        db.prepare(
+          "SELECT key, value, updated_at FROM meta WHERE key IN ('last_harvest', 'last_harvest_errors') ORDER BY key"
+        ).all(),
+        heartbeatBefore,
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -863,6 +882,20 @@ describe('harvest candidate selection', () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
     const path = join(root, 'capture-maintenance.jsonl');
     let maintenanceCalls = 0;
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run('last_harvest', 'scheduled-run', '2000-01-01 00:00:00');
+    db.prepare(`
+      INSERT INTO meta (key, value, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run('last_harvest_errors', '3', '2000-01-01 00:00:00');
+    const heartbeatBefore = db.prepare(
+      "SELECT key, value, updated_at FROM meta WHERE key IN ('last_harvest', 'last_harvest_errors') ORDER BY key"
+    ).all();
     writeTranscript(path, [
       JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
       JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a complete capture-only session. '.repeat(400) }] } }),
@@ -871,7 +904,13 @@ describe('harvest candidate selection', () => {
     await runHarvest({ onlyPath: path, maintenance: false, runMaintenance: async () => { maintenanceCalls++; } });
 
     assert.strictEqual(maintenanceCalls, 0);
-    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest'").get(), 'the run heartbeat still records capture harvest activity');
+    assert.deepStrictEqual(
+      db.prepare(
+        "SELECT key, value, updated_at FROM meta WHERE key IN ('last_harvest', 'last_harvest_errors') ORDER BY key"
+      ).all(),
+      heartbeatBefore,
+      'capture recovery must not make the nightly maintenance loop look healthy',
+    );
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -879,6 +918,7 @@ describe('harvest candidate selection', () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-roots-'));
     const path = join(root, 'nightly-maintenance.jsonl');
     const calls = [];
+    getDb().prepare("DELETE FROM meta WHERE key IN ('last_harvest', 'last_harvest_errors')").run();
     writeTranscript(path, [
       JSON.stringify({ type: 'attachment', entrypoint: 'cli' }),
       JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a complete nightly session. '.repeat(400) }] } }),
@@ -887,6 +927,8 @@ describe('harvest candidate selection', () => {
     await runHarvest({ onlyPath: path, runMaintenance: async args => calls.push(args) });
 
     assert.deepStrictEqual(calls, [{ vaultPath: process.env.OBSIDIAN_VAULT_PATH }]);
+    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest'").get());
+    assert.ok(getDb().prepare("SELECT value FROM meta WHERE key = 'last_harvest_errors'").get());
     rmSync(root, { recursive: true, force: true });
   });
 

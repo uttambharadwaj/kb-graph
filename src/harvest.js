@@ -734,11 +734,9 @@ export async function runHarvest({
   // stays current nightly without a separate job. Capture-only lifecycle calls
   // pass maintenance=false because their caller only needs this transcript's
   // coverage result and receipt state.
-  if (!dryRun) {
+  if (!dryRun && maintenance) {
     setMeta('last_harvest', String(summary.sessions));
     setMeta('last_harvest_errors', String(summary.errors));
-  }
-  if (!dryRun && maintenance) {
     if (runMaintenance) {
       await runMaintenance({ vaultPath });
     } else {

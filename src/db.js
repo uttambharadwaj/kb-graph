@@ -1560,14 +1560,12 @@ export function getHealth({ recordBacklog = false } = {}) {
 
   const ageHours = (row) => row ? (Date.now() - new Date(row.updated_at + 'Z').getTime()) / 3600000 : null;
   const reindex = getMeta('last_reindex');
-  // A heartbeat has to record that the job ran, not what it happened to find:
-  // harvest_log only grows when there was a transcript worth reading, so a
-  // quiet weekend used to look identical to a broken launchd job. Fall back to
-  // the log for installs whose last run predates the heartbeat.
+  // A heartbeat has to record that the scheduled maintenance job ran, not what
+  // it happened to find. Capture-only recovery also writes harvest_log, so
+  // those rows cannot prove the nightly loop is alive.
   const harvest = getMeta('last_harvest');
   const harvestErrors = Number(getMeta('last_harvest_errors')?.value || 0);
-  const harvestLogged = db.prepare("SELECT MAX(harvested_at) t FROM harvest_log").get()?.t || null;
-  const lastHarvest = harvest?.updated_at || harvestLogged;
+  const lastHarvest = harvest?.updated_at || null;
   const harvestAge = lastHarvest ? (Date.now() - new Date(lastHarvest + 'Z').getTime()) / 3600000 : null;
   const synthesis = getMeta('last_synthesis');
   const captureQueue = sessionCaptureQueueStatus();
