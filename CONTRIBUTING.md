@@ -76,18 +76,9 @@ While developing, mind which process serves your code:
 - **Daemon running:** it deliberately does not watch `src/` — restart it after
   edits (`launchctl kickstart -k gui/$(id -u)/com.kb.serve` /
   `systemctl --user restart kb-serve`) or it continues serving the prior code.
-- **No daemon (in-process fallback / direct `kb mcp`):** `kb mcp` is a
-  supervisor — it holds the client's stdio connection and runs the real server
-  (`src/mcp.js`) as a child, replacing that child whenever a `.js` or `.json`
-  file under `src/` changes and no tool call is in flight. Edit, save, and the
-  next call is served by the new code. Three changes still need a real
-  reconnect: `src/mcp-supervisor.js` or `src/restart-on-change.js` themselves
-  (only the child is replaced); the server's declared capabilities, pinned by
-  the first child's `initialize` response; and `.env`, which `bin/kb.js` reads
-  once at startup. Code reloads, configuration does not.
-
-`kb stale-servers` lists running servers that predate their own checkout's last
-source change — the ones that will never notice on their own.
+- **No daemon (in-process fallback / direct `kb mcp`):** the client process runs
+  one full stdio server without a watcher or child process. Reconnect the MCP
+  session after source or configuration changes to load the new code.
 
 ## License
 

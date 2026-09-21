@@ -1,7 +1,5 @@
 // The resident KB service: one process, one unix socket, one MCP connection
-// per accepted socket, in place of the supervisor+child pair every editor
-// session spawns today. Nothing registers against it yet — the stdio shim
-// that dials it lands separately.
+// per accepted socket. Registered stdio clients reach it through mcp-shim.
 //
 // Each connection is served by serveStdio() over a StdioServerTransport bound
 // to the socket rather than to process stdio. That is the SDK's sanctioned
@@ -10,9 +8,8 @@
 // HTTP, is the wire: serveStdio gives full bidirectional JSON-RPC, so
 // server->client notifications work.
 //
-// No src/ watcher here on purpose: the per-session supervisor reloads its
-// child because it owns one connection, while a restart of this process drops
-// every session at once. Whatever supervises `kb serve` owns that decision.
+// No src/ watcher here on purpose: restarting this process affects every
+// session at once. The service manager supervising `kb serve` owns replacement.
 import { chmodSync, lstatSync, unlinkSync } from 'fs';
 import { connect, createServer } from 'net';
 import { StdioServerTransport, serveStdio } from '@modelcontextprotocol/server/stdio';

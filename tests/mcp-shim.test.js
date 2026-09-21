@@ -81,6 +81,15 @@ function waitForExit(child) {
   return new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
 }
 
+function processChildren(parentPid) {
+  const result = spawnSync('ps', ['-eo', 'ppid=,args='], { encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  return result.stdout.split('\n').filter((line) => {
+    const match = line.match(/^\s*(\d+)\s+(.*)$/);
+    return match && Number(match[1]) === parentPid;
+  });
+}
+
 function collectStderr(child) {
   let text = '';
   child.stderr.setEncoding('utf8');
@@ -170,6 +179,33 @@ describe('kb mcp-shim', () => {
   it('never jitters reconnect delay past the configured maximum', () => {
     assert.strictEqual(reconnectDelay(20, 100, 2_000, () => 1), 2_000);
     assert.strictEqual(reconnectDelay(1, 100, 2_000, () => 0), 75);
+  });
+
+  it('keeps direct kb mcp as a one-process stdio path', { timeout: CASE_TIMEOUT_MS }, async () => {
+    const child = spawn(process.execPath, [KB_BIN, 'mcp'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    strayChildren.add(child);
+    child.once('exit', () => strayChildren.delete(child));
+    const driver = jsonRpcDriver(child);
+    try {
+      const init = await withDeadline(initialize(driver), 15_000, 'direct kb mcp to initialize');
+      assert.strictEqual(init.result.serverInfo.name, 'knowledge-base');
+      assert.deepStrictEqual(
+        processChildren(child.pid),
+        [],
+        'direct kb mcp must not spawn a child process',
+      );
+      const exited = waitForExit(child);
+      child.stdin.end();
+      assert.deepStrictEqual(
+        await withDeadline(exited, 5_000, 'direct kb mcp to exit on client EOF'),
+        { code: 0, signal: null },
+      );
+    } finally {
+      if (child.exitCode === null) child.kill();
+    }
   });
 
   it('forwards initialize, tools/list and tools/call through the daemon socket', { timeout: CASE_TIMEOUT_MS }, async () => {
@@ -277,8 +313,19 @@ describe('kb mcp-shim', () => {
         { path: lastShimPathEvent().path, reason: lastShimPathEvent().reason },
         { path: 'fallback', reason: 'connection_refused' },
       );
+      assert.deepStrictEqual(
+        processChildren(child.pid),
+        [],
+        'fallback must stay in the shim process instead of spawning a child process',
+      );
+      const exited = waitForExit(child);
+      child.stdin.end();
+      assert.deepStrictEqual(
+        await withDeadline(exited, 5_000, 'the direct fallback to exit on client EOF'),
+        { code: 0, signal: null },
+      );
     } finally {
-      child.kill();
+      if (child.exitCode === null) child.kill();
     }
   });
 

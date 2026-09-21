@@ -24,7 +24,7 @@ const COMMANDS = {
   },
   mcp: {
     summary: 'Start MCP stdio server (used by AI tools)',
-    run: () => import('../src/mcp-supervisor.js').then(m => m.superviseMcpServer()),
+    run: () => import('../src/mcp.js').then(m => m.start()),
   },
   'mcp-shim': {
     summary: 'Connect this session to the resident `kb serve` daemon over stdio, falling back to in-process MCP when it is unreachable',
@@ -187,10 +187,6 @@ const COMMANDS = {
   'link-backfill': {
     summary: 'Connect existing docs via embedding neighbors (doc_links + Related sections)',
     run: () => import('../src/cli/link-backfill.js').then(m => m.linkBackfill()),
-  },
-  'stale-servers': {
-    summary: 'List running MCP servers that started before the last src/ change',
-    run: () => import('../src/cli/stale-servers.js').then(m => m.runStaleServersCli()),
   },
   'fold-inverses': {
     summary: 'Fold pre-existing facts onto one predicate and direction per relationship',

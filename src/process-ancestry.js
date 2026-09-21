@@ -84,14 +84,11 @@ export function findHarnessAncestor(pid, table) {
   return null;
 }
 
-// `ps -eo pid,ppid,lstart,comm` in one call — cli/stale-servers.js parses the
-// same shape (pid, ppid, lstart, args) for the same reason: pid_start must
+// `ps -eo pid,ppid,lstart,comm` in one call: pid_start must
 // come from the same snapshot as the ancestry walk, and lstart's own 5
 // space-separated sub-fields ("Www Mmm dd hh:mm:ss yyyy") sit between ppid
 // and the last column, so a naive whitespace split misreads them as separate
-// columns. Duplicated here rather than imported from stale-servers.js: that
-// module pulls in the migration/schema CLI dependency chain, too heavy to
-// drag onto a hook subprocess spawned every prompt.
+// columns.
 const PS_LINE = /^\s*(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/;
 
 export function parseProcessTable(raw) {

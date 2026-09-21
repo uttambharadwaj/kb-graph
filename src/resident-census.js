@@ -13,7 +13,7 @@ const command = suffix => new RegExp(`^${NODE}\\S*${suffix}(?:\\s|$)`);
 const COMMANDS = {
   daemon: command(String.raw`\/bin\/kb\.js\s+serve`),
   shim: command(String.raw`\/bin\/kb\.js\s+mcp-shim`),
-  supervisor: command(String.raw`\/bin\/kb\.js\s+mcp`),
+  mcp: command(String.raw`\/bin\/kb\.js\s+mcp`),
   worker: command(String.raw`\/src\/mcp\.js`),
 };
 
@@ -25,34 +25,36 @@ export function summarizeResidentProcesses(raw, { now = new Date() } = {}) {
   const byPid = new Map(rows.map(row => [row.pid, row]));
   const daemons = rows.filter(row => COMMANDS.daemon.test(row.comm));
   const shims = rows.filter(row => COMMANDS.shim.test(row.comm));
-  const supervisors = rows.filter(row => COMMANDS.supervisor.test(row.comm));
+  const mcpCommands = rows.filter(row => COMMANDS.mcp.test(row.comm));
   const workers = rows.filter(row => COMMANDS.worker.test(row.comm));
 
-  const fallbackShimPids = new Set();
-  let orphanWorkers = 0;
+  const legacyFallbackShimPids = new Set();
+  const legacySupervisorPids = new Set();
+  let unparentedMcpServers = 0;
   for (const worker of workers) {
     const parent = byPid.get(worker.ppid);
-    if (parent && COMMANDS.shim.test(parent.comm)) fallbackShimPids.add(parent.pid);
-    else if (!parent || !COMMANDS.supervisor.test(parent.comm)) orphanWorkers++;
+    if (parent && COMMANDS.shim.test(parent.comm)) legacyFallbackShimPids.add(parent.pid);
+    else if (parent && COMMANDS.mcp.test(parent.comm)) legacySupervisorPids.add(parent.pid);
+    else unparentedMcpServers++;
   }
 
-  const fallbackStarts = shims
-    .filter(shim => fallbackShimPids.has(shim.pid))
+  const legacyFallbackStarts = shims
+    .filter(shim => legacyFallbackShimPids.has(shim.pid))
     .map(shim => parseStartedAt(shim.lstart))
     .filter(Number.isFinite);
-  const oldestFallbackDays = fallbackStarts.length
-    ? Math.max(0, Math.floor((now.getTime() - Math.min(...fallbackStarts)) / DAY_MS))
+  const oldestLegacyFallbackDays = legacyFallbackStarts.length
+    ? Math.max(0, Math.floor((now.getTime() - Math.min(...legacyFallbackStarts)) / DAY_MS))
     : null;
 
   return {
     available: true,
     daemons: daemons.length,
     shims: shims.length,
-    daemonShims: Math.max(0, shims.length - fallbackShimPids.size),
-    fallbackShims: fallbackShimPids.size,
-    oldestFallbackDays,
-    legacySupervisors: supervisors.length,
-    orphanWorkers,
+    legacyFallbackShims: legacyFallbackShimPids.size,
+    oldestLegacyFallbackDays,
+    childlessMcpCommands: Math.max(0, mcpCommands.length - legacySupervisorPids.size),
+    legacySupervisors: legacySupervisorPids.size,
+    unparentedMcpServers,
   };
 }
 
@@ -76,11 +78,13 @@ export function formatResidentProcessSummary(summary) {
   if (!summary?.available) {
     return `resident topology: unavailable (${summary?.error || 'unknown error'})`;
   }
-  const fallbackAge = summary.fallbackShims && Number.isInteger(summary.oldestFallbackDays)
-    ? `, oldest fallback ${summary.oldestFallbackDays}d`
+  const fallbackAge = summary.legacyFallbackShims && Number.isInteger(summary.oldestLegacyFallbackDays)
+    ? `, oldest ${summary.oldestLegacyFallbackDays}d`
     : '';
   return `resident topology: ${count(summary.daemons, 'daemon')}`
-    + `; shims ${summary.shims} (daemon ${summary.daemonShims}, fallback ${summary.fallbackShims}${fallbackAge})`
+    + `; ${count(summary.shims, 'shim')}`
+    + `; ${count(summary.legacyFallbackShims, 'legacy child fallback')}${fallbackAge}`
+    + `; ${count(summary.childlessMcpCommands, 'childless mcp command')}`
     + `; ${count(summary.legacySupervisors, 'legacy supervisor')}`
-    + `; ${count(summary.orphanWorkers, 'orphan worker')}`;
+    + `; ${count(summary.unparentedMcpServers, 'unparented MCP server')}`;
 }

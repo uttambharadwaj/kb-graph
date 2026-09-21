@@ -14,7 +14,7 @@ function listTools() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER], {
       stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, KB_SUPERVISED: '1' },
+      env: { ...process.env },
     });
     const timer = setTimeout(() => { child.kill(); reject(new Error('timed out waiting for tools/list')); }, 10_000);
     let buf = '';

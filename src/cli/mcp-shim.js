@@ -10,7 +10,7 @@
 // only restart recovery originates handshake replay and cache invalidations.
 //
 // If the daemon is unreachable or unresponsive at startup, this falls back
-// to the existing in-process supervisor path (`kb mcp`) so a session never
+// to the direct in-process stdio path (`kb mcp`) so a session never
 // loses its KB tools because the daemon happens to be down. Once connected,
 // a daemon loss keeps this stdio process alive, fails any interrupted calls
 // explicitly, and retries the socket until the resident service is back.
@@ -198,10 +198,10 @@ async function serveInProcess(reason, identity, { startedAt, metricReason = reas
     errorCode,
   });
   console.error(`kb mcp-shim: ${FALLBACK_REASONS[reason]}, serving in-process`);
-  const { superviseMcpServer } = await import('../mcp-supervisor.js');
-  // Owns process.stdin/stdout and its own exit handling from here on, same
-  // as running `kb mcp` directly.
-  superviseMcpServer({ childArgs: identity.agent ? [`--agent=${identity.agent}`] : [] });
+  const { start } = await import('../mcp.js');
+  // Owns process.stdin/stdout and its own exit handling from here on, same as
+  // running `kb mcp` directly. This is one process with no child server.
+  await start({ identity });
 }
 
 // Exits the process once anything queued on stdout has actually gone out —
@@ -209,8 +209,7 @@ async function serveInProcess(reason, identity, { startedAt, metricReason = reas
 // bytes the socket handed it. This only drains bytes the socket already
 // handed to us; it says nothing about daemon-side work still in flight for
 // the request that triggered the exit. That is by design: stdin closing is
-// the shutdown signal here, the same as `kb mcp`'s child being killed on its
-// own stdin EOF, not a request to wait for an answer.
+// the shutdown signal here, not a request to wait for an answer.
 function exitAfterFlush(code) {
   if (process.stdout.writableLength > 0) {
     process.stdout.once('drain', () => process.exit(code));

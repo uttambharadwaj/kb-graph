@@ -63,7 +63,7 @@ function probeInitialize() {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER], {
       stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, KB_SUPERVISED: '1' },
+      env: { ...process.env },
     });
 
     let buf = '';
@@ -115,7 +115,7 @@ function withServer(fn) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SERVER], {
       stdio: ['pipe', 'pipe', 'inherit'],
-      env: { ...process.env, KB_SUPERVISED: '1' },
+      env: { ...process.env },
     });
 
     const pending = new Map();

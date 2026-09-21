@@ -162,12 +162,14 @@ async function extractEpubContent(filePath, filename) {
 - `getDb()` only verifies. Connecting to a database that is behind throws and
   names `kb migrate`; connecting to one with no schema at all creates it. Nothing
   else in the codebase may execute DDL.
-- A new entry is also what holds an MCP session's reload: before swapping its
-  child, the supervisor runs `kb migrate --check` against the code on disk and
-  waits rather than starting a child that would throw. Nothing to do for a new
-  entry in an existing list — but a *new migrated database* needs an entry in
-  `MIGRATION_TARGETS` (`src/migration-targets.js`), which is what both
-  `kb migrate` and the gate iterate. One it does not list is one neither sees.
+- Direct, fallback, and resident MCP paths verify the database when a tool first
+  opens it and return an error naming `kb migrate` while it is behind. The
+  resident daemon is replaced by its service manager only after an explicit
+  restart. Nothing to do for a new entry in an existing list — but a *new
+  migrated database* needs an entry in
+  `MIGRATION_TARGETS` (`src/migration-targets.js`), which is what `kb migrate`
+  iterates. Its own startup path must also call schema verification; the target
+  registry does not wire that automatically.
 
 **FTS5 search configuration:**
 - Stop words are filtered before querying (see `STOP_WORDS` Set)

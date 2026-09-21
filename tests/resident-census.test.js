@@ -12,7 +12,7 @@ const row = (pid, ppid, started, command) =>
 const ps = (...rows) => ['PID PPID STARTED COMMAND', ...rows].join('\n');
 
 describe('resident KB process census', () => {
-  it('separates daemon-backed shims from live compatibility workers', () => {
+  it('separates childless MCP commands from legacy supervisor workers', () => {
     const raw = ps(
       row(100, 1, 'Wed Aug 26 14:00:00 2026', 'node /repo/bin/kb.js serve'),
       row(200, 10, 'Wed Aug 26 13:00:00 2026', 'node /repo/bin/kb.js mcp-shim'),
@@ -20,6 +20,7 @@ describe('resident KB process census', () => {
       row(301, 300, 'Wed Aug 26 14:01:00 2026', 'node /repo/src/mcp.js'),
       row(400, 12, 'Sun Aug 23 12:00:00 2026', 'node /repo/bin/kb.js mcp'),
       row(401, 400, 'Wed Aug 26 14:02:00 2026', 'node /repo/src/mcp.js'),
+      row(450, 12, 'Wed Aug 26 14:02:30 2026', 'node /repo/bin/kb.js mcp'),
       row(500, 1, 'Wed Aug 26 14:03:00 2026', 'node /repo/src/mcp.js'),
       row(700, 1, 'Wed Aug 26 14:05:00 2026', 'node /other/bin/kb.js search'),
     );
@@ -30,15 +31,15 @@ describe('resident KB process census', () => {
       available: true,
       daemons: 1,
       shims: 2,
-      daemonShims: 1,
-      fallbackShims: 1,
-      oldestFallbackDays: 2,
+      legacyFallbackShims: 1,
+      oldestLegacyFallbackDays: 2,
+      childlessMcpCommands: 1,
       legacySupervisors: 1,
-      orphanWorkers: 1,
+      unparentedMcpServers: 1,
     });
     assert.equal(
       formatResidentProcessSummary(summary),
-      'resident topology: 1 daemon; shims 2 (daemon 1, fallback 1, oldest fallback 2d); 1 legacy supervisor; 1 orphan worker',
+      'resident topology: 1 daemon; 2 shims; 1 legacy child fallback, oldest 2d; 1 childless mcp command; 1 legacy supervisor; 1 unparented MCP server',
     );
   });
 
@@ -51,7 +52,28 @@ describe('resident KB process census', () => {
     const summary = summarizeResidentProcesses(raw);
 
     assert.strictEqual(summary.shims, 1);
+    assert.strictEqual(summary.childlessMcpCommands, 0);
     assert.strictEqual(summary.legacySupervisors, 0);
+  });
+
+  it('reports a childless mcp command without claiming it is a supervisor', () => {
+    const summary = summarizeResidentProcesses(ps(
+      row(400, 12, 'Sun Aug 23 12:00:00 2026', 'node /repo/bin/kb.js mcp'),
+    ));
+
+    assert.strictEqual(summary.childlessMcpCommands, 1);
+    assert.strictEqual(summary.legacySupervisors, 0);
+    assert.match(formatResidentProcessSummary(summary), /1 childless mcp command; 0 legacy supervisors/);
+  });
+
+  it('does not claim whether a childless shim is resident-backed or in-process', () => {
+    const summary = summarizeResidentProcesses(ps(
+      row(200, 10, 'Wed Aug 26 13:00:00 2026', 'node /repo/bin/kb.js mcp-shim'),
+    ));
+
+    assert.strictEqual(summary.shims, 1);
+    assert.strictEqual(summary.legacyFallbackShims, 0);
+    assert.doesNotMatch(formatResidentProcessSummary(summary), /daemon shim|fallback shim/);
   });
 
   it('reports a bounded census failure instead of hiding the denominator', () => {
