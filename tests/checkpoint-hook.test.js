@@ -8,7 +8,7 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { HOOK_ERROR_LOG } from '../src/cli/hook-io.js';
+import { CONTEXT_ENVELOPE_EVENT, HOOK_ERROR_LOG } from '../src/cli/hook-io.js';
 import { AGENT } from '../src/process-ancestry.js';
 import {
   CHECKPOINT_DISABLED_FLAG,
@@ -366,12 +366,17 @@ describe('bin/kb-checkpoint-hook.js', () => {
     assert.equal(existsSync(freshClaim), true);
   });
 
-  it('emits once per reason when explicitly enabled', () => {
+  it('emits the Claude PostToolUse context envelope once per reason', () => {
     rmSync(CHECKPOINT_LOG_DIR, { recursive: true, force: true });
     writeFileSync(CHECKPOINT_ENABLED_FLAG, '');
-    const first = runBin(claudeFixture());
+    const first = JSON.parse(runBin(claudeFixture()));
     const second = runBin(claudeFixture());
-    assert.match(first, /KB CHECKPOINT/);
+    assert.deepEqual(first, {
+      hookSpecificOutput: {
+        hookEventName: CONTEXT_ENVELOPE_EVENT.POST_TOOL_USE,
+        additionalContext: CHECKPOINT_MESSAGES[CHECKPOINT_REASON.COMMIT_OR_MERGE],
+      },
+    });
     assert.equal(second, '');
   });
 
@@ -406,15 +411,24 @@ describe('bin/kb-checkpoint-hook.js', () => {
     first.session_id = 'independent-session-one';
     const second = claudeFixture();
     second.session_id = 'independent-session-two';
-    assert.match(runBin(first), /KB CHECKPOINT/);
-    assert.match(runBin(second), /KB CHECKPOINT/);
+    assert.match(
+      JSON.parse(runBin(first)).hookSpecificOutput.additionalContext,
+      /KB CHECKPOINT/,
+    );
+    assert.match(
+      JSON.parse(runBin(second)).hookSpecificOutput.additionalContext,
+      /KB CHECKPOINT/,
+    );
   });
 
   it('uses the Codex output envelope and honors the kill switch', () => {
     rmSync(CHECKPOINT_LOG_DIR, { recursive: true, force: true });
     writeFileSync(CHECKPOINT_ENABLED_FLAG, '');
     const output = JSON.parse(runBin(codexFixture(), { agent: AGENT.CODEX }));
-    assert.equal(output.hookSpecificOutput.hookEventName, 'PostToolUse');
+    assert.equal(
+      output.hookSpecificOutput.hookEventName,
+      CONTEXT_ENVELOPE_EVENT.POST_TOOL_USE,
+    );
     assert.equal(
       output.hookSpecificOutput.additionalContext,
       CHECKPOINT_MESSAGES[CHECKPOINT_REASON.FULL_VERIFICATION],

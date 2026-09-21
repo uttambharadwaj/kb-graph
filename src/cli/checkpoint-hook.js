@@ -13,7 +13,7 @@ import { join } from 'path';
 import { KB_DIR, LOGS_DIR } from '../paths.js';
 import { AGENT } from '../process-ancestry.js';
 import {
-  deliver, hookOutput, readAgentFlag, recordHookFailure, watchHookTiming,
+  CONTEXT_ENVELOPE_EVENT, deliver, hookOutput, readAgentFlag, recordHookFailure, watchHookTiming,
 } from './hook-io.js';
 
 export const CHECKPOINT_REASON = Object.freeze({
@@ -447,7 +447,10 @@ export async function checkpointHook(args = []) {
     const agent = readAgentFlag(args);
     const input = parseHookInput(await readStdin());
     const message = computeCheckpointHook(input, { agent });
-    const output = hookOutput(message, { agent, hookEventName: 'PostToolUse' });
+    const output = hookOutput(message, {
+      agent,
+      hookEventName: CONTEXT_ENVELOPE_EVENT.POST_TOOL_USE,
+    });
     if (output) await deliver(output);
   } catch (err) {
     recordHookFailure('checkpoint-hook', err);

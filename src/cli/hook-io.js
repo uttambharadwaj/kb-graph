@@ -20,9 +20,8 @@ import { UsageError, readFlagValue } from './flags.js';
 // Re-exported so hook modules keep one import for their flag plumbing.
 export { AGENT_FLAG, HOOK_ERROR_LOG };
 
-// Which client this hook was installed for. Claude Code takes a hook's plain
-// stdout as context; Codex and Cursor take JSON envelopes of different
-// shapes (see hookOutput). The flag is the
+// Which client this hook was installed for. Hook output contracts vary by
+// agent and event (see hookOutput). The flag is the
 // source, not ancestry: an installed hook knows which config file it was
 // written into, while a `ps` walk is a guess that can only fail at exactly
 // the moment the answer matters (a wrapper, a detached spawn). Defaults to
@@ -42,19 +41,36 @@ export function readAgentFlag(args = [], usage = null) {
   return value;
 }
 
-// The JSON shape a hook uses to hand text to Codex as session context.
+// The JSON shape Codex hooks and Claude context-envelope events use to hand
+// text to the agent as session context.
 export function hookJsonEnvelope(hookEventName, additionalContext) {
   return JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } }, null, 2);
 }
 
-// What a hook actually writes to stdout for `agent`: plain text for Claude
-// Code, hookSpecificOutput for Codex, {additional_context} for Cursor. Null
-// in, null out — "nothing to say"
+// Claude Code accepts plain context from SessionStart and UserPromptSubmit,
+// but PostToolUse stdout is debug-only unless it uses hookSpecificOutput.
+// Keep that event capability explicit and closed: adding another event here
+// requires checking its documented output contract first.
+export const CONTEXT_ENVELOPE_EVENT = Object.freeze({
+  POST_TOOL_USE: 'PostToolUse',
+});
+export const CONTEXT_ENVELOPE_EVENTS = Object.freeze(Object.values(CONTEXT_ENVELOPE_EVENT));
+
+export function usesContextEnvelope(agent, hookEventName) {
+  return agent === AGENT.CODEX
+    || (agent === AGENT.CLAUDE && CONTEXT_ENVELOPE_EVENTS.includes(hookEventName));
+}
+
+// What a hook actually writes to stdout for `agent` and event: event-capable
+// hookSpecificOutput for Claude/Codex, {additional_context} for Cursor, and
+// plain text for Claude events that support it. Null in, null out — "nothing to say"
 // must stay nothing on both clients, never an envelope wrapping an empty
 // string.
 export function hookOutput(output, { agent, hookEventName }) {
   if (output == null || output === '') return null;
-  if (agent === AGENT.CODEX) return hookJsonEnvelope(hookEventName, output);
+  if (usesContextEnvelope(agent, hookEventName)) {
+    return hookJsonEnvelope(hookEventName, output);
+  }
   if (agent === AGENT.CURSOR) return JSON.stringify({ additional_context: output });
   return output;
 }
