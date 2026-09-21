@@ -18,8 +18,20 @@ const corpus = JSON.parse(readFileSync(
 // corpus run before claude-cli.js reads its module-load default.
 process.env.CLASSIFY_MODEL = corpus.baseline.model;
 
-const { extractFacts, chunkForExtract, canonicalTriple, EXTRACT_PROMPT } = await import('../src/extract.js');
+const {
+  extractFacts,
+  chunkForExtract,
+  canonicalTriple,
+  EXTRACT_PROMPT,
+  extractPromptWithoutRule,
+} = await import('../src/extract.js');
 const { scoreExtractCorpus } = await import('./helpers/extract-corpus.js');
+
+const omittedRule = process.env.KB_EXTRACT_OMIT_RULE;
+const evalPrompt = omittedRule === undefined
+  ? EXTRACT_PROMPT
+  : extractPromptWithoutRule(Number(omittedRule));
+const runEval = text => extractFacts(text, { basePrompt: evalPrompt });
 
 const mentions = (facts, token) =>
   facts.some(f => `${f.subject} ${f.predicate} ${f.object}`.toLowerCase().includes(token));
@@ -33,7 +45,7 @@ describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 9
   // Observed 2026-07-28: extracted "decimalToScaledInteger incorrectly_handles
   // negative_decimals" — the problem, out of a sentence stating the fix.
   it('extracts the post-change state from a "was fixed" sentence', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'decimalToScaledInteger in sample-web was fixed for negative decimals, in PR #3798.',
     );
     const broken = facts.filter(f =>
@@ -45,7 +57,7 @@ describe('kb_extract prompt behaviour', { skip: !process.env.KB_EVAL, timeout: 9
   // Observed 2026-07-29: every stated fact dropped in favour of two inferences,
   // with skipped: [] claiming nothing was passed over.
   it('records stated PR/commit/reviewer facts, or admits skipping them', async () => {
-    const { facts, skipped } = await extractFacts(`
+    const { facts, skipped } = await runEval(`
 On 2026-07-29, PR #539 in acme-co/billing-api was squash-merged to main as
 commit fde94d6 by robin. It was approved by dana. The merge triggered workflow
 container_CD_frontend.yml run 30422764087, which deployed the billing frontend to
@@ -72,7 +84,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // stripped (the shape a split chunk produces — see the chunking ticket). It is a guard
   // for a rule we believe in, not a regression test for a measured failure.
   it('does not editorialize a deliberate configuration into a defect', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'Production Metronome and Stripe configuration points at sandbox Metronome and Stripe test mode, ' +
       'which is temporary and tracked by TICKET-42 for revert.',
     );
@@ -91,7 +103,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // Reproduces: 3/6 runs on the pre-fix prompt (migrated_to, moved_to), 0/6 with
   // the tense rule. This one is a real regression test.
   it('does not report in-flight work as completed', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'Alice owns an 8-PR stack moving wallet identity off the wallets table and onto the users row. ' +
       'All eight PRs are still open.',
     );
@@ -108,7 +120,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // reads model_calls_as_work_sessions" — present tense, from "used to read".
   // The past event is still wanted; only the past state is not.
   it('does not report an ended state as current', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'Harvest used to read its own model calls as if they were work sessions. That caused the backlog.',
     );
     const current = facts.filter(f =>
@@ -125,7 +137,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // text: 3/3 runs emitted a false current fact before neighbours were passed
   // as context, 0/3 after.
   it('uses neighbouring chunks to tell an ended state from a current one', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'The team spent the morning tracing a duplicate-note problem in the knowledge base. ' +
       'Several notes on the same subject had accumulated over three weeks without anyone noticing. ' +
       'The investigation began by measuring the two code paths against each other on identical input. ' +
@@ -166,7 +178,7 @@ head-injection, which was fixed in commit b1d6832.`);
       'the chunker split the claim from its qualifier again',
     );
 
-    const { facts } = await extractFacts(text);
+    const { facts } = await runEval(text);
     const judged = facts.filter(f => /misconfigur|broken|violat|wrong|incorrect|bad_/.test(f.predicate.toLowerCase()));
     assert.deepStrictEqual(judged, [], 'asserted a defect the source called deliberate');
     assert.ok(
@@ -181,7 +193,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // consolidation reads them as competing values of one, so all but the last
   // are retired the moment they are written.
   it('does not flatten lifecycle, review and queue standing onto one status', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'PR #48 is still open and not merged; it is approved and in the merge queue.',
     );
     const statuses = facts.filter(f => f.predicate.toLowerCase() === 'status');
@@ -195,7 +207,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // away, so the guard is on the stored triple: whatever the model types, the
   // canonical predicate carries no leading copula.
   it('stores no predicate under a leading copula', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'The wallet ledger is the source of truth for balances now, replacing the mirror.',
     );
     const copular = facts.map(canonicalTriple)
@@ -211,7 +223,7 @@ head-injection, which was fixed in commit b1d6832.`);
   // reproducible enough to gate on the raw emission, and the guard that has to
   // hold is that no work item is ever stored as an implementer.
   it('never stores a work item as the implementer', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'PR #48 (tkt-99, the threshold config client) merged to main on 2026-07-30 as squash commit 380c761.',
     );
     // implements only: a work item cannot build code, but it can target a
@@ -223,7 +235,7 @@ head-injection, which was fixed in commit b1d6832.`);
   });
 
   it('uses one source-grounded spelling for a repeated entity', async () => {
-    const { facts } = await extractFacts(
+    const { facts } = await runEval(
       'TKT-71 is owned by team Platform Foundations. '
       + 'TKT-72 is owned by team Platform Foundations. '
       + 'TKT-73 is owned by team Platform Foundations.',
@@ -237,6 +249,86 @@ head-injection, which was fixed in commit b1d6832.`);
       `invented multiple spellings for one source entity: ${JSON.stringify(ownership)}`);
   });
 
+  it('emits each referenced PR as its own fact', async () => {
+    const { facts } = await runEval(
+      'PR #101 merged to main. PR #102 merged to main. Both changes shipped on 2026-08-29.',
+    );
+    assert.ok(mentions(facts, '#101') || mentions(facts, '101'), 'dropped PR #101');
+    assert.ok(mentions(facts, '#102') || mentions(facts, '102'), 'dropped PR #102');
+    assert.ok(!facts.some(f => /#?101.*#?102|#?102.*#?101/.test(String(f.object))),
+      `joined two PRs into one object: ${JSON.stringify(facts)}`);
+  });
+
+  it('keeps only the corrected state', async () => {
+    const { facts } = await runEval(
+      'Correction: billing-api does not use Redis for its ledger. It uses Postgres.',
+    );
+    assert.ok(mentions(facts, 'postgres'), `dropped the corrected state: ${JSON.stringify(facts)}`);
+    assert.ok(!facts.some(f => /redis/i.test(`${f.predicate} ${f.object}`)),
+      `kept the retracted Redis state: ${JSON.stringify(facts)}`);
+  });
+
+  it('keeps the terminal state of a narrated transition', async () => {
+    const { facts, skipped } = await runEval(
+      "Two pre-launch support adjustments were repaired on production — flipped to pending and driven through the shipped mirror; the ledger and Metronome now agree.",
+    );
+    const status = facts.filter(f => f.predicate === 'status');
+    assert.ok(!status.some(f => /pending/i.test(f.object)),
+      `recorded the transient step as current: ${JSON.stringify(status)}`);
+    assert.ok(facts.length > 0 || skipped.length > 0,
+      `returned no disposition for the narrated transition: ${JSON.stringify({ facts, skipped })}`);
+  });
+
+  it('does not treat a commit mention as merge evidence', async () => {
+    const { facts } = await runEval(
+      'PR #42 has commit abc1234 with the fix, but the PR is still open and awaiting review.',
+    );
+    assert.ok(mentions(facts, '#42') || mentions(facts, '42'), 'dropped the open PR');
+    assert.ok(!facts.some(f => f.predicate === 'merged_via' || (f.predicate === 'status' && /merged/.test(f.object))),
+      `invented merge evidence: ${JSON.stringify(facts)}`);
+  });
+
+  it('does not turn acknowledgments or speculation into facts', async () => {
+    const { facts } = await runEval(
+      'Makes sense. I think the billing service might move to Kafka someday, but nobody has proposed or decided that.',
+    );
+    assert.deepStrictEqual(facts, [], `recorded acknowledgment or speculation: ${JSON.stringify(facts)}`);
+  });
+
+  it('uses a listed atomic predicate for a multi-clause relationship', async () => {
+    const { facts, skipped } = await runEval(
+      'PR #12 merged to main and that merge deployed billing-api to production.',
+    );
+    const accounted = `${JSON.stringify(facts)} ${JSON.stringify(skipped)}`.toLowerCase();
+    assert.match(accounted, /#12|pr 12/, 'did not account for the merge');
+    assert.match(accounted, /production/, 'did not account for the deployment');
+    assert.ok(!facts.some(f => /merge.*deploy|deploy.*merge/.test(f.predicate)),
+      `built a compound predicate: ${JSON.stringify(facts)}`);
+  });
+
+  it('stores assignment with the ticket as subject', async () => {
+    const { facts } = await runEval('TKT-42 is assigned to Alice.');
+    assert.ok(facts.some(f => /^tkt-42$/i.test(f.subject) && f.predicate === 'assigned_to' && /alice/i.test(f.object)),
+      `stored assignment in the wrong direction: ${JSON.stringify(facts)}`);
+  });
+
+  it('keeps the grammatical owner as the subject', async () => {
+    const { facts } = await runEval(
+      'The Codex CLI enabled_tools list for the knowledge-base MCP server contains 35 tools.',
+    );
+    assert.ok(!facts.some(f => /knowledge.?base/i.test(f.subject) && f.predicate === 'supports' && /codex/i.test(f.object)),
+      `inverted the client-owned property: ${JSON.stringify(facts)}`);
+    assert.ok(mentions(facts, '35') || mentions(facts, 'enabled_tools'),
+      `dropped the client-owned fact: ${JSON.stringify(facts)}`);
+  });
+
+  it('uses a stated event date', async () => {
+    const { facts } = await runEval('PR #77 merged to main on 2026-08-29.');
+    const merged = facts.find(f => /#?77/.test(`${f.subject} ${f.object}`));
+    assert.ok(merged, `dropped the dated merge: ${JSON.stringify(facts)}`);
+    assert.strictEqual(merged.valid_from, '2026-08-29');
+  });
+
   it('records one recall score for the held-out debrief corpus', async () => {
     const promptSha256 = createHash('sha256').update(EXTRACT_PROMPT).digest('hex');
     assert.strictEqual(
@@ -247,12 +339,16 @@ head-injection, which was fixed in commit b1d6832.`);
 
     const predictions = [];
     for (const fixture of corpus.cases) {
-      const { facts } = await extractFacts(fixture.input);
+      const { facts } = await runEval(fixture.input);
       predictions.push({ id: fixture.id, facts });
     }
 
     const score = scoreExtractCorpus(corpus, predictions);
     assert.strictEqual(score.expected, corpus.baseline.expected);
+    assert.ok(
+      score.matched >= corpus.baseline.matched,
+      `held-out recall regressed: ${score.matched}/${score.expected} < baseline ${corpus.baseline.matched}/${corpus.baseline.expected}; missing ${JSON.stringify(score.cases.filter(item => item.missing.length > 0))}`,
+    );
     console.log(`KB_EXTRACT_CORPUS_SCORE ${JSON.stringify({
       ...score,
       baseline_matched: corpus.baseline.matched,

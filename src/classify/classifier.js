@@ -26,7 +26,40 @@ Classification guidelines:
 - Tags should be specific and reusable (not one-off descriptions)
 - Summary should help an AI agent decide whether to read the full note`;
 
-export async function classifyNote(title, content, sourcePath) {
+const NOTE_TYPES = new Set(['research', 'idea', 'workflow', 'lesson', 'fix', 'decision', 'source', 'person', 'company', 'project']);
+const CONFIDENCE_LEVELS = new Set(['high', 'medium', 'low']);
+
+function isValidClassification(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  const validString = (item, max) => typeof item === 'string' && item.length > 0 && item.length <= max;
+  const validStrings = (items, min, max, itemMax = 100) =>
+    Array.isArray(items)
+    && items.length >= min
+    && items.length <= max
+    && items.every(item => validString(item, itemMax));
+  const validProject = value.project === null
+    || value.project === undefined
+    || validString(value.project, 100);
+  const validAliases = value.aliases === undefined || validStrings(value.aliases, 0, 6);
+  const validTriggers = value.triggers === undefined || validStrings(value.triggers, 0, 3, 200);
+
+  return NOTE_TYPES.has(value.type)
+    && validStrings(value.tags, 3, 8)
+    && validString(value.summary, 200)
+    && CONFIDENCE_LEVELS.has(value.confidence)
+    && validStrings(value.key_topics, 2, 4)
+    && validProject
+    && validAliases
+    && validTriggers;
+}
+
+export function validateClassification(value) {
+  if (!isValidClassification(value)) throw new Error('classifier returned a malformed result');
+  return value;
+}
+
+export async function classifyNote(title, content, sourcePath, { runModel = runClaudeJSON, signal } = {}) {
   const prompt = `${CLASSIFY_PROMPT}
 
 ---
@@ -37,12 +70,17 @@ Source path: ${sourcePath}
 ${content.slice(0, 4000)}`;
 
   try {
-    const classification = await runClaudeJSON(prompt, { caller: 'classifier' });
+    const classification = validateClassification(await runModel(prompt, {
+      caller: 'classifier',
+      signal,
+      validateResult: validateClassification,
+    }));
     return {
       success: true,
       ...classification,
     };
   } catch (err) {
+    if (err?.name === 'AbortError') throw err;
     return {
       success: false,
       error: err.message,

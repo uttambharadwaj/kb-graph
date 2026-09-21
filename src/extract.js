@@ -47,30 +47,8 @@ What to extract:
 - gotcha / incident: a failure mode and its cause — (1password_bare_domains, drops, credentials)
 
 Rules:
-- One triple per distinct fact. Predicate is a short snake_case relationship.
-- Facts the text STATES come first. Generalisations you infer are welcome, but never in place of a stated fact — emit every stated one, then the inferences.
-- PR numbers, commit SHAs, workflow run ids, ticket ids and repo names are entities, not prose — (pr #539, merged_via, commit fde94d6).
-- Capture the CORRECTED state when the conversation revises itself. If someone says "not SQS, it's HTTP", emit the HTTP fact only — never the retracted one.
-- A COMPLETED transition ("was fixed", "no longer", "migrated from X to Y", "renamed to") asserts the state AFTER the change. Emit that state; never the pre-change state as if it were current.
-- Past tense ends a state even when nothing names the replacement: "used to", "was declared in", "previously", "before the fix", "the cause was". If the text says what replaced it, emit only the replacement. If it does not, emit nothing for that state and put it in skipped. Text reaches you in fragments, so the sentence describing the fix is often not in front of you — every fact you emit is dated today and claims to be true now. A past EVENT is still emittable — (nightly_job, caused, backlog) — it is the past STATE that is not.
-- Work still in flight ("moving", "migrating", "is proposing", "an open PR that will") has NOT happened. Emit the proposal — (pr_stack, proposes, wallet_identity_migration) — never the completed form. Open, unmerged, in review and planned all mean not yet.
-- A commit mentioned beside a PR is not merge evidence. Emit merged_via only when the text says the PR merged, landed, or was squash-merged; findings closed or "got commit abc123" still describe an open PR unless the text states otherwise.
-- Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: uses, depends_on, defaults_to — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says.
-- Subject and object must be concrete entities (services, repos, people, features) — never pronouns.
-- Use one spelling for each entity throughout the whole response. Copy the entity name the transcript actually uses and reuse it exactly; do not invent suffixes such as _team, _service, or _project that the source never wrote. Normalize case or separators only if you do it consistently for every occurrence of that entity.
-- Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule.
-- The predicate vocabulary is CLOSED. Use one of these and nothing else: ${VOCABULARY_LIST}. A predicate outside the list is refused at the write boundary and the fact is dropped, so inventing one loses it. If none of them fits, pick the nearest that is still true, or put the assertion in "skipped" saying which predicate you wanted.
-- Never build a compound predicate out of a sentence (merge_to_main_deploys_to, tracks_revert_of, migration_proposed_in). Decompose it onto listed predicates instead, one fact each.
-- A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever.
-- A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards.
-- One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object.
-- status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive.
-- For a ticket or PR, status is a lifecycle value such as open, in_progress, closed, done, or merged. "Still needed", "important", and "required" describe why work matters, not its status; use a stated relationship such as tracks, or skip it.
-- Keep the grammatical owner as the subject. In "the Codex CLI enabled_tools list for the knowledge-base MCP server", the list belongs to Codex CLI; "for the server" does not make the server support that client-side count. Emit supports only when the text says the subject supports, provides, exposes, offers, or is capable of the object.
-- Name only what the text names. Both sides of every triple are checked against the transcript and the triple is dropped if either is absent, so a coined name must be built from words the text uses. Never assert a relationship the text does not state — no blocked_by unless something is said to block, no assigned_to unless something is said to be assigned.
-- When the text states the date of the event ("merged on July 28", "shipped 2026-07-28"), add "valid_from": "YYYY-MM-DD" to that fact — otherwise it is dated the day the transcript was read, which is not when it happened. Omit the field when the text gives no date; a date the text does not state is discarded.
-- Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found.
-- If nothing durable is present, return {"facts": [], "skipped": [...]}.
+- One triple per distinct fact. Predicate is a short snake_case relationship. Facts the text STATES come first. Generalisations you infer are welcome, but never in place of a stated fact — emit every stated one, then the inferences. PR numbers, commit SHAs, workflow run ids, ticket ids and repo names are entities, not prose — (pr #539, merged_via, commit fde94d6). One object per fact. Several objects means several rows — never "pr #1, pr #2" in one object. Every assertion you decide not to emit goes in "skipped" with a one-line reason. Return "skipped": [] only when you emitted every assertion you found. If nothing durable is present, return {"facts": [], "skipped": [...]}. The predicate vocabulary is CLOSED. Use one of these and nothing else: ${VOCABULARY_LIST}. A predicate outside the list is refused at the write boundary and the fact is dropped, so inventing one loses it. If none of them fits, pick the nearest that is still true, or put the assertion in "skipped" saying which predicate you wanted. Never build a compound predicate out of a sentence (merge_to_main_deploys_to, tracks_revert_of, migration_proposed_in). Decompose it onto listed predicates instead, one fact each. Capture the CORRECTED state when the conversation revises itself. If someone says "not SQS, it's HTTP", emit the HTTP fact only — never the retracted one. Past tense ends a state even when nothing names the replacement: "used to", "was declared in", "previously", "before the fix", "the cause was". If the text says what replaced it, emit only the replacement. If it does not, emit nothing for that state and put it in skipped. Text reaches you in fragments, so the sentence describing the fix is often not in front of you — every fact you emit is dated today and claims to be true now. A past EVENT is still emittable — (nightly_job, caused, backlog) — it is the past STATE that is not. Work still in flight ("moving", "migrating", "is proposing", "an open PR that will") has NOT happened. Emit the proposal — (pr_stack, proposes, wallet_identity_migration) — never the completed form. Open, unmerged, in review and planned all mean not yet. A commit mentioned beside a PR is not merge evidence. Emit merged_via only when the text says the PR merged, landed, or was squash-merged; findings closed or "got commit abc123" still describe an open PR unless the text states otherwise. Describe, do not judge. Use a neutral predicate unless the text itself states the judgment: uses, depends_on, defaults_to — not misconfigured_to, broken_by, violates. A qualifier like "temporary, tracked for revert" makes something a deliberate choice, so an evaluative predicate would assert the opposite of what the text says. Subject and object must be concrete entities (services, repos, people, features) — never pronouns. Use one spelling for each entity throughout the whole response. Copy the entity name the transcript actually uses and reuse it exactly; do not invent suffixes such as _team, _service, or _project that the source never wrote. Normalize case or separators only if you do it consistently for every occurrence of that entity. Skip acknowledgments, unresolved speculation, and anything that just restates code or an existing rule. Name only what the text names. Both sides of every triple are checked against the transcript and the triple is dropped if either is absent, so a coined name must be built from words the text uses. Never assert a relationship the text does not state — no blocked_by unless something is said to block, no assigned_to unless something is said to be assigned.
+- A ticket assigned to a person is (ticket, assigned_to, person) — the ticket is the subject, never the person. Written the other way round a later reassignment cannot supersede it, so the old assignee stays true forever. A ticket or issue is the thing implemented, never the implementer: (pr #12, implements, tkt-99), never (tkt-99, implements, the_thing_built). A ticket can target a problem — (tkt-99, fixes, version_skew) is right — but it cannot build code. Both roles are real entities either way round, so the reversed one reads as a sentence and is still backwards. status is one variable — the subject's lifecycle state — and takes ONE value per subject in your response. Review, CI and merge-queue standing are separate variables: (pr #12, review_state, approved), (pr #12, ci_state, green), (pr #12, status, queued_for_merge). Three "statuses" for one PR means you have flattened three predicates onto one name, and only one of them will survive. For a ticket or PR, status is a lifecycle value such as open, in_progress, closed, done, or merged. "Still needed", "important", and "required" describe why work matters, not its status; use a stated relationship such as tracks, or skip it. Keep the grammatical owner as the subject. In "the Codex CLI enabled_tools list for the knowledge-base MCP server", the list belongs to Codex CLI; "for the server" does not make the server support that client-side count. Emit supports only when the text says the subject supports, provides, exposes, offers, or is capable of the object. When the text states the date of the event ("merged on July 28", "shipped 2026-07-28"), add "valid_from": "YYYY-MM-DD" to that fact — otherwise it is dated the day the transcript was read, which is not when it happened. Omit the field when the text gives no date; a date the text does not state is discarded.
 
 Example
 Input: "My-App was 401ing against auth-service — turned out 1Password bare domains silently drop creds. Fixed with a domain-normalization step. Alice owns auth-service. And My-App calls auth-service over HTTP, not SQS."
@@ -83,6 +61,50 @@ Output: {"facts":[{"subject":"pr #539","predicate":"merged_via","object":"commit
 Example
 Input: "Production billing points at the sandbox provider, which is temporary and tracked by TICKET-42 for revert. Alice owns an 8-PR stack moving user identity onto the accounts row; all eight are still open. The nightly job used to read its own output as input, which caused the backlog."
 Output: {"facts":[{"subject":"production_billing","predicate":"uses","object":"sandbox_provider","category":"architecture"},{"subject":"ticket-42","predicate":"tracks","object":"production_billing_sandbox_revert","category":"status"},{"subject":"alice","predicate":"owns","object":"user_identity_pr_stack","category":"ownership"},{"subject":"user_identity_pr_stack","predicate":"proposes","object":"user_identity_on_accounts_row","category":"decision"},{"subject":"nightly_job","predicate":"causes","object":"backlog","category":"incident"}],"skipped":[{"assertion":"the nightly job reads its own output as input","reason":"past tense — the state ended and no replacement is stated"}]}`;
+
+// The live-model suite owns the prompt rules by position. Keeping the registry
+// beside the prompt makes additions fail CI until they name a behaviour case;
+// the opt-in mutation runner then removes that exact rule and runs its owners.
+// Each row owns one independently removable contract. Related instructions
+// stay in one rule because their narrow cases overlap; mutation tests grade
+// the contract, while the held-out corpus catches interactions between them.
+export const EXTRACT_RULE_EVALS = [
+  [
+    'does not report an ended state as current',
+    'records stated PR/commit/reviewer facts, or admits skipping them',
+    'emits each referenced PR as its own fact',
+    'uses a listed atomic predicate for a multi-clause relationship',
+    'keeps only the corrected state',
+    'does not report in-flight work as completed',
+    'does not treat a commit mention as merge evidence',
+    'does not editorialize a deliberate configuration into a defect',
+    'uses one source-grounded spelling for a repeated entity',
+    'does not turn acknowledgments or speculation into facts',
+  ],
+  [
+    'never stores a work item as the implementer',
+    'stores assignment with the ticket as subject',
+    'does not flatten lifecycle, review and queue standing onto one status',
+    'keeps the grammatical owner as the subject',
+    'uses a stated event date',
+  ],
+];
+
+export const EXTRACT_PROMPT_BUDGET_CHARS = 10000;
+
+export function extractPromptRules(prompt = EXTRACT_PROMPT) {
+  const start = prompt.indexOf('Rules:\n');
+  const end = prompt.indexOf('\n\nExample', start);
+  if (start === -1 || end === -1) throw new Error('extract prompt rules section is malformed');
+  return prompt.slice(start + 'Rules:\n'.length, end).split('\n').filter(line => line.startsWith('- '));
+}
+
+export function extractPromptWithoutRule(ruleIndex) {
+  const rules = extractPromptRules();
+  const rule = rules[ruleIndex];
+  if (!rule) throw new Error(`unknown extract rule index: ${ruleIndex}`);
+  return EXTRACT_PROMPT.replace(`${rule}\n`, '');
+}
 
 // One window, named once — harvest.js sizes its chunks from this too, so a
 // change here cannot silently start truncating there. extractFacts cuts to it
@@ -101,13 +123,13 @@ export const MAX_EXTRACT_CHARS = 12000;
  * resolves it by dating the dead state today. Showing the neighbours costs
  * about a tenth of a call and is what makes the modality rules above decidable.
  */
-export function buildExtractPrompt(text, { before = '', after = '' } = {}) {
+export function buildExtractPrompt(text, { before = '', after = '', basePrompt = EXTRACT_PROMPT } = {}) {
   const context = (before || after)
     ? `\n\n# Surrounding text (context only — do NOT extract facts from this)\n${before}\n[…the section to extract from goes here…]\n${after}\n# End of surrounding text`
     : '';
   // Task restated after the transcript so dialogue in the text can't lure the
   // model into replying to the conversation instead of extracting from it.
-  return `${EXTRACT_PROMPT}${context}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Extract only from the Transcript section; the surrounding text is there to tell you whether a state is still current, not to be mined. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
+  return `${basePrompt}${context}\n\n# Transcript\n${text.slice(0, MAX_EXTRACT_CHARS)}\n\n# End of transcript\nYou are the Memory Extractor, not a participant in the conversation above. Extract only from the Transcript section; the surrounding text is there to tell you whether a state is still current, not to be mined. Return ONLY the {"facts": [...], "skipped": [...]} JSON object now.`;
 }
 
 // The fan-out bounds the RESPONSE, and that is what makes it load-bearing.
@@ -266,6 +288,66 @@ const CHUNK_ATTEMPTS = 2;
 // same prefix to count chunks that died for good — one spelling so the two
 // can't drift apart.
 const CHUNK_FAILED_REASON_PREFIX = 'chunk_failed: ';
+const TRANSIENT_STATUS_VALUES = new Set(['pending', 'queued', 'in_progress', 'processing']);
+const TERMINAL_OUTCOME_AFTER_STEP = /\b(?:repaired|resolved|settled|completed|finished|fixed|reconciled|restored|shipped|merged|closed|done|driven\s+through|now\s+agree)\b/i;
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeStatusValue(value) {
+  return String(value ?? '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+}
+
+function findNarratedTransitionStep(text, status) {
+  const words = escapeRegex(String(status).trim()).replace(/[_\s-]+/g, '[\\s_-]+');
+  const pattern = `\\b(?:flipped|set|moved|put|marked|changed|transitioned)(?:\\s+\\w+){0,3}\\s+(?:to|as)\\s+${words}\\b`;
+  return new RegExp(pattern, 'i').exec(text);
+}
+
+function clausesAboutSubject(text, subject) {
+  const normalizedSubject = String(subject ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  if (!normalizedSubject) return [];
+  return (text.match(/[^.!?\n]+[.!?]?/g) || []).filter(clause =>
+    clause.toLowerCase().replace(/[^a-z0-9]+/g, ' ').includes(normalizedSubject)
+  );
+}
+
+// Narrated repairs often name the mechanics that got an item unstuck: "flipped
+// to pending and driven through the mirror; the ledgers now agree". The model
+// can repeat that well-formed intermediate status even when the prompt says to
+// keep the outcome. Reject only a small, explicit transient vocabulary, only
+// when the source presents it as a transition step, and only when the same
+// narration states a terminal outcome afterwards. That preserves a genuinely
+// final "moved to pending" while preventing a silent stale-status write.
+export function filterNarratedTransientStates(facts, text) {
+  const kept = [];
+  const skipped = [];
+  for (const fact of facts) {
+    const value = normalizeStatusValue(fact?.object);
+    if (fact?.predicate !== 'status' || !TRANSIENT_STATUS_VALUES.has(value)) {
+      kept.push(fact);
+      continue;
+    }
+
+    const transition = clausesAboutSubject(text, fact.subject)
+      .map(clause => ({ clause, step: findNarratedTransitionStep(clause, fact.object) }))
+      .find(({ clause, step }) =>
+        step && TERMINAL_OUTCOME_AFTER_STEP.test(clause.slice(step.index + step[0].length))
+      );
+    if (!transition) {
+      kept.push(fact);
+      continue;
+    }
+
+    skipped.push({
+      fact,
+      assertion: transition.step[0],
+      reason: 'intermediate_state_not_current: a later terminal outcome is stated in the same narration',
+    });
+  }
+  return { facts: kept, skipped };
+}
 
 export const countExtractionChunkFailures = skipped =>
   (skipped || []).filter(entry => entry?.reason?.startsWith(CHUNK_FAILED_REASON_PREFIX)).length;
@@ -282,6 +364,36 @@ const totalChunkFailure = failures => {
   return new Error(`all ${failures.length} extraction ${noun} failed${details ? `: ${details}` : ''}`);
 };
 
+function validateExtractionResult(result) {
+  const validString = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
+  const validFact = fact => fact !== null
+    && typeof fact === 'object'
+    && !Array.isArray(fact)
+    && validString(fact.subject, 500)
+    && validString(fact.predicate, 100)
+    && validString(fact.object, 500)
+    && (fact.category === undefined || validString(fact.category, 50))
+    && (fact.valid_from === undefined || validString(fact.valid_from, 20));
+  const validSkip = skip => skip !== null
+    && typeof skip === 'object'
+    && !Array.isArray(skip)
+    && (skip.assertion === undefined || skip.assertion === null || validString(skip.assertion, 1000))
+    && validString(skip.reason, 1000);
+  const valid = result !== null
+    && typeof result === 'object'
+    && !Array.isArray(result)
+    && Array.isArray(result.facts)
+    && result.facts.length <= 100
+    && result.facts.every(validFact)
+    && (result.skipped === undefined || (
+      Array.isArray(result.skipped)
+      && result.skipped.length <= 100
+      && result.skipped.every(validSkip)
+    ));
+  if (!valid) throw new Error('extractor returned a malformed result');
+  return result;
+}
+
 // I/O: ask the LLM for candidate facts, one call per chunk, all in flight
 // together. The injectable clock/runner make the shared deadline deterministic
 // to test without sleeping or invoking a live model.
@@ -289,6 +401,8 @@ export async function extractFacts(text, {
   runModel = runClaudeJSON,
   now = Date.now,
   callBudgetMs = EXTRACT_CALL_BUDGET_MS,
+  basePrompt = EXTRACT_PROMPT,
+  signal,
 } = {}) {
   const modelStartedAt = now();
   const deadline = modelStartedAt + callBudgetMs;
@@ -297,12 +411,17 @@ export async function extractFacts(text, {
   const dropped = text.length - examined.length;
   const chunks = chunkForExtract(examined);
   const results = await Promise.all(chunks.map(async (chunk, i) => {
-    const prompt = buildExtractPrompt(chunk, { before: chunks[i - 1] ?? '', after: chunks[i + 1] ?? '' });
+    const prompt = buildExtractPrompt(chunk, {
+      before: chunks[i - 1] ?? '',
+      after: chunks[i + 1] ?? '',
+      basePrompt,
+    });
     let failure;
     for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
       const remainingMs = deadline - now();
       if (remainingMs <= 0) break;
       try {
+        signal?.throwIfAborted();
         // One result per chunk however many attempts it took: a failed attempt
         // rejects without a value (runClaude drops stdout unless the exit was
         // clean), so no partial output survives to be batched alongside the
@@ -311,11 +430,14 @@ export async function extractFacts(text, {
         // logExtraction below aggregates the extract-specific shape that
         // generic table doesn't carry (input hash, per-chunk chars, conflicts).
         attemptCount++;
-        return await runModel(prompt, {
+        return validateExtractionResult(await runModel(prompt, {
           timeout: Math.max(1, Math.min(CHUNK_TIMEOUT_MS, remainingMs)),
           caller: 'extract',
-        });
+          signal,
+          validateResult: validateExtractionResult,
+        }));
       } catch (err) {
+        if (err?.name === 'AbortError') throw err;
         failure = err;
         console.error(`kb_extract: chunk ${i + 1}/${chunks.length} attempt ${attempt}/${CHUNK_ATTEMPTS} failed: ${err.message}`);
       }
@@ -326,8 +448,11 @@ export async function extractFacts(text, {
     return { facts: [], skipped: [{ assertion: chunk.slice(0, 120), reason: `${CHUNK_FAILED_REASON_PREFIX}${reason}` }] };
   }));
 
+  const extractedFacts = results.flatMap(result => result.facts);
+  const transientFiltered = filterNarratedTransientStates(extractedFacts, examined);
+
   return {
-    facts: results.flatMap(r => (Array.isArray(r?.facts) ? r.facts : [])),
+    facts: transientFiltered.facts,
     // Per-chunk character counts, for kbExtract's meter (extract-meter.js) to
     // log verbatim — the shape actually sent, not a second computation of it.
     // Sums to more than input_chars when chunkForExtract has copied a qualifier
@@ -347,9 +472,10 @@ export async function extractFacts(text, {
         assertion: text.slice(MAX_EXTRACT_CHARS, MAX_EXTRACT_CHARS + 120),
         reason: `input_truncated: ${dropped.toLocaleString('en-US')} of ${text.length.toLocaleString('en-US')} characters not examined`,
       }] : []),
-      ...results.flatMap(r => (Array.isArray(r?.skipped)
-        ? r.skipped
+      ...results.flatMap(result => (Array.isArray(result.skipped)
+        ? result.skipped
         : [{ assertion: null, reason: 'extractor_returned_no_skipped_list' }])),
+      ...transientFiltered.skipped,
     ],
   };
 }
@@ -763,7 +889,6 @@ function recallPreview(key) {
     previews.delete(key);
     return null;
   }
-  previews.delete(key); // one commit per preview; a re-run extracts fresh
   return hit;
 }
 
@@ -780,6 +905,7 @@ export async function kbExtract(text, {
   dryRun = false,
   callBudgetMs = EXTRACT_CALL_BUDGET_MS,
   runModel = runClaudeJSON,
+  signal,
   now = Date.now,
 } = {}) {
   const started = Date.now();
@@ -791,6 +917,7 @@ export async function kbExtract(text, {
   try {
     inputHash = hashInput(text);
     inputChars = text.length;
+    signal?.throwIfAborted();
 
     const key = previewKey(text, source, observationDate);
     const previewed = dryRun ? null : recallPreview(key);
@@ -801,7 +928,13 @@ export async function kbExtract(text, {
     // the text never mentions, or dated a day the text never states, is filtered
     // here (see grounding.js) rather than in consolidation, so the preview
     // remembered below and the row eventually written are the same triple.
-    const extracted = previewed || await extractFacts(text, { callBudgetMs, runModel, now });
+    signal?.throwIfAborted();
+    const extracted = previewed || await extractFacts(text, {
+      callBudgetMs,
+      runModel,
+      signal,
+      now,
+    });
     attemptCount = extracted.attemptCount ?? 0;
     modelDurationMs = extracted.modelDurationMs ?? 0;
     // Seed the meter before grounding or consolidation can throw. In
@@ -876,6 +1009,7 @@ export async function kbExtract(text, {
 
     const consolidationStartedAt = Date.now();
     const res = consolidate(facts, { source, observationDate, observedAt });
+    if (previewed) previews.delete(key); // one successful commit per preview
     consolidationDurationMs = Date.now() - consolidationStartedAt;
     const reconciled = reconcileSkipped(res.added, [...res.skipped, ...notExtracted]);
     duplicateSkips = reconciled.duplicateSkips;

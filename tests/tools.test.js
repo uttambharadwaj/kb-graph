@@ -26,6 +26,19 @@ describe('tools', () => {
     }
   });
 
+  it('propagates MCP cancellation into provider-backed extraction', async () => {
+    const tool = getToolDefinitions().find(item => item.name === 'kb_extract');
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      tool.handler(
+        { text: 'provider cancellation fixture', dry_run: true },
+        { signal: controller.signal },
+      ),
+      { name: 'AbortError' },
+    );
+  });
+
   // Named in full, and compared both ways. The old form asserted `length >= 20`
   // against a list of 19, so deleting any of the other seven kept the suite
   // green — and the seven not named were the admin-only ones, which are also

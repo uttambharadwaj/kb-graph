@@ -35,6 +35,10 @@ function getVaultPath() {
   return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), '.claude', 'kb-index');
 }
 
+function rethrowAbort(err) {
+  if (err?.name === 'AbortError') throw err;
+}
+
 function formatVaultIndexResult(result) {
   const warning = result.errors?.length ? `; index warnings: ${result.errors.join('; ')}` : '';
   return `; indexed ${result.indexed} changed, ${result.skipped} unchanged${warning}`;
@@ -619,12 +623,16 @@ function defineTools() {
       schema: {
         dry_run: z.boolean().optional().default(false).describe('Preview classifications without writing changes'),
       },
-      handler: async ({ dry_run }) => {
+      handler: async ({ dry_run }, context) => {
         try {
           const vaultPath = getVaultPath();
-          const result = await processNewClippings(vaultPath, { dryRun: dry_run });
+          const result = await processNewClippings(vaultPath, {
+            dryRun: dry_run,
+            signal: context?.signal,
+          });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
+          rethrowAbort(err);
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
       },
@@ -796,11 +804,18 @@ function defineTools() {
         observed_at: z.string().optional().describe('The instant this happened, UTC, as "YYYY-MM-DD HH:MM:SS" (an ISO 8601 string is accepted and converted). For replaying text from earlier the same day — observation_date alone cannot order two observations within one day. Defaults to now.'),
         dry_run: z.boolean().optional().default(false).describe('Return candidate facts WITHOUT writing them — review before committing.'),
       },
-      handler: async ({ text, source, observation_date, observed_at, dry_run }) => {
+      handler: async ({ text, source, observation_date, observed_at, dry_run }, context) => {
         try {
-          const result = await kbExtract(text, { source, observationDate: observation_date, observedAt: observed_at, dryRun: dry_run });
+          const result = await kbExtract(text, {
+            source,
+            observationDate: observation_date,
+            observedAt: observed_at,
+            dryRun: dry_run,
+            signal: context?.signal,
+          });
           return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         } catch (err) {
+          rethrowAbort(err);
           return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
         }
       },

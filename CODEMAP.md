@@ -3,8 +3,8 @@
 > Generated: 2026-09-21
 
 ## Quick Stats
-- **Files:** 267
-- **Total lines:** 57,716
+- **Files:** 270
+- **Total lines:** 58,878
 
 ## Architecture Overview
 ```
@@ -59,10 +59,11 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
+| atomic-note-write.js | 104 | noteWriteLockPath, replaceNoteIfUnchanged | - |
 | auth-oauth.js | 25 | createOAuthAuth | src/auth-oauth.js — Better Auth OAuth provider for MCP clients |
 | auth.js | 151 | hasPassword, setPassword, checkPassword, promptPassword, createSession... | - |
 | child-exit.js | 40 | onChildDone | When a spawned child is finished, for callers that need its output. |
-| claude-cli.js | 151 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, runClaude, runClaudeJSON | Shared "run the local claude CLI in print mode, get JSON back" helper. |
+| claude-cli.js | 250 | modelEnv, isBatchCall, CLAUDE_CALL_TIMEOUT_MS, CLAUDE_MAX_STDOUT_BYTES, CLAUDE_MAX_STDERR_BYTES... | Shared "run the local claude CLI in print mode, get JSON back" helper. |
 | context-packet.js | 465 | buildContextPacket | These are useful words in a question but not a useful entity match on their |
 | daemon-client.js | 82 | connectDaemonClient | Client side of the daemon socket. The SDK's stdio client transport spawns |
 | daemon-hook-ops.js | 37 | HOOK_OPS | Maps control-socket op names to the same compute cores the CLI hooks fall |
@@ -73,7 +74,7 @@ bin/
 | doc-version.js | 24 | snapshotDocumentVersion | Stable per-retrieval content identity. Prefer the vault index hash because it |
 | env.js | 30 | DEFAULT_KB_DIR, ACTIVE_KB_DIR, loadKbEnv | - |
 | extract-meter.js | 93 | hashInput, logExtraction, EXTRACTION_SUMMARY_WINDOW_MS, summarizeExtractions, formatExtractionSummary | Write-path telemetry for kb_extract: the read path has retrieval.js as its |
-| extract.js | 898 | EXTRACT_PROMPT, MAX_EXTRACT_CHARS, buildExtractPrompt, chunkForExtract, EXTRACT_CALL_BUDGET_MS... | Auto-capture: turn a raw work conversation / session transcript into durable |
+| extract.js | 1032 | EXTRACT_PROMPT, EXTRACT_RULE_EVALS, EXTRACT_PROMPT_BUDGET_CHARS, extractPromptRules, extractPromptWithoutRule... | Auto-capture: turn a raw work conversation / session transcript into durable |
 | fact-reviews.js | 457 | FACT_REVIEW_POLICY, FACT_REVIEW_DISPOSITIONS, FactReviewError, reviewSubjectId, normalizeReviewItems... | Tool reads start with display-shaped facts, not database rows with ids. Load |
 | facts.js | 338 | sqlTimestamp, canonicalEntityId, entityKey, nearbyEntities, dedupeLiveFacts... | created_at defaults to SQLite's CURRENT_TIMESTAMP, which is UTC |
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
@@ -111,7 +112,7 @@ bin/
 | tiers.js | 344 | TIER, TIERS, DEFAULT_TIER, TIER_MEANING, tierRank... | Epistemic tier: how much standing a note has earned. Without it a conclusion |
 | tool-meter.js | 79 | readToolResult, metered | One row per MCP tool call. `retrievals` covers what was read and |
 | tool-names.js | 15 | MAINTENANCE_TOOL, WRITE_BACKED_MAINTENANCE_TOOLS | Canonical names for maintenance tools that can satisfy a capture checkpoint. |
-| tools.js | 998 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
+| tools.js | 1013 | FACT_RESULT_MAX_CHARS, getToolDefinitions, getHttpToolDefinitions | A refusal is a dead end unless it names the way forward, and the caller who |
 | transcript-paths.js | 44 | defaultTranscriptRoots, isPrimaryCursorTranscript, isDiscoverableTranscript, isActualSubagentTranscript | - |
 | trigger-match.js | 239 | CORPUS_PATH, TRIGGER_INDEX_PATH, stripHeredocs, commandSegments, patternMatchesSegment... | The command-matching core of the trigger system, split out of |
 | trigger-proposal-rules.js | 8 | TRIGGER_PROPOSAL_RULES | The rules a model must follow when proposing command triggers — shared |
@@ -133,9 +134,9 @@ bin/
 
 | File | Lines | Exports | Purpose |
 |------|-------|---------|---------|
-| classifier.js | 69 | classifyNote, classifyBatch | - |
-| processor.js | 111 | processNewClippings | - |
-| summarizer.js | 84 | summarizeNote, summarizeUnsummarized | - |
+| classifier.js | 107 | validateClassification, classifyNote, classifyBatch | - |
+| processor.js | 140 | processNewClippings | - |
+| summarizer.js | 123 | validateSummary, summarizeNote, summarizeUnsummarized | - |
 
 ## src/cli/
 
@@ -258,7 +259,7 @@ bin/
 | checkpoint-hook.test.js | 431 | - | - |
 | checkpoint-replay-eval.test.js | 144 | - | - |
 | child-exit.test.js | 32 | - | - |
-| claude-cli.test.js | 180 | - | Fake claude binaries so these tests need no network and run in ms. |
+| claude-cli.test.js | 330 | - | Fake claude binaries so these tests need no network and run in ms. |
 | cli-inert.test.js | 242 | - | Every entry point a user or a hook can invoke. `--help` on any of them must |
 | context-truth-packet.test.js | 293 | - | - |
 | daemon-restart.test.js | 303 | - | - |
@@ -270,11 +271,11 @@ bin/
 | docs-accuracy.test.js | 214 | - | - |
 | entity-canonicalization.test.js | 283 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | env.test.js | 102 | - | - |
-| extract-context.test.js | 197 | - | A qualifier that lands in a different chunk from its claim is not merely |
+| extract-context.test.js | 251 | - | A qualifier that lands in a different chunk from its claim is not merely |
 | extract-corpus.test.js | 77 | - | - |
-| extract-eval.test.js | 263 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
+| extract-eval.test.js | 359 | - | Prompt regressions for kb_extract, replayed against the real model — slow, |
 | extract-meter.test.js | 227 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
-| extract.test.js | 1089 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
+| extract.test.js | 1158 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | extraction-grounding-migration.test.js | 138 | - | - |
 | extraction-summary.test.js | 51 | - | - |
 | fact-add-retirement.test.js | 203 | - | - |
@@ -319,6 +320,7 @@ bin/
 | private-files.test.js | 365 | - | - |
 | process-ancestry.test.js | 191 | - | This runs on a hook's critical path (every UserPromptSubmit) — a hung `ps` |
 | promotions.test.js | 594 | - | Push at t0, read (follows it) at t0 + 5min — well inside the 30min window. |
+| provider-persistence.test.js | 262 | - | - |
 | qualifier-prefix.test.js | 78 | - | Point the KB at a throwaway dir BEFORE importing anything that opens the DB. |
 | reconciliation-review-regressions.test.js | 200 | - | - |
 | reconciliation.test.js | 432 | - | - |
@@ -330,7 +332,7 @@ bin/
 | retrieval-surfaces.test.js | 233 | - | Every read surface, counted rather than inspected. The meter's failure mode |
 | retrieval.test.js | 423 | - | The ancestry walk itself (ps-backed) is process-ancestry.test.js's job; |
 | runtime-node.test.js | 96 | - | Homebrew's Cellar path names one patch release. Persisting it into a job, |
-| safety-review.test.js | 109 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
+| safety-review.test.js | 110 | - | One fake claude whose behaviour is picked by an env var the child inherits, |
 | schema-migrations.test.js | 371 | - | The meter logged the system's own subprocesses alongside real sessions, and |
 | secret-prompt.test.js | 415 | - | - |
 | serve-shutdown.test.js | 92 | - | - |
@@ -356,7 +358,7 @@ bin/
 | tiers.test.js | 728 | - | Epistemic tiers: what a note claims, what it had to show for the claim, and |
 | tmp-kb-guard.test.js | 44 | - | Regression: a fixture that imported src before setting KB_DIR once seeded |
 | tool-cli.test.js | 140 | - | - |
-| tools.test.js | 240 | - | A tool nothing points at is one no agent has a reason to call, which is |
+| tools.test.js | 253 | - | A tool nothing points at is one no agent has a reason to call, which is |
 | trigger-hook.test.js | 549 | - | PreToolUse (Bash) hook: pure decision logic in decideAndRecord/ |
 | triggers.test.js | 710 | - | Command triggers: the deterministic vet (filterTriggers), the shared |
 | tunnels.test.js | 133 | - | - |
@@ -393,6 +395,12 @@ bin/
 | slow-daemon.js | 45 | startSlowDaemon | - |
 | tmp-kb.js | 26 | - | Point the KB at a throwaway dir BEFORE any module opens the real DB. |
 | wedged-daemon.js | 23 | startWedgedDaemon | - |
+
+## tests/manual/
+
+| File | Lines | Exports | Purpose |
+|------|-------|---------|---------|
+| extract-rule-mutations.mjs | 59 | - | !/usr/bin/env node |
 
 ## Key Data Flows
 

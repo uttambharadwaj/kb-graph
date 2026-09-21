@@ -34,6 +34,14 @@ case "$prompt" in
     else
       touch "$KB_DIR/flaked"; exit 3
     fi ;;
+  *MALFORMED_THEN_OK*)
+    if [ -f "$KB_DIR/malformed-once" ]; then
+      echo '${envelope({ facts: [{ subject: 'pr #998', predicate: 'status', object: 'merged' }], skipped: [] })}'
+    else
+      touch "$KB_DIR/malformed-once"
+      echo '${envelope({ skipped: [] })}'
+    fi ;;
+  *MALFORMED_DEAD*) echo '${envelope({ skipped: [] })}' ;;
   # Writes a full, valid response and THEN dies, so a retry that kept the
   # failed attempt's output would batch two objects for one single-valued edge.
   *PARTIAL_THEN_OK*)
@@ -74,7 +82,7 @@ case "$prompt" in
     ],
     skipped: [],
   })}' ;;
-  *CASE_DISPOSITION_REPRO*) echo '${envelope({
+  *TICKET_REPRO*) echo '${envelope({
     facts: [
       { subject: 'sample-web', predicate: 'gated_by', object: 'approving_review' },
       { subject: 'sample-web', predicate: 'gated_by', object: 'code_owner_review' },
@@ -364,31 +372,29 @@ describe('kb_extract consolidation', () => {
 
   it('applies the interactive budget to the model call by default', async () => {
     const timeouts = [];
-    const times = [1000, 1007, 1007];
     await kbExtract('interactive-service depends_on target-service.', {
       dryRun: true,
-      now: () => times.shift() ?? 1007,
+      now: () => 0,
       runModel: async (_prompt, { timeout }) => {
         timeouts.push(timeout);
         return { facts: [], skipped: [] };
       },
     });
-    assert.deepStrictEqual(timeouts, [EXTRACT_CALL_BUDGET_MS - 7]);
+    assert.deepStrictEqual(timeouts, [EXTRACT_CALL_BUDGET_MS]);
   });
 
   it('passes an explicit harvest budget through kbExtract to the model', async () => {
     const timeouts = [];
-    const times = [2000, 2011, 2011];
     await kbExtract('harvest-service depends_on target-service.', {
       dryRun: true,
       callBudgetMs: HARVEST_EXTRACT_CALL_BUDGET_MS,
-      now: () => times.shift() ?? 2011,
+      now: () => 0,
       runModel: async (_prompt, { timeout }) => {
         timeouts.push(timeout);
         return { facts: [], skipped: [] };
       },
     });
-    assert.deepStrictEqual(timeouts, [HARVEST_EXTRACT_CALL_BUDGET_MS - 11]);
+    assert.deepStrictEqual(timeouts, [HARVEST_EXTRACT_CALL_BUDGET_MS]);
   });
 
   it('still retries a fast model failure while shared budget remains', async () => {
@@ -585,7 +591,7 @@ describe('kb_extract consolidation', () => {
   });
 
   it('gives each extracted assertion one final disposition', async () => {
-    const text = 'CASE_DISPOSITION_REPRO: The sample-web main branch ruleset requires 1 approving review and code-owner review; '
+    const text = 'TICKET_REPRO: The sample-web main branch ruleset requires 1 approving review and code-owner review; '
       + 'sample-web CODEOWNERS covers only four security files owned by example-org/security_team.';
     const res = await kbExtract(text, { source: 'test', observationDate: '2026-08-07' });
 
@@ -727,6 +733,31 @@ describe('kb_extract consolidation', () => {
     );
   });
 
+  it('does not consume a reviewed preview when the commit is already cancelled', async () => {
+    const args = { source: 'test', observationDate: '2026-07-29' };
+    const text = 'cancelled preview me: pr #777 merged as abc1234';
+    const before = callCount();
+    await kbExtract(text, { ...args, dryRun: true });
+
+    let checks = 0;
+    const signal = {
+      throwIfAborted() {
+        checks++;
+        if (checks === 2) {
+          throw Object.assign(new Error('cancelled after preview lookup'), { name: 'AbortError' });
+        }
+      },
+    };
+    await assert.rejects(
+      kbExtract(text, { ...args, signal }),
+      { name: 'AbortError' },
+    );
+
+    const committed = await kbExtract(text, args);
+    assert.strictEqual(committed.from_preview, true);
+    assert.strictEqual(callCount() - before, 1, 'cancelled commit consumed the reviewed preview');
+  });
+
   it('extracts fresh when no preview matches the input', async () => {
     const before = callCount();
     const res = await kbExtract('never previewed', { source: 'test', observationDate: '2026-07-29' });
@@ -764,6 +795,44 @@ describe('kb_extract consolidation', () => {
     assert.strictEqual(callCount() - before, 2, 'did not make a second attempt');
     assert.deepStrictEqual(skipped, [], 'reported a recovered chunk as skipped');
     assert.deepStrictEqual(facts.map(f => f.subject), ['pr #999']);
+  });
+
+  it('retries a malformed provider result instead of treating it as empty success', async () => {
+    const before = callCount();
+    const { facts, skipped } = await extractFacts('MALFORMED_THEN_OK');
+
+    assert.strictEqual(callCount() - before, 2);
+    assert.deepStrictEqual(skipped, []);
+    assert.deepStrictEqual(facts.map(f => f.subject), ['pr #998']);
+  });
+
+  it('fails closed after both malformed provider attempts without writing facts', async () => {
+    const before = getDb().prepare('SELECT COUNT(*) AS count FROM facts').get().count;
+    await assert.rejects(
+      kbExtract('MALFORMED_DEAD', { source: 'test', observationDate: '2026-06-24' }),
+      /all 1 extraction chunk failed: extractor returned a malformed result/,
+    );
+    assert.strictEqual(getDb().prepare('SELECT COUNT(*) AS count FROM facts').get().count, before);
+  });
+
+  it('rejects malformed fact entries and bounds provider fan-out', async () => {
+    let calls = 0;
+    const result = await extractFacts('invalid provider payload', {
+      runModel: async () => {
+        calls++;
+        return { facts: [{ subject: 'missing object', predicate: 'uses' }], skipped: [] };
+      },
+    });
+    assert.strictEqual(calls, 2);
+    assert.match(result.skipped[0].reason, /extractor returned a malformed result/);
+
+    const oversized = await extractFacts('oversized provider payload', {
+      runModel: async () => ({
+        facts: Array.from({ length: 101 }, () => ({ subject: 'a', predicate: 'uses', object: 'b' })),
+        skipped: [],
+      }),
+    });
+    assert.match(oversized.skipped[0].reason, /extractor returned a malformed result/);
   });
 
   // The retry and the intra-call conflict check were written independently, and

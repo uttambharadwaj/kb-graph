@@ -5,11 +5,65 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { buildExtractPrompt, chunkForExtract, EXTRACT_PROMPT } from '../src/extract.js';
+import {
+  buildExtractPrompt,
+  chunkForExtract,
+  EXTRACT_PROMPT,
+  EXTRACT_PROMPT_BUDGET_CHARS,
+  EXTRACT_RULE_EVALS,
+  extractPromptRules,
+  extractPromptWithoutRule,
+  filterNarratedTransientStates,
+} from '../src/extract.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
 describe('extraction prompt context', () => {
+  it('keeps every prompt rule owned by a live-model eval and stays inside the rule budget', () => {
+    const rules = extractPromptRules();
+    const evalSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'extract-eval.test.js'), 'utf8');
+
+    assert.ok(EXTRACT_PROMPT.length <= EXTRACT_PROMPT_BUDGET_CHARS,
+      `extract prompt is ${EXTRACT_PROMPT.length} chars; budget is ${EXTRACT_PROMPT_BUDGET_CHARS}`);
+    assert.strictEqual(EXTRACT_RULE_EVALS.length, rules.length,
+      `${rules.length} prompt rules but ${EXTRACT_RULE_EVALS.length} eval ownership rows`);
+
+    EXTRACT_RULE_EVALS.forEach((owners, ruleIndex) => {
+      assert.ok(owners.length > 0, `rule ${ruleIndex + 1} has no eval owner: ${rules[ruleIndex]}`);
+      for (const owner of owners) {
+        assert.ok(evalSource.includes(owner),
+          `rule ${ruleIndex + 1} names missing eval case: ${owner}`);
+      }
+      assert.ok(!extractPromptWithoutRule(ruleIndex).includes(rules[ruleIndex]),
+        `mutation did not remove rule ${ruleIndex + 1}`);
+    });
+  });
+
+  it('rejects a transient status when the same narration states a later terminal outcome', () => {
+    const pending = { subject: 'support adjustments', predicate: 'status', object: 'pending' };
+    const result = filterNarratedTransientStates(
+      [pending],
+      'Support adjustments were flipped to pending and driven through the shipped mirror; the ledger and Metronome now agree.',
+    );
+    assert.deepStrictEqual(result.facts, []);
+    assert.match(result.skipped[0].reason, /intermediate_state_not_current/);
+  });
+
+  it('keeps pending when the narration names no later outcome', () => {
+    const pending = { subject: 'support adjustments', predicate: 'status', object: 'pending' };
+    const result = filterNarratedTransientStates([pending], 'Support adjustments were moved to pending.');
+    assert.deepStrictEqual(result, { facts: [pending], skipped: [] });
+  });
+
+  it('does not drop another subject that happens to share a transient status', () => {
+    const unrelated = { subject: 'billing import', predicate: 'status', object: 'pending' };
+    const result = filterNarratedTransientStates(
+      [unrelated],
+      'Support adjustments were moved to pending and then completed. The billing import remains pending.',
+    );
+    assert.deepStrictEqual(result, { facts: [unrelated], skipped: [] });
+  });
+
   // The behaviour these support is measured in tests/extract-eval.test.js
   // against the real model. These pin the wiring, which is deterministic and
   // is what silently regresses when someone edits the prompt builder.

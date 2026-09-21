@@ -39,9 +39,9 @@ describe('held-out extraction corpus', () => {
     assert.strictEqual(corpus.cases.length, 10);
     assert.ok(corpus.cases.every(fixture => fixture.input.length >= 100));
     assert.ok(corpus.cases.every(fixture => fixture.expected.length > 0));
-    assert.strictEqual(corpus.baseline.matched, 23);
+    assert.strictEqual(corpus.baseline.matched, 24);
     assert.strictEqual(corpus.baseline.expected, 29);
-    assert.strictEqual(corpus.baseline.recall, 23 / 29);
+    assert.strictEqual(corpus.baseline.recall, 24 / 29);
   });
 
   it('contains no internal fixture identifiers', () => {

@@ -79,12 +79,13 @@ describe('safety review verdicts', () => {
     assert.match(result.reasoning, /timed out after \d+ms \(limit 400ms\)/);
   });
 
-  it('distinguishes a crash from a timeout, and keeps the child stderr', async () => {
+  it('distinguishes a crash from a timeout without exposing child stderr', async () => {
     process.env.FAKE_CLAUDE = 'crash';
     const result = await reviewDestructiveAction('drop the database');
     assert.equal(result.safe, false);
     assert.match(result.reasoning, /exited 3/);
-    assert.match(result.reasoning, /model backend unreachable/);
+    assert.match(result.reasoning, /stderr \d+ bytes/);
+    assert.doesNotMatch(result.reasoning, /model backend unreachable/);
     assert.doesNotMatch(result.reasoning, /timed out/);
 
     const row = modelCalls().at(-1);
