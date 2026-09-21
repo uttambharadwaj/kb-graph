@@ -19,6 +19,7 @@ import openapiRoute from './routes/openapi.js';
 import { mcpHttpHandler, mcpGetHandler } from './mcp-http.js';
 import {
   formatHttpServerUrl, listenHttpServer, resolveHttpBind, resolveHttpOrigin,
+  resolveHttpTrustedOrigins,
 } from './http-bind.js';
 
 export async function start({ portOverride } = {}) {
@@ -27,7 +28,10 @@ export async function start({ portOverride } = {}) {
     ...(portOverride === undefined ? {} : { port: portOverride }),
   };
   const oauthOrigin = resolveHttpOrigin(bind);
-  const auth = createOAuthAuth({ baseURL: oauthOrigin });
+  const auth = createOAuthAuth({
+    baseURL: oauthOrigin,
+    trustedOrigins: resolveHttpTrustedOrigins(bind),
+  });
 
   // --- Global error handlers: prevent silent crashes ---
   process.on('unhandledRejection', (reason, promise) => {
