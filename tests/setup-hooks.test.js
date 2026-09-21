@@ -49,6 +49,19 @@ test('generated hooks preserve a custom KB_DIR', () => {
   );
 });
 
+test('generated hooks quote global install paths with spaces', () => {
+  const options = {
+    nodeBin: '/opt/Node Runtime/bin/node',
+    kbJsPath: '/opt/KB Package/bin/kb.js',
+  };
+  const merged = mergeAgentHooks({}, options);
+  assert.equal(
+    merged.hooks.SessionStart[0].hooks[0].command,
+    "env NODE_OPTIONS= '/opt/Node Runtime/bin/node' '/opt/KB Package/bin/kb.js' wakeup-hook",
+  );
+  assert.deepEqual(mergeAgentHooks(merged, options), merged);
+});
+
 test('mergeAgentHooks replaces the legacy inline preservation command instead of leaving an invalid second hook', () => {
   const legacy = "printf '%s\\n' 'CRITICAL PRESERVATION INSTRUCTIONS FOR THIS SUMMARY:'; echo 'Git state at compaction:'";
   const existing = { hooks: { PreCompact: [{ hooks: [{ type: 'command', command: legacy }] }] } };

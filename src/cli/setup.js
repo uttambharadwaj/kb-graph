@@ -1,13 +1,16 @@
 import { createInterface } from 'readline';
 import { randomBytes } from 'crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir, platform, release, type as osType } from 'os';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import { SUPPORTED_AGENTS, registerAgents } from './mcp-register.js';
 import { HOOK_FILES, PUSH_AGENTS, installAgentHooks } from './setup-hooks.js';
-import { installJobs, systemdEscape, xmlEscape } from './setup-jobs.js';
+import {
+  installJobs, systemdEscape, systemdExecWord, xmlEscape,
+} from './setup-jobs.js';
+import { installBundledSkills } from './setup-skills.js';
 import { stableNodePath } from './runtime-node.js';
 import { writePrivateFile } from '../private-file.js';
 import { askHidden } from '../secret-prompt.js';
@@ -234,7 +237,11 @@ export function buildEnvContent(cfg) {
 // Service installation helpers
 // ---------------------------------------------------------------------------
 
-export function systemdServiceContent({ kbDir = KB_DIR } = {}) {
+export function systemdServiceContent({
+  kbDir = KB_DIR,
+  nodeBin = stableNodePath(),
+  projectRoot = PROJECT_ROOT,
+} = {}) {
   return `[Unit]
 Description=Knowledge Base Server
 After=network.target
@@ -242,8 +249,8 @@ After=network.target
 [Service]
 Type=simple
 User=${process.env.USER || 'root'}
-WorkingDirectory=${PROJECT_ROOT}
-ExecStart=${stableNodePath()} ${join(PROJECT_ROOT, 'bin', 'kb.js')} start
+WorkingDirectory=${systemdExecWord(projectRoot)}
+ExecStart=${systemdExecWord(nodeBin)} ${systemdExecWord(join(projectRoot, 'bin', 'kb.js'))} start
 Restart=on-failure
 RestartSec=5
 Environment=NODE_ENV=production
@@ -267,7 +274,11 @@ function installSystemd() {
   }
 }
 
-export function launchdServiceContent({ kbDir = KB_DIR } = {}) {
+export function launchdServiceContent({
+  kbDir = KB_DIR,
+  nodeBin = stableNodePath(),
+  projectRoot = PROJECT_ROOT,
+} = {}) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -276,12 +287,12 @@ export function launchdServiceContent({ kbDir = KB_DIR } = {}) {
   <string>com.knowledgebase.server</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${stableNodePath()}</string>
-    <string>${join(PROJECT_ROOT, 'bin', 'kb.js')}</string>
+    <string>${xmlEscape(nodeBin)}</string>
+    <string>${xmlEscape(join(projectRoot, 'bin', 'kb.js'))}</string>
     <string>start</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>${PROJECT_ROOT}</string>
+  <string>${xmlEscape(projectRoot)}</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -517,13 +528,14 @@ async function runInteractive(env) {
 // Apply configuration
 // ---------------------------------------------------------------------------
 
-export function registerSetupAgent(agent, {
+export function registerSetupAgents(agents, {
   homeDir = HOME,
   cwd = process.cwd(),
   register = registerAgents,
 } = {}) {
   try {
-    return register([agent], homeDir, { cwd }).map(result => {
+    return register(agents, homeDir, { cwd }).map(result => {
+      const { agent } = result;
       // A hand-managed config (Codex's config.toml) and a refused move are
       // both "not registered" — reporting either as a write is how a setup
       // run ends believing it wired something it did not.
@@ -544,8 +556,12 @@ export function registerSetupAgent(agent, {
       return { action: `Registered MCP for ${agent}`, path: result.path };
     });
   } catch (err) {
-    return [{ action: `Failed to register MCP for ${agent}`, error: err.message }];
+    return [{ action: 'Failed to register MCP clients', error: err.message }];
   }
+}
+
+export function registerSetupAgent(agent, options = {}) {
+  return registerSetupAgents([agent], options);
 }
 
 function applyConfig(cfg) {
@@ -578,10 +594,11 @@ function applyConfig(cfg) {
     path: envPath,
   });
 
-  // 2. Register MCP for each agent that has a config we can write
-  for (const agent of (cfg.agents || [])) {
-    if (!SUPPORTED_AGENTS.includes(agent)) continue;
-    results.steps.push(...registerSetupAgent(agent));
+  // 2. Register every owned MCP config in one batch so a late target failure
+  // rolls back earlier clients from this setup run.
+  const registrationAgents = (cfg.agents || []).filter(agent => SUPPORTED_AGENTS.includes(agent));
+  if (registrationAgents.length > 0) {
+    results.steps.push(...registerSetupAgents(registrationAgents));
   }
 
   // 3. Install service
@@ -642,23 +659,11 @@ function applyConfig(cfg) {
   results.steps.push(...jobs.steps);
   if (!claudePath) results.steps.push({ action: 'claude CLI not found — nightly harvest needs it; install Claude Code and re-run setup', error: 'CLAUDE_PATH unset' });
 
-  // 6. Bundled skills — never overwrite a skill the user already has (customizations win)
+  // 6. Bundled skills — never overwrite a skill the user already has.
   try {
-    for (const name of readdirSync(join(PROJECT_ROOT, 'skills'))) {
-      const skillDest = join(HOME, '.claude', 'skills', name);
-      try {
-        if (existsSync(skillDest)) {
-          results.steps.push({ action: `Skill ${name} already present — left untouched`, path: skillDest });
-          continue;
-        }
-        cpSync(join(PROJECT_ROOT, 'skills', name), skillDest, { recursive: true });
-        results.steps.push({ action: `Installed ${name} skill`, path: skillDest });
-      } catch (err) {
-        results.steps.push({ action: `Failed to install ${name} skill`, error: err.message });
-      }
-    }
+    results.steps.push(...installBundledSkills({ home: HOME, projectRoot: PROJECT_ROOT }));
   } catch (err) {
-    results.steps.push({ action: 'Failed to read bundled skills directory', error: err.message });
+    results.steps.push({ action: 'Failed to install bundled skills', error: err.message });
   }
 
   // 7. First ingest if vault provided

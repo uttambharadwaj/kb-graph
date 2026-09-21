@@ -107,8 +107,27 @@ test('renderPlist escapes XML special characters in values', () => {
 });
 
 test('renderSystemdUnits escapes % in Environment values', () => {
-  const { service } = renderSystemdUnits(JOBS[0], { ...OPTS, vaultPath: '/home/u/100%vault' });
-  assert.match(service, /100%%vault/);
+  const { service } = renderSystemdUnits(JOBS[0], { ...OPTS, vaultPath: '/home/u/100%\\vault' });
+  assert.match(service, /100%%\\\\vault/);
+});
+
+test('renderSystemdUnits rejects multiline environment values', () => {
+  assert.throws(
+    () => renderSystemdUnits(JOBS[0], { ...OPTS, vaultPath: '/home/u/vault\nInjected=1' }),
+    /must not contain line breaks/,
+  );
+});
+
+test('renderSystemdUnits quotes install paths with spaces and specifiers', () => {
+  const { service } = renderSystemdUnits(JOBS[0], {
+    ...OPTS,
+    nodeBin: '/opt/Node 100%/bin/node',
+    kbRoot: '/opt/KB Package',
+  });
+  assert.match(
+    service,
+    /ExecStart="\/opt\/Node 100%%\/bin\/node" "\/opt\/KB Package\/bin\/kb\.js" harvest/,
+  );
 });
 
 test('installJobs surfaces mkdir failure as an error step, never throws', () => {

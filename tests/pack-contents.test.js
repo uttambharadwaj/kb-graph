@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { BUNDLED_SKILL_NAMES } from '../src/cli/setup-skills.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
@@ -66,6 +67,7 @@ test('npm pack contains the runtime and excludes repository-only material', () =
     'skills/debrief/SKILL.md',
     'skills/kb-workflow/SKILL.md',
     'src/env.js',
+    'src/cli/setup-skills.js',
     'src/predicates.json',
     'src/public/index.html',
     'src/routes/openapi.js',
@@ -80,6 +82,17 @@ test('npm pack contains the runtime and excludes repository-only material', () =
       `repository-only or private artifact was packed: ${path}`,
     );
   }
+
+  const packagedSkillNames = [...new Set(
+    [...paths]
+      .filter(path => path.startsWith('skills/'))
+      .map(path => path.split('/')[1]),
+  )].sort();
+  assert.deepEqual(
+    packagedSkillNames,
+    [...BUNDLED_SKILL_NAMES].sort(),
+    'package skills must match the runtime installation allowlist',
+  );
 
   assert.ok(manifest.entryCount <= 180, `package has ${manifest.entryCount} files`);
   assert.ok(manifest.size <= 500_000, `packed size is ${manifest.size} bytes`);

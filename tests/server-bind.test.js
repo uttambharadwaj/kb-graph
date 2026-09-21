@@ -289,14 +289,23 @@ test('generated containers expose HTTP only on host loopback', () => {
 });
 
 test('generated services preserve custom KB_DIR paths', () => {
-  assert.match(
-    systemdServiceContent({ kbDir: '/home/u/100% "kb"' }),
-    /Environment="KB_DIR=\/home\/u\/100%% \\"kb\\""/,
-  );
-  assert.match(
-    launchdServiceContent({ kbDir: '/home/u/KB & notes' }),
-    /<key>KB_DIR<\/key>\s*<string>\/home\/u\/KB &amp; notes<\/string>/,
-  );
+  const systemd = systemdServiceContent({
+    kbDir: '/home/u/100% "kb"',
+    nodeBin: '/opt/Node 100%/bin/node',
+    projectRoot: '/opt/KB Package',
+  });
+  assert.match(systemd, /Environment="KB_DIR=\/home\/u\/100%% \\"kb\\""/);
+  assert.match(systemd, /WorkingDirectory="\/opt\/KB Package"/);
+  assert.match(systemd, /ExecStart="\/opt\/Node 100%%\/bin\/node" "\/opt\/KB Package\/bin\/kb\.js" start/);
+
+  const launchd = launchdServiceContent({
+    kbDir: '/home/u/KB & notes',
+    nodeBin: '/opt/Node & Runtime/bin/node',
+    projectRoot: '/opt/KB & Package',
+  });
+  assert.match(launchd, /<key>KB_DIR<\/key>\s*<string>\/home\/u\/KB &amp; notes<\/string>/);
+  assert.match(launchd, /<string>\/opt\/Node &amp; Runtime\/bin\/node<\/string>/);
+  assert.match(launchd, /<key>WorkingDirectory<\/key>\s*<string>\/opt\/KB &amp; Package<\/string>/);
 });
 
 test('the setup CLI rejects unsafe hosts without touching live configuration', () => {

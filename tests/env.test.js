@@ -63,7 +63,7 @@ test('durable KB_DIR env takes precedence over checkout env', () => {
   }
 });
 
-test('checkout env remains a fallback for source installs', () => {
+test('an unrelated caller cwd cannot inject fallback configuration', () => {
   const dir = mkdtempSync(join(tmpdir(), 'kb-env-'));
   try {
     const kbDir = join(dir, 'state');
@@ -73,8 +73,8 @@ test('checkout env remains a fallback for source installs', () => {
     writeFileSync(join(cwd, '.env'), 'KB_PORT=5050\nKB_PASSWORD=checkout\n');
 
     const loaded = readLoadedEnv({ kbDir, cwd });
-    assert.equal(loaded.KB_PORT, '5050');
-    assert.equal(loaded.KB_PASSWORD, 'checkout');
+    assert.equal(loaded.KB_PORT, undefined);
+    assert.equal(loaded.KB_PASSWORD, undefined);
     assert.equal(loaded.envKbDir, kbDir);
     assert.equal(loaded.cacheDir, join(kbDir, 'models'));
   } finally {

@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { register } from '../src/cli/register.js';
-import { registerSetupAgent } from '../src/cli/setup.js';
+import { registerSetupAgent, registerSetupAgents } from '../src/cli/setup.js';
 import { KB_DIR } from '../src/paths.js';
 import {
   codexRegistrationSnippet,
@@ -630,6 +630,32 @@ describe('Cursor workspace registration', () => {
 });
 
 describe('setup MCP registration', () => {
+  it('registers every selected client in one transaction', () => {
+    const calls = [];
+    const steps = registerSetupAgents(['claude', 'gemini'], {
+      homeDir: '/test/home',
+      cwd: '/test/workspace',
+      register(agents, homeDir, options) {
+        calls.push({ agents, homeDir, options });
+        return agents.map(agent => ({
+          agent,
+          path: `/test/home/${agent}.json`,
+          written: true,
+        }));
+      },
+    });
+
+    assert.deepStrictEqual(calls, [{
+      agents: ['claude', 'gemini'],
+      homeDir: '/test/home',
+      options: { cwd: '/test/workspace' },
+    }]);
+    assert.deepStrictEqual(steps.map(step => step.action), [
+      'Registered MCP for claude',
+      'Registered MCP for gemini',
+    ]);
+  });
+
   it('passes the effective cwd and reports every Cursor target', () => {
     const calls = [];
     const steps = registerSetupAgent('cursor', {

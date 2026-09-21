@@ -17,8 +17,20 @@ export const xmlEscape = s => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-// systemd Environment=: % is a specifier, " ends the quoted value
-export const systemdEscape = s => String(s).replace(/%/g, '%%').replace(/"/g, '\\"');
+function assertSingleLineSystemdValue(value) {
+  const text = String(value);
+  if (/[\0\r\n]/.test(text)) throw new Error('systemd values must not contain line breaks or NUL');
+  return text;
+}
+
+// systemd Environment=: % is a specifier; backslash and " are escapes.
+export const systemdEscape = value => assertSingleLineSystemdValue(value)
+  .replace(/\\/g, '\\\\').replace(/%/g, '%%').replace(/"/g, '\\"');
+export const systemdExecWord = value => (
+  /^[A-Za-z0-9_./:@+=,-]+$/.test(assertSingleLineSystemdValue(value))
+    ? String(value)
+    : `"${systemdEscape(value)}"`
+);
 
 // A scheduled job inherits no shell profile. The runtime loads KB_DIR/.env,
 // but PATH and executable locations still have to be written into the unit;
@@ -80,7 +92,7 @@ Description=KB ${job.name}
 
 [Service]
 Type=oneshot
-ExecStart=${command(job, opts).join(' ')}
+ExecStart=${command(job, opts).map(systemdExecWord).join(' ')}
 ${Object.entries(jobEnv(job, opts)).map(([k, v]) => `Environment="${k}=${systemdEscape(v)}"`).join('\n')}
 `;
   const trigger = job.schedule.interval

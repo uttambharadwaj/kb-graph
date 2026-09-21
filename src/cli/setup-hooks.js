@@ -124,16 +124,19 @@ const agentSuffix = (agent) => agent === AGENT.CLAUDE ? '' : ` ${AGENT_FLAG} ${a
 // instrumentation, so run them with an explicitly clean option set.
 const HOOK_ENV_PREFIX = 'env NODE_OPTIONS= ';
 const shellQuote = value => `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+const shellWord = value => /^[A-Za-z0-9_./:@%+=,-]+$/.test(String(value))
+  ? String(value)
+  : shellQuote(value);
 
 const commandFor = (spec, {
   nodeBin, kbJsPath, agent, kbDir,
 }) => {
   const target = spec.script
-    ? join(dirname(kbJsPath), spec.script)
-    : `${kbJsPath} ${spec.subcommand}`;
-  const extraArgs = spec.extraArgs?.length ? ` ${spec.extraArgs.join(' ')}` : '';
+    ? [join(dirname(kbJsPath), spec.script)]
+    : [kbJsPath, spec.subcommand];
+  const args = [...target, ...(spec.extraArgs ?? [])].map(shellWord).join(' ');
   const kbDirEnv = kbDir ? `KB_DIR=${shellQuote(kbDir)} ` : '';
-  return `${HOOK_ENV_PREFIX}${kbDirEnv}${nodeBin} ${target}${extraArgs}${agentSuffix(agent)}`;
+  return `${HOOK_ENV_PREFIX}${kbDirEnv}${shellWord(nodeBin)} ${args}${agentSuffix(agent)}`;
 };
 
 // The agent a command was installed for, read the same way readAgentFlag
@@ -157,10 +160,10 @@ const identifies = (spec, command, agent) => {
   const cmd = command ?? '';
   if (agentOf(cmd) !== agent) return false;
   const base = cmd.replace(AGENT_IN_COMMAND, '').trimEnd();
-  if (spec.script && new RegExp(`(?:^|/)${spec.script.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)) return true;
+  if (spec.script && new RegExp(`(?:^|/)${spec.script.replaceAll('.', '\\.')}'?(?:\\s|$)`).test(base)) return true;
   if (
     spec.subcommand
-    && new RegExp(`(?:^|/)kb\\.js\\s+${spec.subcommand.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)
+    && new RegExp(`(?:^|/)kb\\.js'?\\s+${spec.subcommand.replaceAll('.', '\\.')}(?:\\s|$)`).test(base)
   ) return true;
   return false;
 };
