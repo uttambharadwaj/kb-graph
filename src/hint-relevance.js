@@ -11,7 +11,7 @@
 // the prompt cover, and how distinctive is it? That denominator is short and
 // uniform across notes, which a prompt's is not.
 import { getDb, STOP_WORDS } from './db.js';
-import { HINT_OUTCOME_TIE_BUCKET, compareByOutcomeSignal, outcomeAdjustmentForDoc } from './outcome-ranking.js';
+import { HINT_OUTCOME_TIE_BUCKET, outcomeAdjustmentsForDocs } from './outcome-ranking.js';
 
 // One shared word is a coincidence — a prompt naming a person matched a meeting
 // note on the name alone, "style of speaking" matched a code-style note.
@@ -281,7 +281,16 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
   if (!primaryQuery.length && !expansionQuery.length) return [];
 
   const selectCandidates = db.prepare(`
-    SELECT d.id, d.title, d.doc_type, d.tags, d.tier, d.aliases
+    SELECT d.id, d.title, d.doc_type, d.tags, d.tier, d.aliases,
+      COALESCE((
+        SELECT vf.content_hash
+        FROM vault_files vf
+        WHERE vf.document_id = d.id
+          AND vf.content_hash IS NOT NULL
+          AND vf.content_hash != ''
+        ORDER BY vf.indexed_at DESC, vf.id DESC
+        LIMIT 1
+      ), d.updated_at) AS doc_version
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
     WHERE documents_fts MATCH ?
@@ -373,11 +382,11 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
   };
 
   const hits = [];
+  const versionedHits = [];
   const qualifies = evidence =>
     evidence.families.length >= MIN_COVERED_TERMS && evidence.mass >= minMass;
   const admit = (doc, evidence) => {
     if (!qualifies(evidence)) return;
-    const adjustment = outcomeAdjustmentForDoc(db, doc);
     const hit = {
       id: doc.id,
       title: doc.title,
@@ -385,8 +394,8 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
       tier: doc.tier,
       mass: evidence.mass,
     };
+    versionedHits.push({ id: doc.id, doc_version: doc.doc_version });
     if (explain) {
-      hit.outcome_adjustment = adjustment;
       hit.evidence = {
         min_mass: minMass,
         total_mass: evidence.mass,
@@ -438,11 +447,19 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
     });
   }
 
+  const outcomeAdjustments = outcomeAdjustmentsForDocs(db, versionedHits);
+  if (explain) {
+    for (const hit of hits) hit.outcome_adjustment = outcomeAdjustments.get(hit.id) || 0;
+  }
+  const compareByOutcome = (a, b) =>
+    Math.sign(outcomeAdjustments.get(b.id) || 0)
+      - Math.sign(outcomeAdjustments.get(a.id) || 0);
+
   hits.sort((a, b) => {
     const bucket = Math.round((b.mass || 0) / HINT_OUTCOME_TIE_BUCKET)
       - Math.round((a.mass || 0) / HINT_OUTCOME_TIE_BUCKET);
     if (bucket) return bucket;
-    return compareByOutcomeSignal(db, a, b)
+    return compareByOutcome(a, b)
       || ((b.mass || 0) - (a.mass || 0));
   });
 
@@ -458,7 +475,7 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
       const previous = hits[current - 1];
       if (CURRENT_CONTEXT_TYPES.has(previous.doc_type)
         || Math.abs(candidate.mass - previous.mass) > CURRENT_CONTEXT_MASS_EPSILON
-        || compareByOutcomeSignal(db, candidate, previous) !== 0) break;
+        || compareByOutcome(candidate, previous) !== 0) break;
       [hits[current - 1], hits[current]] = [candidate, previous];
       current--;
     }

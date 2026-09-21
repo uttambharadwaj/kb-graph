@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { getDb, searchDocuments } from '../src/db.js';
 import { SURFACE, logRetrieval } from '../src/retrieval.js';
 import { OUTCOME, outcomeAdjustment, recordRetrievalOutcomesForSession, retrievalOutcomesReady } from '../src/retrieval-outcomes.js';
+import { outcomeAdjustmentsForDocs } from '../src/outcome-ranking.js';
 
 function ensureOutcomeSchema(db) {
   const columns = db.prepare('PRAGMA table_info(retrievals)').all().map(c => c.name);
@@ -444,6 +445,50 @@ describe('recordRetrievalOutcomesForSession', () => {
     const hits = searchDocuments('azimuth quokka outcome ranking', 10);
 
     assert.ok(hits.findIndex(hit => hit.id === strong) < hits.findIndex(hit => hit.id === weak), JSON.stringify(hits));
+  });
+
+  it('loads outcome adjustments for a ranking set in one query', () => {
+    const db = getDb();
+    ensureOutcomeSchema(db);
+    const helped = insertDoc(db, 'Batch outcome helped note', 'batch-helped');
+    const corrected = insertDoc(db, 'Batch outcome corrected note', 'batch-corrected');
+    const neutral = insertDoc(db, 'Batch outcome neutral note', 'batch-neutral');
+    for (const [docId, version, outcome] of [
+      [helped, 'batch-helped', OUTCOME.HELPED],
+      [corrected, 'batch-corrected', OUTCOME.CORRECTED],
+    ]) {
+      const retrievalId = db.prepare(`
+        INSERT INTO retrievals (doc_id, doc_version, surface, session, is_test)
+        VALUES (?, ?, 'kb_read', ?, 0)
+      `).run(docId, version, `batch-${docId}`).lastInsertRowid;
+      db.prepare(`
+        INSERT INTO retrieval_outcomes
+          (retrieval_id, doc_id, doc_version, session, outcome, evidence_kind, evidence_ref, source)
+        VALUES (?, ?, ?, ?, ?, 'test', ?, 'test')
+      `).run(retrievalId, docId, version, `batch-${docId}`, outcome, `batch-${docId}`);
+    }
+
+    const originalPrepare = db.prepare;
+    let outcomeQueries = 0;
+    db.prepare = function countedPrepare(sql, ...args) {
+      if (String(sql).includes('FROM retrieval_outcomes')) outcomeQueries++;
+      return originalPrepare.call(this, sql, ...args);
+    };
+    let adjustments;
+    try {
+      adjustments = outcomeAdjustmentsForDocs(db, [
+        { id: helped, doc_version: 'batch-helped' },
+        { id: corrected, doc_version: 'batch-corrected' },
+        { id: neutral, doc_version: 'batch-neutral' },
+      ]);
+    } finally {
+      db.prepare = originalPrepare;
+    }
+
+    assert.strictEqual(adjustments.get(helped), 0.5);
+    assert.strictEqual(adjustments.get(corrected), -4);
+    assert.strictEqual(adjustments.get(neutral), 0);
+    assert.strictEqual(outcomeQueries, 1);
   });
 
   it('is inert until the outcome table exists', () => {

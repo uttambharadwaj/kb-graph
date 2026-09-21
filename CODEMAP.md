@@ -4,7 +4,7 @@
 
 ## Quick Stats
 - **Files:** 267
-- **Total lines:** 57,622
+- **Total lines:** 57,716
 
 ## Architecture Overview
 ```
@@ -79,7 +79,7 @@ bin/
 | fallback-tool-meter.js | 67 | FALLBACK_TOOL_LOG, FALLBACK_TOOL_WINDOW_MS, recordFallbackTool, summarizeFallbackTools, formatFallbackToolSummary | The direct CLI exists only as a recovery path when an agent's MCP transport |
 | grounding.js | 334 | normalizeForGrounding, UNGROUNDED_REASON_PREFIX, CLAIM_UNGROUNDED_REASON_PREFIX, DATE_OVERRIDE_REASON_PREFIX, isIsoDate... | Grounding: the extractor asserts things its source text never states — |
 | harvest.js | 779 | MAX_SESSIONS_PER_RUN, TRANSCRIPT_PARSER_VERSION, factsRequested, LESSONS_PROMPT, buildLessonsPrompt... | Nightly auto-debrief: sweep agent session transcripts (Claude Code, Cursor, |
-| hint-relevance.js | 468 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
+| hint-relevance.js | 485 | tokenize, filterAliases, relevantNotes | Which notes, if any, is a whole user prompt actually about? |
 | http-bind.js | 73 | DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, resolveHttpHost, resolveHttpPort, resolveHttpBind... | - |
 | ingest.js | 195 | getMarkdownIngestMetadata, normalizeIngestOptions, ingestFile, ingestDirectory, ingestText | Ingested documents have no vault file, so the reindex job — which walks the |
 | jobs.js | 31 | JOBS, staleAfterHours, STALE_AFTER | The scheduled loops, and how long each may go quiet before that is news. |
@@ -90,7 +90,7 @@ bin/
 | migrate-legacy.js | 902 | SOURCE_KEYS, MIGRATION_ID, MIGRATION_ACTION, MIGRATION_AUDIT_STATUS, MIGRATION_SOURCE... | Chunks that never parsed, so the writer can report them rather than let a |
 | migration-targets.js | 28 | MIGRATION_TARGETS, migrationsFor | Which databases have migrations, and where the lists that define them live. |
 | model-meter.js | 48 | logModelCall | One row per model subprocess call. Logged from the single site every caller |
-| outcome-ranking.js | 56 | OUTCOME, HELPED_OUTCOME_ADJUSTMENT, CORRECTED_OUTCOME_ADJUSTMENT, FTS_OUTCOME_TIE_BUCKET, HINT_OUTCOME_TIE_BUCKET... | Outcome evidence is deliberately a tie-break, not a rank delta. SQLite FTS |
+| outcome-ranking.js | 88 | OUTCOME, HELPED_OUTCOME_ADJUSTMENT, CORRECTED_OUTCOME_ADJUSTMENT, FTS_OUTCOME_TIE_BUCKET, HINT_OUTCOME_TIE_BUCKET... | Outcome evidence is deliberately a tie-break, not a rank delta. SQLite FTS |
 | paths.js | 38 | KB_DIR, FILES_DIR, LOGS_DIR, HOOK_ERROR_LOG, DB_PATH... | tests/helpers/tmp-kb.js checks this to prove it ran before we did. |
 | predicates.js | 362 | VOCABULARY_FILE, canonicalPredicate, SINGLE_VALUED, PREDICATE_INVERSES, inverseTargetOf... | The predicate registry and the one canonicaliser every write path folds |
 | private-file.js | 150 | PRIVATE_FILE_MODE, writePrivateFile, writePrivateFiles | - |
@@ -325,7 +325,7 @@ bin/
 | rediscoveries.test.js | 255 | - | Rediscovery telemetry: duplicate detection catching an agent re-deriving a |
 | register.test.js | 684 | - | Codex CLI (0.148) reads [mcp_servers. ] from config.toml and never loads |
 | resident-census.test.js | 93 | - | - |
-| retrieval-outcomes.test.js | 456 | - | - |
+| retrieval-outcomes.test.js | 501 | - | - |
 | retrieval-report.test.js | 319 | - | The classifier's whole job is to separate "go and look in the KB" from |
 | retrieval-surfaces.test.js | 233 | - | Every read surface, counted rather than inspected. The meter's failure mode |
 | retrieval.test.js | 423 | - | The ancestry walk itself (ps-backed) is process-ancestry.test.js's job; |

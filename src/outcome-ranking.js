@@ -44,6 +44,38 @@ export function outcomeAdjustmentForDoc(db, doc) {
   }
 }
 
+export function outcomeAdjustmentsForDocs(db, docs) {
+  const adjustments = new Map(docs.map(doc => [doc.id, 0]));
+  try {
+    if (!docs.length || !retrievalOutcomesReadable(db)) return adjustments;
+    const versioned = docs.filter(doc => doc?.id && doc.doc_version);
+    if (!versioned.length) return adjustments;
+    const where = versioned.map(() => '(doc_id = ? AND doc_version = ?)').join(' OR ');
+    const rows = db.prepare(`
+      SELECT doc_id, outcome, COUNT(*) AS count
+      FROM retrieval_outcomes
+      WHERE ${where}
+      GROUP BY doc_id, outcome
+    `).all(...versioned.flatMap(doc => [doc.id, doc.doc_version]));
+    const outcomesByDoc = new Map();
+    for (const row of rows) {
+      if (!outcomesByDoc.has(row.doc_id)) outcomesByDoc.set(row.doc_id, new Map());
+      outcomesByDoc.get(row.doc_id).set(row.outcome, row.count);
+    }
+    for (const doc of versioned) {
+      const counts = outcomesByDoc.get(doc.id);
+      if ((counts?.get(OUTCOME.CORRECTED) || 0) > 0) {
+        adjustments.set(doc.id, CORRECTED_OUTCOME_ADJUSTMENT);
+      } else if ((counts?.get(OUTCOME.HELPED) || 0) > 0) {
+        adjustments.set(doc.id, HELPED_OUTCOME_ADJUSTMENT);
+      }
+    }
+    return adjustments;
+  } catch {
+    return adjustments;
+  }
+}
+
 
 export function outcomeSignalForDoc(db, doc) {
   const adjustment = outcomeAdjustmentForDoc(db, doc);
