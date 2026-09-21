@@ -33,6 +33,7 @@ const MAX_DF_RATIO = 0.15;
 // Ceilings on the FTS work, since this runs synchronously on every prompt.
 const MAX_QUERY_TERMS = 40;
 const MAX_CANDIDATES = 40;
+const MAX_EXPANSION_CANDIDATES = 10;
 
 // Prefix matching bounded to inflection: unbounded, "work" covers "workflow" and
 // "workstream", which are different subjects. The shared prefix itself must be
@@ -46,6 +47,16 @@ const MIN_PREFIX_LEN = 4;
 // actually relies on: plurals, past tense, and agent nouns (`index/indexer`,
 // `review/reviewer`).
 const INFLECTION_SUFFIXES = new Set(['s', 'es', 'ed', 'er']);
+// Reviewed exceptions stay closed rather than turning every ambiguous `-ves`
+// verb into an `-f/-fe` noun (`leaves` must not become `leaf`).
+const REVIEWED_DERIVATION_FORMS = new Map([
+  ['loaf', ['loaves']],
+  ['loaves', ['loaf']],
+]);
+// The regular noun/verb derivation is bounded below. `approve` is excluded by
+// reviewed replay evidence: treating it as `approval` surfaced approval-policy
+// notes under ordinary PR approvals.
+const DERIVATION_BLOCKERS = new Set(['approve', 'approval']);
 
 // A current state or durable decision is more useful than accumulated lessons
 // when both are equally strong identity matches. This never turns silence into
@@ -60,6 +71,11 @@ const CURATED_TERM_BLOCKERS = new Set([
   'assert', 'example', 'fixture', 'handoff', 'quoted', 'spec', 'test',
 ]);
 const QUOTED_SPAN = /```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|(?<![\p{L}\p{N}])'[^'\n]*'(?![\p{L}\p{N}])|“[^”\n]*”|‘[^’\n]*’/gu;
+const EXPANSION_INSTRUCTION_PATTERNS = [
+  /\b(?:regression\s+)?test\s+(?:case|prompt)\s*:/iu,
+  /\b(?:assert|expect|verify|check\s+whether)\b[\s\S]{0,160}\b(?:the\s+)?hint\b[\s\S]{0,80}\b(?:fires?|matches?|returns?)\b/iu,
+  /\b(?:the\s+)?hint\b[\s\S]{0,40}\b(?:should|must)\s+(?:fire|match|return)\b/iu,
+];
 
 // These are prompt framing, not subjects. `show` combined with `prompt` to put
 // an LLM-latency note under a question about the hint hook itself. Keep this
@@ -70,28 +86,27 @@ const HINT_STOP_WORDS = new Set([
   'show', 'shows', 'showed', 'shown', 'showing',
 ]);
 
+function normalizedTerms(text) {
+  return String(text ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
 // Splits as FTS5's unicode61 does — every non-letter/non-digit, diacritics
 // folded — because these terms are looked up in that index. Deliberately not
 // shared with `searchDocuments`, which splits on whitespace: right for a typed
 // query, but here it leaves "bot-triage" unmatchable by "triage" and asks for
 // "caf" where the index holds "cafe". The length/stop-word filters are ours.
 export function tokenize(text) {
-  return String(text ?? '')
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
+  return normalizedTerms(text)
     .filter(term => term.length >= 3 && !STOP_WORDS.has(term) && !HINT_STOP_WORDS.has(term));
 }
 
 function curatedPromptTerms(text) {
-  const rawTerms = String(text ?? '')
-    .replace(QUOTED_SPAN, ' ')
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean);
+  const rawTerms = normalizedTerms(String(text ?? '').replace(QUOTED_SPAN, ' '));
   if (rawTerms.some(term => CURATED_TERM_BLOCKERS.has(term))) return [];
   const hasReviewedPhrase = rawTerms.some(
     (term, index) => REVIEW_FANOUT_PHRASE.every(
@@ -99,6 +114,13 @@ function curatedPromptTerms(text) {
     ),
   );
   return hasReviewedPhrase ? REVIEW_FANOUT_TERMS : [];
+}
+
+function expandablePromptTerms(text) {
+  if (EXPANSION_INSTRUCTION_PATTERNS.some(pattern => pattern.test(String(text ?? '')))) {
+    return new Set();
+  }
+  return new Set(tokenize(String(text ?? '').replace(QUOTED_SPAN, ' ')));
 }
 
 function covered(term, promptTerms, prefixable) {
@@ -109,6 +131,17 @@ function covered(term, promptTerms, prefixable) {
       && full.startsWith(stem)
       && INFLECTION_SUFFIXES.has(full.slice(stem.length));
   });
+}
+
+function derivationForms(term) {
+  const forms = [term, ...(REVIEWED_DERIVATION_FORMS.get(term) || [])];
+  if (DERIVATION_BLOCKERS.has(term)) return forms;
+  if (/[sv]e$/u.test(term) && term.length > 5) {
+    forms.push(`${term.slice(0, -1)}al`);
+  } else if (/[sv]al$/u.test(term) && term.length > 6) {
+    forms.push(`${term.slice(0, -2)}e`);
+  }
+  return [...new Set(forms)];
 }
 
 // df for many terms in one statement; terms absent from the index are absent
@@ -219,21 +252,34 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
     for (const t of unknown) dfOf.set(t, found.get(t) || 0);
   };
   const idf = (t) => (dfOf.get(t) ? Math.log(total / dfOf.get(t)) : 0);
-  load(promptTerms);
+  const expandableTerms = expandablePromptTerms(prompt);
+  const formsByPromptTerm = new Map(promptTerms.map(term => [
+    term,
+    expandableTerms.has(term) ? derivationForms(term) : [term],
+  ]));
+  load([...formsByPromptTerm.values()].flat());
 
   // Bound the FTS query to the prompt's most informative terms. Repetition is
   // what separates a topic from an aside, so weight idf by in-prompt frequency.
   const minDf = total >= LARGE_CORPUS ? MIN_DF_LARGE : 1;
   // Keep the window non-empty however small the store is.
   const maxDf = Math.max(total * MAX_DF_RATIO, minDf);
-  const query = promptTerms
-    .filter(t => dfOf.get(t) >= minDf && dfOf.get(t) <= maxDf)
-    .map(t => ({ term: t, weight: (1 + Math.log(termFreq.get(t))) * idf(t) }))
+  const weightedQuery = (entries) => entries
+    .filter(({ form }) => dfOf.get(form) >= minDf && dfOf.get(form) <= maxDf)
+    .map(({ term, form }) => ({
+      term: form,
+      weight: (1 + Math.log(termFreq.get(term))) * idf(form),
+    }))
     .sort((a, b) => b.weight - a.weight)
     .slice(0, MAX_QUERY_TERMS);
-  if (!query.length) return [];
+  const primaryQuery = weightedQuery(promptTerms.map(term => ({ term, form: term })));
+  const expansionQuery = weightedQuery(promptTerms.flatMap(term =>
+    formsByPromptTerm.get(term)
+      .filter(form => form !== term)
+      .map(form => ({ term, form }))));
+  if (!primaryQuery.length && !expansionQuery.length) return [];
 
-  const candidates = db.prepare(`
+  const selectCandidates = db.prepare(`
     SELECT d.id, d.title, d.doc_type, d.tags, d.tier, d.aliases
     FROM documents_fts f
     JOIN documents d ON d.id = f.rowid
@@ -242,7 +288,12 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
       AND d.doc_type != 'archive'
     ORDER BY bm25(documents_fts, 10.0, 1.0, 5.0)
     LIMIT ?
-  `).all(query.map(q => `"${q.term}" *`).join(' OR '), MAX_CANDIDATES);
+  `);
+  const queryCandidates = (query, limit) => query.length
+    ? selectCandidates.all(query.map(q => `"${q.term}" *`).join(' OR '), limit)
+    : [];
+  const candidates = queryCandidates(primaryQuery, MAX_CANDIDATES);
+  const primaryCandidateCount = candidates.length;
 
   const identity = doc => {
     const terms = new Map();
@@ -263,6 +314,8 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
   const minMass = MIN_COVERED_MASS_RATIO * Math.log(total);
   const promptSet = new Set(promptTerms);
   const prefixable = promptTerms.filter(t => t.length >= MIN_PREFIX_LEN);
+  const expandedPromptSet = new Set(promptTerms.flatMap(term => formsByPromptTerm.get(term)));
+  const expandedPrefixable = [...expandedPromptSet].filter(t => t.length >= MIN_PREFIX_LEN);
 
   // Two identity tokens that are inflections of each other are one subject
   // wearing two spellings — "backfill" beside "backfills", "review" beside
@@ -275,41 +328,104 @@ export function relevantNotes(prompt, { limit = 3, explain = false } = {}) {
   // inflection rule the covering uses — and each family testifies once, at
   // the idf of its most distinctive spelling: the rarest form is the one the
   // prompt actually named ("indexer", df 5, beside "index", df 84).
-  const related = (a, b) => covered(a, new Set([b]), b.length >= MIN_PREFIX_LEN ? [b] : []);
-  const familiesOf = (entries) => {
+  const related = (a, b, includeDerivations) =>
+    covered(a, new Set([b]), b.length >= MIN_PREFIX_LEN ? [b] : [])
+    || (includeDerivations && (
+      derivationForms(a).includes(b) || derivationForms(b).includes(a)
+    ));
+  const familiesOf = (entries, includeDerivations) => {
+    const remaining = [...entries];
     const families = [];
-    for (const entry of entries) {
-      const home = families.find(f => f.some(member => related(member.term, entry.term)));
-      if (home) home.push(entry); else families.push([entry]);
+    while (remaining.length) {
+      const family = [remaining.shift()];
+      for (let index = 0; index < remaining.length;) {
+        if (family.some(member =>
+          related(member.term, remaining[index].term, includeDerivations))) {
+          family.push(remaining.splice(index, 1)[0]);
+          index = 0;
+        } else {
+          index += 1;
+        }
+      }
+      families.push(family);
     }
     return families;
   };
+  const scoreEvidence = (entries, includeDerivations = false) => {
+    const families = familiesOf(entries, includeDerivations);
+    const familyMass = families.map(family => Math.max(...family.map(entry => idf(entry.term))));
+    return {
+      families,
+      familyMass,
+      mass: familyMass.reduce((sum, value) => sum + value, 0),
+    };
+  };
 
   const hits = [];
-  candidates.forEach((doc, i) => {
-    const matched = identities[i].filter(entry =>
-      dfOf.get(entry.term) > 0 && covered(entry.term, promptSet, prefixable));
-    const families = familiesOf(matched);
-    if (families.length < MIN_COVERED_TERMS) return;
-    const familyMass = families.map(family => Math.max(...family.map(entry => idf(entry.term))));
-    const mass = familyMass.reduce((sum, value) => sum + value, 0);
-    if (mass < minMass) return;
+  const qualifies = evidence =>
+    evidence.families.length >= MIN_COVERED_TERMS && evidence.mass >= minMass;
+  const admit = (doc, evidence) => {
+    if (!qualifies(evidence)) return;
     const adjustment = outcomeAdjustmentForDoc(db, doc);
-    const hit = { id: doc.id, title: doc.title, doc_type: doc.doc_type, tier: doc.tier, mass };
+    const hit = {
+      id: doc.id,
+      title: doc.title,
+      doc_type: doc.doc_type,
+      tier: doc.tier,
+      mass: evidence.mass,
+    };
     if (explain) {
       hit.outcome_adjustment = adjustment;
       hit.evidence = {
         min_mass: minMass,
-        total_mass: mass,
-        families: families.map((family, index) => ({
+        total_mass: evidence.mass,
+        families: evidence.families.map((family, index) => ({
           terms: family.map(entry => entry.term),
           sources: [...new Set(family.flatMap(entry => entry.sources))].sort(),
-          mass: familyMass[index],
+          mass: evidence.familyMass[index],
         })),
       };
     }
     hits.push(hit);
-  });
+  };
+
+  // Preserve the established result set whenever the original query admits a
+  // note. Expansion is a fallback for prompts the primary path would decline,
+  // not a way to reshuffle or append to already-grounded hints.
+  for (let index = 0; index < primaryCandidateCount; index++) {
+    const matched = identities[index].filter(entry =>
+      dfOf.get(entry.term) > 0 && covered(entry.term, promptSet, prefixable));
+    admit(candidates[index], scoreEvidence(matched));
+  }
+  if (!hits.length) {
+    const candidateIds = new Set(candidates.map(doc => doc.id));
+    const supplementalIdentities = [];
+    for (const doc of queryCandidates(
+      expansionQuery,
+      MAX_CANDIDATES + MAX_EXPANSION_CANDIDATES,
+    )) {
+      if (candidateIds.has(doc.id)) continue;
+      const docIdentity = identity(doc);
+      candidates.push(doc);
+      identities.push(docIdentity);
+      supplementalIdentities.push(docIdentity);
+      candidateIds.add(doc.id);
+      if (supplementalIdentities.length === MAX_EXPANSION_CANDIDATES) break;
+    }
+    load(supplementalIdentities.flatMap(entries => entries.map(entry => entry.term)));
+
+    candidates.forEach((doc, index) => {
+      if (index >= primaryCandidateCount) {
+        const exactMatched = identities[index].filter(entry =>
+          dfOf.get(entry.term) > 0 && covered(entry.term, promptSet, prefixable));
+        if (qualifies(scoreEvidence(exactMatched))) return;
+      }
+      const matched = identities[index].filter(entry =>
+        dfOf.get(entry.term) > 0
+        && covered(entry.term, expandedPromptSet, expandedPrefixable));
+      admit(doc, scoreEvidence(matched, true));
+    });
+  }
 
   hits.sort((a, b) => {
     const bucket = Math.round((b.mass || 0) / HINT_OUTCOME_TIE_BUCKET)

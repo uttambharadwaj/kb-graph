@@ -129,6 +129,8 @@ automatic capture path.
 Pull context with `kb_search`, `kb_search_smart`, or `kb_context`. Claude Code
 and Codex also receive sparse, precision-first hints when a prompt clearly
 matches a note. Cursor receives the session briefing but not per-prompt hints.
+See [Prompt hint retrieval](docs/hint-retrieval.md) for the scorer's measured
+recall target and precision gates.
 
 ### Capture
 

@@ -9,7 +9,10 @@ const REQUIRED_CASES = new Set([
   'confirmed-review-process-nudge',
   'successful-cursor-policy-fire',
   'confirmed-local-harness-nudge',
+  'natural-retrieval-rollout',
+  'ordinary-approval-is-not-policy',
   'quoted-handoff-contamination',
+  'quoted-natural-retrieval-is-not-a-request',
   'optional-kb-in-prototype-spec',
 ]);
 const REQUIRED_KINDS = new Set([
@@ -53,11 +56,14 @@ function evaluate() {
     0,
   );
   const totalHits = cases.reduce((count, entry) => count + entry.hit_titles.length, 0);
+  const answerless = cases.filter(entry => entry.relevant_titles.length === 0);
   return {
     cases,
     useful: useful.length,
     recalled: useful.filter(entry => entry.recalled).length,
     precision: totalHits === 0 ? 1 : relevantHits / totalHits,
+    answerless: answerless.length,
+    answerlessInterrupted: answerless.filter(entry => entry.hit_titles.length > 0).length,
   };
 }
 
@@ -82,14 +88,20 @@ describe('scrubbed real-prompt hint evaluation', () => {
     assert.doesNotMatch(serialized, /\b(?:api[_-]?key|password|secret|token)\s*[:=]/i);
   });
 
-  it('recalls every useful prompt without surfacing a negative-control note', () => {
+  it('recalls every useful prompt without surfacing a negative-control note', (t) => {
     const result = evaluate();
+    t.diagnostic(
+      `precision ${(result.precision * 100).toFixed(0)}% — `
+      + `useful recall ${result.recalled}/${result.useful} — `
+      + `answerless interruptions ${result.answerlessInterrupted}/${result.answerless}`,
+    );
     assert.equal(
       result.recalled,
       result.useful,
       JSON.stringify(result.cases, null, 2),
     );
     assert.equal(result.precision, 1, JSON.stringify(result.cases, null, 2));
+    assert.equal(result.answerlessInterrupted, 0, JSON.stringify(result.cases, null, 2));
   });
 
   it('ranks current state and decisions before accumulated lessons', () => {

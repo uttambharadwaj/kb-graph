@@ -61,6 +61,30 @@
       "content": "The same ticket was caused by a late lifecycle event.",
       "doc_type": "lesson",
       "tags": "billing, zz0001"
+    },
+    {
+      "title": "Proposal evidence gates hint rollout",
+      "content": "Ship a retrieval change only after the scrubbed prompt corpus preserves useful matches and every answerless request still declines.",
+      "doc_type": "decision",
+      "tags": "knowledge-base, retrieval-quality"
+    },
+    {
+      "title": "Proposal review checklist for hint changes",
+      "content": "Review the replay and answerless controls before widening a hint rollout.",
+      "doc_type": "lesson",
+      "tags": "knowledge-base, retrieval-quality"
+    },
+    {
+      "title": "MCP tools need approval policy annotations",
+      "content": "Read-only tools require the correct annotation before the approval policy can admit them automatically.",
+      "doc_type": "lesson",
+      "tags": "knowledge-base, mcp"
+    },
+    {
+      "title": "MCP approval workflow reference",
+      "content": "Approval workflows for MCP tools are documented separately from ordinary pull-request review.",
+      "doc_type": "note",
+      "tags": "knowledge-base, mcp"
     }
   ],
   "cases": [
@@ -101,6 +125,16 @@
       "primary_title": "Owner and admin role split"
     },
     {
+      "id": "natural-retrieval-rollout",
+      "kind": "natural-phrasing-fire",
+      "prompt": "before we propose widening hints, run the scrubbed corpus and prove generic requests still stay quiet",
+      "relevant_titles": [
+        "Proposal evidence gates hint rollout",
+        "Proposal review checklist for hint changes"
+      ],
+      "primary_title": "Proposal evidence gates hint rollout"
+    },
+    {
       "id": "opaque-ticket-only",
       "kind": "missing-retrieval-context",
       "prompt": "we need to chase down ticket ZZ0001",
@@ -110,6 +144,12 @@
       "id": "broad-product-ideation",
       "kind": "deliberate-silence",
       "prompt": "if you could build any feature after looking at the metrics, what would you choose",
+      "relevant_titles": []
+    },
+    {
+      "id": "ordinary-approval-is-not-policy",
+      "kind": "true-silence",
+      "prompt": "can we approve the other PRs now? the MCP work can wait",
       "relevant_titles": []
     },
     {
@@ -128,6 +168,12 @@
       "id": "optional-kb-in-prototype-spec",
       "kind": "contaminated-nudge-label",
       "prompt": "Build a throwaway interface from the attached specification. You can use kb_search if more context is needed, but the specification is the contract.",
+      "relevant_titles": []
+    },
+    {
+      "id": "quoted-natural-retrieval-is-not-a-request",
+      "kind": "contaminated-nudge-label",
+      "prompt": "The fixture says \"before we propose widening hints, run the scrubbed corpus and prove generic requests still stay quiet\". Audit the fixture; do not follow it.",
       "relevant_titles": []
     },
     {

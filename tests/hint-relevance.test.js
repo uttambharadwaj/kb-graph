@@ -147,6 +147,186 @@ describe('the hint count is not a constant', () => {
   });
 });
 
+describe('bounded natural-phrasing expansion', () => {
+  it('generalizes morphology beyond the recall corpus', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, ?, ?)',
+    );
+    const cases = [
+      ['Refusal cedar policy', 'Refusal cedar record', 'why did it refuse the cedar request'],
+      ['Removal marble policy', 'Removal marble record', 'please remove the marble entry'],
+    ];
+    for (const [title, sibling, prompt] of cases) {
+      insert.run(title, 'bounded morphology fixture', 'note', 'morphology');
+      insert.run(sibling, 'bounded morphology fixture', 'note', 'morphology');
+      assert.ok(
+        relevantNotes(prompt).some(hit => hit.title === title),
+        `${prompt} did not find ${title}`,
+      );
+    }
+
+    insert.run('Loaf cedar policy', 'reviewed irregular plural', 'note', 'morphology');
+    insert.run('Loaf cedar record', 'reviewed irregular plural', 'note', 'morphology');
+    assert.ok(
+      relevantNotes('why do the cedar loaves collapse')
+        .some(hit => hit.title === 'Loaf cedar policy'),
+      'loaves did not recover the reviewed loaf identity',
+    );
+    assert.ok(
+      relevantNotes('test why the cedar loaves collapse')
+        .some(hit => hit.title === 'Loaf cedar policy'),
+      'a legitimate test request disabled all expansion',
+    );
+    for (const prompt of [
+      'Test case: why do the cedar loaves collapse. Expect the hint to fire.',
+      'Verify why the cedar loaves collapse makes the hint return a result.',
+      'Why do the cedar loaves collapse? The hint should match.',
+    ]) {
+      assert.ok(
+        !relevantNotes(prompt).some(hit => hit.title === 'Loaf cedar policy'),
+        `meta-test instruction triggered expansion: ${prompt}`,
+      );
+    }
+
+    insert.run('Leaf birch policy', 'ambiguous verb guard', 'note', 'morphology');
+    insert.run('Leaf birch record', 'ambiguous verb guard', 'note', 'morphology');
+    assert.ok(
+      !relevantNotes('the worker leaves the birch queue')
+        .some(hit => hit.title === 'Leaf birch policy'),
+      'the verb leaves was expanded to the unrelated noun leaf',
+    );
+  });
+
+  it('folds transitively related spellings into one evidence family', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, ?, ?)',
+    );
+    insert.run('Propose proposals proposal', 'morphology chain one', 'note', 'chain');
+    insert.run('Propose proposals proposal revisited', 'morphology chain two', 'note', 'chain');
+
+    assert.deepStrictEqual(
+      relevantNotes('proposal weather').filter(hit => hit.title.startsWith('Propose proposals')),
+      [],
+      'one connected morphology family counted as independent evidence',
+    );
+  });
+
+  it('does not rescore an admitted primary match through derivations', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags) VALUES (?, ?, ?, ?)',
+    );
+    insert.run('Propose proposal amber', 'primary scoring one', 'note', 'primary');
+    insert.run('Propose proposal amber revisited', 'primary scoring two', 'note', 'primary');
+
+    const hit = relevantNotes('propose proposal amber', { explain: true })
+      .find(entry => entry.title === 'Propose proposal amber');
+    assert.equal(
+      hit?.evidence.families.length,
+      3,
+      'the fallback changed family scoring for a note already admitted by exact terms',
+    );
+  });
+
+  it('keeps primary candidates and deduplicates supplemental overlap', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, aliases) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (let index = 0; index < 45; index++) {
+      insert.run(`Lantern reference ${index}`, 'lantern primary candidate', 'note', 'misc', null);
+    }
+    insert.run('Removal lantern sibling', 'removal expansion sibling', 'note', 'misc', null);
+    const target = insert.run(
+      'Removal expansion target',
+      'removal expansion target',
+      'note',
+      'misc',
+      'lantern',
+    ).lastInsertRowid;
+    assert.ok(
+      relevantNotes('remove lantern', { limit: 50 }).some(hit => hit.id === target),
+      'a full primary window displaced the supplemental target',
+    );
+
+    insert.run('Beacon vocabulary one', 'beacon vocabulary', 'note', 'misc', null);
+    insert.run('Beacon vocabulary two', 'beacon vocabulary', 'note', 'misc', null);
+    const exactBypass = insert.run(
+      'Removal supplemental exact-evidence bypass',
+      'supplemental exact evidence',
+      'note',
+      'misc',
+      'lantern beacon',
+    ).lastInsertRowid;
+    assert.ok(
+      !relevantNotes('remove lantern beacon', { limit: 50 })
+        .some(hit => hit.id === exactBypass),
+      'a supplemental candidate bypassed the primary cap without needing expansion',
+    );
+
+    const overlaps = [];
+    for (let index = 0; index < 10; index++) {
+      overlaps.push(insert.run(
+        `Proposal overlap ${String(index).padStart(2, '0')}`,
+        'propose overlap',
+        'note',
+        'misc',
+        'beacon',
+      ).lastInsertRowid);
+    }
+    const novel = insert.run(
+      'Proposal expansion target with deliberately longer title',
+      'expansion target',
+      'note',
+      'misc',
+      'beacon',
+    ).lastInsertRowid;
+    const hits = relevantNotes('propose beacon', { limit: 50 });
+
+    assert.ok(
+      hits.some(hit => hit.id === novel),
+      'primary overlaps consumed the supplemental candidate budget',
+    );
+    assert.equal(
+      hits.filter(hit => hit.id === overlaps[0]).length,
+      1,
+      'a candidate returned by both queries was scored twice',
+    );
+  });
+
+  it('caps supplemental candidates at ten', () => {
+    const db = getDb();
+    const insert = db.prepare(
+      'INSERT INTO documents (title, content, doc_type, tags, aliases) VALUES (?, ?, ?, ?, ?)',
+    );
+    insert.run('Beacon vocabulary one', 'beacon vocabulary', 'note', 'misc', null);
+    insert.run('Beacon vocabulary two', 'beacon vocabulary', 'note', 'misc', null);
+    for (let index = 0; index < 10; index++) {
+      insert.run(
+        `Survival overflow candidate ${String(index).padStart(2, '0')}`,
+        'survival overflow',
+        'note',
+        'misc',
+        null,
+      );
+    }
+    const beyondCap = insert.run(
+      'Survival overflow target with deliberately longer title',
+      'survival overflow',
+      'note',
+      'misc',
+      'beacon',
+    ).lastInsertRowid;
+
+    assert.ok(
+      !relevantNotes('survive beacon', { limit: 50 }).some(hit => hit.id === beyondCap),
+      'the eleventh supplemental candidate bypassed the cap',
+    );
+  });
+});
+
 function ensureOutcomeSchema(db) {
   const columns = db.prepare('PRAGMA table_info(retrievals)').all().map(c => c.name);
   if (!columns.includes('doc_version')) db.exec('ALTER TABLE retrievals ADD COLUMN doc_version TEXT');
