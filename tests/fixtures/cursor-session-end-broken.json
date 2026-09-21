@@ -1,0 +1,11 @@
+{
+  "conversation_id": "11111111-2222-4333-8444-555555555555",
+  "cursor_version": "3.21.16",
+  "cwd": "/workspace/project",
+  "hook_event_name": "sessionEnd",
+  "reason": "window_close",
+  "transcript_path": null,
+  "workspace_roots": [
+    "/workspace/project"
+  ]
+}

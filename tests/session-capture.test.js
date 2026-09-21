@@ -3,20 +3,28 @@ import { afterEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import {
-  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync,
-  utimesSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync,
+  realpathSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startDaemon } from '../src/daemon.js';
 import { LOGS_DIR } from '../src/paths.js';
 import {
-  SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, captureRequest, enqueueSessionCapture,
+  SESSION_CAPTURE_DECLINE_REASON, SESSION_CAPTURE_LOG, SESSION_CAPTURE_QUEUE_DIR,
+  SESSION_CAPTURE_RECEIPT_DIR, captureRequest, enqueueSessionCapture,
   ensureSessionCaptureDirectories, processSessionCaptureQueue, resolveCaptureTranscript,
   sessionCaptureQueueStatus, writeJsonExclusive,
 } from '../src/session-capture.js';
+import {
+  MAX_SESSION_CAPTURE_STDIN_BYTES,
+  readSessionCaptureInput,
+} from '../src/cli/session-capture-hook.js';
 
+const CURSOR_CONVERSATION_ID = '11111111-2222-4333-8444-555555555555';
+const OTHER_CURSOR_CONVERSATION_ID = '99999999-8888-4777-8666-555555555555';
 const scratch = [];
 afterEach(() => {
   rmSync(SESSION_CAPTURE_QUEUE_DIR, { recursive: true, force: true });
@@ -36,15 +44,19 @@ const files = dir => {
   try { return readdirSync(dir); } catch { return []; }
 };
 
+function fixture(name) {
+  return JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures', name), 'utf8'));
+}
+
 function fileMode(path) {
   return statSync(path).mode & 0o777;
 }
 
-function runCaptureHook({ socketPath, input, umask }) {
+function runCaptureHook({ socketPath, input, umask, agent = 'codex', env = {} }) {
   return new Promise((resolve, reject) => {
     const commandArgs = [
       join(import.meta.dirname, '..', 'bin', 'kb.js'),
-      'session-capture-hook', '--agent', 'codex', '--reason=session_end',
+      'session-capture-hook', '--agent', agent, '--reason=session_end',
     ];
     let executable = process.execPath;
     let args = commandArgs;
@@ -56,7 +68,12 @@ function runCaptureHook({ socketPath, input, umask }) {
       ];
     }
     const child = spawn(executable, args, {
-      env: { ...process.env, KB_SKIP_NODE_REEXEC: '1', KB_CONTROL_SOCKET_PATH: socketPath },
+      env: {
+        ...process.env,
+        KB_SKIP_NODE_REEXEC: '1',
+        KB_CONTROL_SOCKET_PATH: socketPath,
+        ...env,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -65,11 +82,60 @@ function runCaptureHook({ socketPath, input, umask }) {
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.once('error', reject);
     child.once('close', code => resolve({ code, stdout, stderr }));
-    child.stdin.end(JSON.stringify(input));
+    child.stdin.end(typeof input === 'string' ? input : JSON.stringify(input));
   });
 }
 
+function cursorTranscript(root, conversationId, project = 'workspace') {
+  const transcriptDir = join(root, project, 'agent-transcripts', conversationId);
+  mkdirSync(transcriptDir, { recursive: true });
+  const path = join(transcriptDir, `${conversationId}.jsonl`);
+  writeFileSync(path, JSON.stringify({
+    role: 'user',
+    message: { content: [{ type: 'text', text: 'scrubbed Cursor transcript fixture' }] },
+  }));
+  return path;
+}
+
+function cursorPayload(conversationId, transcriptPath, hookEventName = 'stop') {
+  return {
+    conversation_id: conversationId,
+    cursor_version: '3.21.16',
+    hook_event_name: hookEventName,
+    transcript_path: transcriptPath,
+  };
+}
+
 describe('session capture queue', () => {
+  it('declines malformed and oversized hook stdin before queue parsing', async () => {
+    assert.deepEqual(
+      await readSessionCaptureInput(Readable.from(['{broken'])),
+      { ok: false, reason: SESSION_CAPTURE_DECLINE_REASON.MALFORMED_JSON },
+    );
+    assert.deepEqual(
+      await readSessionCaptureInput(Readable.from(['x'.repeat(MAX_SESSION_CAPTURE_STDIN_BYTES + 1)])),
+      { ok: false, reason: SESSION_CAPTURE_DECLINE_REASON.INPUT_TOO_LARGE },
+    );
+    let chunksRead = 0;
+    async function* oversizedInput() {
+      chunksRead++;
+      yield Buffer.alloc(MAX_SESSION_CAPTURE_STDIN_BYTES + 1);
+      chunksRead++;
+      yield Buffer.from('{}');
+    }
+    await readSessionCaptureInput(oversizedInput());
+    assert.equal(chunksRead, 1, 'oversized stdin must stop before consuming later chunks');
+
+    const encoded = Buffer.from(JSON.stringify({ cwd: '/workspace/café' }));
+    const split = encoded.indexOf(Buffer.from('é')) + 1;
+    const parsed = await readSessionCaptureInput(Readable.from([
+      encoded.subarray(0, split),
+      encoded.subarray(split),
+    ]));
+    assert.deepEqual(parsed, { ok: true, hookInput: { cwd: '/workspace/café' } });
+    assert.deepEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+  });
+
   it('reports capture directory setup failures without preventing daemon startup', async () => {
     for (const operation of ['mkdir', 'chmod']) {
       const repairError = Object.assign(new Error(`${operation} permission denied`), { code: 'EPERM' });
@@ -157,76 +223,246 @@ describe('session capture queue', () => {
     assert.equal(request.dueAt, 1001);
   });
 
-  it('uses Cursor conversation identity to resolve a primary transcript', () => {
+  it('uses observed Cursor lifecycle identities to resolve a primary transcript', () => {
     const root = mkdtempSync(join(tmpdir(), 'kb-cursor-capture-'));
     scratch.push(root);
-    const conversationId = '11111111-2222-4333-8444-555555555555';
-    const transcriptDir = join(root, 'workspace', 'agent-transcripts', conversationId);
-    mkdirSync(transcriptDir, { recursive: true });
-    const path = join(transcriptDir, `${conversationId}.jsonl`);
-    writeFileSync(path, JSON.stringify({
-      role: 'user',
-      message: { content: [{ type: 'text', text: 'cursor lifecycle capture' }] },
-    }));
+    const path = cursorTranscript(root, CURSOR_CONVERSATION_ID);
 
-    const request = captureRequest(
-      { conversation_id: conversationId },
-      { agent: 'cursor', reason: 'session_end', now: 1000 },
+    for (const name of ['cursor-stop.json', 'cursor-precompact.json']) {
+      const hookInput = fixture(name);
+      hookInput.transcript_path = path;
+      const request = captureRequest(hookInput, {
+        agent: 'cursor',
+        reason: 'session_end',
+        now: 1000,
+        cursorTranscriptRoot: root,
+      });
+      assert.equal(request.sessionId, CURSOR_CONVERSATION_ID);
+      assert.equal(request.transcriptPath, realpathSync(path));
+    }
+  });
+
+  it('reproduces a dual-location Cursor ID collision and accepts only the primary path', () => {
+    const root = join(import.meta.dirname, 'fixtures', 'cursor-collision');
+    const conversationId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const primaryPath = join(
+      root,
+      'project-primary',
+      'agent-transcripts',
+      conversationId,
+      `${conversationId}.jsonl`,
+    );
+    const subagentPath = join(
+      root,
+      'project-subagent',
+      'agent-transcripts',
+      'parent-conversation',
+      'subagents',
+      `${conversationId}.jsonl`,
     );
 
-    assert.equal(request.sessionId, conversationId);
-    assert.equal(resolveCaptureTranscript(request, [root]), path);
-  });
-
-  it('refuses a Cursor subagent transcript before it reaches the queue', () => {
-    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-subagent-'));
-    scratch.push(root);
-    const subagentDir = join(root, 'agent-transcripts', 'primary', 'subagents');
-    const path = join(subagentDir, 'review.jsonl');
-    mkdirSync(subagentDir, { recursive: true });
-    writeFileSync(path, JSON.stringify({
-      role: 'assistant',
-      message: { content: [{ type: 'text', text: 'partial subagent reasoning' }] },
-    }));
+    const accepted = enqueueSessionCapture({
+      hookInput: cursorPayload(conversationId, primaryPath),
+      agent: 'cursor',
+      reason: 'session_end',
+    }, { now: 1500, cursorTranscriptRoot: root });
+    assert.equal(accepted.queued, true);
 
     const result = enqueueSessionCapture({
-      hookInput: { session_id: 'review', transcript_path: path },
+      hookInput: cursorPayload(conversationId, subagentPath),
       agent: 'cursor',
       reason: 'session_end',
-    }, { now: 1500 });
+    }, { now: 1501, cursorTranscriptRoot: root });
 
     assert.equal(result.queued, false);
-    assert.equal(result.reason, 'missing_identity');
+    assert.equal(result.reason, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH);
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
+  });
+
+  it('requires Cursor to provide its primary path and never root-walks by ID', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-no-root-walk-'));
+    scratch.push(root);
+    const conversationId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    cursorTranscript(root, conversationId);
+
+    const result = enqueueSessionCapture({
+      hookInput: cursorPayload(conversationId, null),
+      agent: 'cursor',
+      reason: 'session_end',
+    }, { now: 1600, cursorTranscriptRoot: root });
+
+    assert.equal(result.queued, false);
+    assert.equal(result.reason, SESSION_CAPTURE_DECLINE_REASON.MISSING_PATH);
+    assert.equal(resolveCaptureTranscript(
+      { agent: 'cursor', sessionId: conversationId },
+      [root],
+    ), null);
     assert.deepStrictEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
   });
 
-  it('discards an ID-only Cursor subagent request instead of retrying it forever', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-subagent-id-'));
-    scratch.push(root);
-    const subagentDir = join(root, 'agent-transcripts', 'primary', 'subagents');
-    const path = join(subagentDir, 'review-session.jsonl');
-    mkdirSync(subagentDir, { recursive: true });
-    writeFileSync(path, JSON.stringify({
-      role: 'assistant',
-      message: { content: [{ type: 'text', text: 'partial subagent reasoning' }] },
-    }));
-    enqueueSessionCapture({
-      hookInput: { session_id: 'review-session' },
+  it('declines observed null-path and missing-ID Cursor lifecycle payloads', () => {
+    for (const name of ['cursor-session-end-broken.json', 'cursor-subagent-null-path.json']) {
+      const result = enqueueSessionCapture({
+        hookInput: fixture(name),
+        agent: 'cursor',
+        reason: 'session_end',
+      });
+      assert.equal(result.queued, false);
+      assert.equal(result.reason, SESSION_CAPTURE_DECLINE_REASON.MISSING_PATH);
+    }
+    const missingId = fixture('cursor-stop.json');
+    delete missingId.conversation_id;
+    assert.equal(enqueueSessionCapture({
+      hookInput: missingId,
+      agent: 'cursor',
+      reason: 'activity',
+    }).reason, SESSION_CAPTURE_DECLINE_REASON.MISSING_ID);
+  });
+
+  it('rejects Cursor symlinks, traversal outside the root, wrong extensions, and ID mismatch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-boundary-'));
+    const outside = mkdtempSync(join(tmpdir(), 'kb-cursor-outside-'));
+    scratch.push(root, outside);
+    const conversationId = CURSOR_CONVERSATION_ID;
+    const valid = cursorTranscript(root, conversationId);
+    const symlink = join(root, 'linked.jsonl');
+    symlinkSync(valid, symlink);
+    const outsidePath = cursorTranscript(outside, conversationId);
+    const traversalPath = `${root}/../${basename(outside)}/${outsidePath.slice(outside.length + 1)}`;
+    const wrongExtension = valid.replace(/\.jsonl$/, '.txt');
+    writeFileSync(wrongExtension, 'not jsonl');
+    const otherId = OTHER_CURSOR_CONVERSATION_ID;
+    const otherPath = cursorTranscript(root, otherId, 'other-window');
+    const nestedPath = cursorTranscript(root, conversationId, 'project/nested');
+
+    for (const [path, id, reason] of [
+      [symlink, conversationId, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH],
+      [traversalPath, conversationId, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH],
+      [wrongExtension, conversationId, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH],
+      [nestedPath, conversationId, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH],
+      [otherPath, conversationId, SESSION_CAPTURE_DECLINE_REASON.IDENTITY_MISMATCH],
+      [valid, conversationId.slice(0, 13), SESSION_CAPTURE_DECLINE_REASON.IDENTITY_MISMATCH],
+    ]) {
+      const result = enqueueSessionCapture({
+        hookInput: cursorPayload(id, path),
+        agent: 'cursor',
+        reason: 'activity',
+      }, { cursorTranscriptRoot: root });
+      assert.equal(result.queued, false);
+      assert.equal(result.reason, reason);
+    }
+    assert.deepStrictEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+  });
+
+  it('independently enforces root containment and the jsonl extension', () => {
+    const base = mkdtempSync(join(tmpdir(), 'kb-cursor-independent-guards-'));
+    scratch.push(base);
+    const root = join(base, 'projects');
+    mkdirSync(root);
+    const outsideDir = join(base, 'agent-transcripts', CURSOR_CONVERSATION_ID);
+    mkdirSync(outsideDir, { recursive: true });
+    const outside = join(outsideDir, `${CURSOR_CONVERSATION_ID}.jsonl`);
+    writeFileSync(outside, '{}');
+
+    const extensionlessDir = join(
+      root,
+      'workspace',
+      'agent-transcripts',
+      CURSOR_CONVERSATION_ID,
+    );
+    mkdirSync(extensionlessDir, { recursive: true });
+    const extensionless = join(extensionlessDir, CURSOR_CONVERSATION_ID);
+    writeFileSync(extensionless, '{}');
+
+    for (const path of [outside, extensionless]) {
+      const result = enqueueSessionCapture({
+        hookInput: cursorPayload(CURSOR_CONVERSATION_ID, path),
+        agent: 'cursor',
+        reason: 'activity',
+      }, { cursorTranscriptRoot: root });
+      assert.equal(result.queued, false);
+      assert.equal(result.reason, SESSION_CAPTURE_DECLINE_REASON.INVALID_PATH);
+    }
+  });
+
+  it('revalidates the Cursor path after enqueue and discards a TOCTOU symlink swap', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-toctou-'));
+    const outside = mkdtempSync(join(tmpdir(), 'kb-cursor-toctou-outside-'));
+    scratch.push(root, outside);
+    const conversationId = CURSOR_CONVERSATION_ID;
+    const path = cursorTranscript(root, conversationId);
+    const outsidePath = cursorTranscript(outside, conversationId);
+    const payload = {
+      hookInput: cursorPayload(conversationId, path),
       agent: 'cursor',
       reason: 'session_end',
-    }, { now: 1600 });
+    };
+    assert.equal(enqueueSessionCapture(
+      payload,
+      { now: 1700, cursorTranscriptRoot: root },
+    ).queued, true);
+    rmSync(path);
+    symlinkSync(outsidePath, path);
 
+    let harvests = 0;
     const result = await processSessionCaptureQueue({
-      now: 1600,
-      searchRoots: [root],
+      now: 1700,
+      cursorTranscriptRoot: root,
       runHarvestFn: async () => {
-        throw new Error('a nested Cursor subagent must never reach harvest');
+        harvests++;
+        return { sessions: 1, notes: 1, tooShort: 0, errors: 0, coverageComplete: true };
       },
     });
-
-    assert.deepStrictEqual(result, { processed: 0, failed: 0, skipped: 1 });
+    assert.deepEqual(result, { processed: 0, failed: 0, skipped: 1 });
+    assert.equal(harvests, 0);
     assert.deepStrictEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
     assert.deepStrictEqual(files(SESSION_CAPTURE_RECEIPT_DIR), []);
+  });
+
+  it('retries a Cursor capture when its validated path is temporarily unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-transient-'));
+    scratch.push(root);
+    const path = cursorTranscript(root, CURSOR_CONVERSATION_ID);
+    const payload = {
+      hookInput: cursorPayload(CURSOR_CONVERSATION_ID, path),
+      agent: 'cursor',
+      reason: 'session_end',
+    };
+    assert.equal(enqueueSessionCapture(
+      payload,
+      { now: 1750, cursorTranscriptRoot: root },
+    ).queued, true);
+    rmSync(path);
+
+    const result = await processSessionCaptureQueue({
+      now: 1750,
+      cursorTranscriptRoot: root,
+      runHarvestFn: async () => {
+        throw new Error('an unavailable path must not reach harvest');
+      },
+    });
+    assert.deepEqual(result, { processed: 0, failed: 1, skipped: 0 });
+    const [queued] = files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json'));
+    const retry = JSON.parse(readFileSync(join(SESSION_CAPTURE_QUEUE_DIR, queued), 'utf8'));
+    assert.equal(retry.attempts, 1);
+    assert.equal(retry.lastError, SESSION_CAPTURE_DECLINE_REASON.UNAVAILABLE);
+  });
+
+  it('keeps separate Cursor windows separate while duplicate events coalesce', () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-windows-'));
+    scratch.push(root);
+    const firstId = CURSOR_CONVERSATION_ID;
+    const secondId = OTHER_CURSOR_CONVERSATION_ID;
+    const first = cursorTranscript(root, firstId, 'window-one');
+    const second = cursorTranscript(root, secondId, 'window-two');
+    for (const [id, path] of [[firstId, first], [firstId, first], [secondId, second]]) {
+      assert.equal(enqueueSessionCapture({
+        hookInput: cursorPayload(id, path),
+        agent: 'cursor',
+        reason: 'activity',
+      }, { now: 1800, cursorTranscriptRoot: root }).queued, true);
+    }
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 2);
   });
 
   it('keeps incomplete harvest coverage queued without consuming a retry attempt', async () => {
@@ -429,6 +665,18 @@ describe('session capture queue', () => {
     assert.equal(existsSync(workingPath), false);
   });
 
+  it('propagates ENOSPC without leaving a partial exclusive queue artifact', () => {
+    const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, 'enospc.json.working');
+    const diskFull = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    assert.throws(
+      () => writeJsonExclusive(workingPath, { key: 'enospc' }, {
+        write: () => { throw diskFull; },
+      }),
+      error => error === diskFull,
+    );
+    assert.equal(existsSync(workingPath), false);
+  });
+
   it('does not close an exclusive lease descriptor twice when close fails', () => {
     const workingPath = join(SESSION_CAPTURE_QUEUE_DIR, 'close-failure.json.working');
     const closeError = Object.assign(new Error('close failed'), { code: 'EIO' });
@@ -603,6 +851,74 @@ describe('session capture queue', () => {
   it('resolves Codex rollout filenames when the hook provides only a session id', () => {
     const path = transcript('rollout-2026-08-28-codex-session.jsonl');
     assert.equal(resolveCaptureTranscript({ sessionId: 'codex-session' }, [join(path, '..')]), path);
+  });
+
+  it('treats a stale Cursor receipt as reprocessable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'kb-cursor-stale-receipt-'));
+    scratch.push(root);
+    const conversationId = CURSOR_CONVERSATION_ID;
+    const path = cursorTranscript(root, conversationId);
+    const payload = {
+      hookInput: cursorPayload(conversationId, path),
+      agent: 'cursor',
+      reason: 'session_end',
+    };
+    const first = enqueueSessionCapture(
+      payload,
+      { now: 12000, cursorTranscriptRoot: root },
+    );
+    rmSync(SESSION_CAPTURE_QUEUE_DIR, { recursive: true, force: true });
+    ensureSessionCaptureDirectories();
+    writeFileSync(
+      join(SESSION_CAPTURE_RECEIPT_DIR, `${first.key}.json`),
+      JSON.stringify({ processedMtime: statSync(path).mtimeMs - 1 }),
+    );
+    assert.equal(enqueueSessionCapture(
+      payload,
+      { now: 12001, cursorTranscriptRoot: root },
+    ).queued, true);
+
+    const result = await processSessionCaptureQueue({
+      now: 12001,
+      cursorTranscriptRoot: root,
+      runHarvestFn: async () => ({
+        sessions: 1,
+        notes: 1,
+        tooShort: 0,
+        errors: 0,
+        coverageComplete: true,
+      }),
+    });
+    assert.deepEqual(result, { processed: 1, failed: 0, skipped: 0 });
+  });
+
+  it('declines malformed and oversized stdin through the real hook entrypoint', async () => {
+    for (const input of ['{broken', 'x'.repeat(MAX_SESSION_CAPTURE_STDIN_BYTES + 1)]) {
+      const answer = await runCaptureHook({
+        socketPath: join(tmpdir(), `missing-kb-control-${process.pid}.sock`),
+        input,
+      });
+      assert.equal(answer.code, 0, answer.stderr);
+      assert.equal(answer.stdout, '');
+      assert.deepEqual(files(SESSION_CAPTURE_QUEUE_DIR), []);
+    }
+  });
+
+  it('queues a valid Cursor primary transcript through daemon fallback', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'kb-cursor-fallback-home-'));
+    scratch.push(home);
+    const root = join(home, '.cursor', 'projects');
+    const conversationId = CURSOR_CONVERSATION_ID;
+    const path = cursorTranscript(root, conversationId);
+    const answer = await runCaptureHook({
+      socketPath: join(tmpdir(), `missing-kb-control-${process.pid}.sock`),
+      input: cursorPayload(conversationId, path),
+      agent: 'cursor',
+      env: { HOME: home },
+    });
+    assert.equal(answer.code, 0, answer.stderr);
+    assert.equal(answer.stdout, '');
+    assert.equal(files(SESSION_CAPTURE_QUEUE_DIR).filter(name => name.endsWith('.json')).length, 1);
   });
 
   it('fails open to the filesystem queue when the daemon is unavailable', async () => {

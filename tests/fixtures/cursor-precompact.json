@@ -1,0 +1,10 @@
+{
+  "conversation_id": "11111111-2222-4333-8444-555555555555",
+  "cursor_version": "3.21.16",
+  "cwd": "/workspace/project",
+  "hook_event_name": "preCompact",
+  "transcript_path": "/Users/example/.cursor/projects/workspace/agent-transcripts/11111111-2222-4333-8444-555555555555/11111111-2222-4333-8444-555555555555.jsonl",
+  "workspace_roots": [
+    "/workspace/project"
+  ]
+}

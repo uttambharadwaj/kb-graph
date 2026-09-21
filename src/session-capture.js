@@ -10,13 +10,26 @@ import {
 } from 'fs';
 import { basename, dirname, join } from 'path';
 import { KB_DIR, LOGS_DIR } from './paths.js';
-import { validateHookHost } from './hook-host.js';
+import { HOOK_DECLINE_REASON, validateHookHost } from './hook-host.js';
 import { PRIVATE_FILE_MODE } from './private-file.js';
+import { AGENT } from './process-ancestry.js';
 import {
+  CURSOR_TRANSCRIPT_DECLINE_REASON,
+  defaultCursorTranscriptRoot,
   defaultTranscriptRoots,
   isActualSubagentTranscript,
   isDiscoverableTranscript,
+  validateCursorTranscriptPath,
 } from './transcript-paths.js';
+
+export const SESSION_CAPTURE_DECLINE_REASON = Object.freeze({
+  ...HOOK_DECLINE_REASON,
+  ...CURSOR_TRANSCRIPT_DECLINE_REASON,
+  ALREADY_PROCESSED: 'already_processed',
+  INPUT_TOO_LARGE: 'input_too_large',
+  MALFORMED_JSON: 'malformed_json',
+  MISSING_IDENTITY: 'missing_identity',
+});
 
 export const SESSION_CAPTURE_QUEUE_DIR = join(KB_DIR, 'session-capture-queue');
 export const SESSION_CAPTURE_RECEIPT_DIR = join(KB_DIR, 'session-capture-receipts');
@@ -113,15 +126,45 @@ function captureLog(event) {
   } catch { /* capture must not fail because telemetry did */ }
 }
 
-export function captureRequest(hookInput = {}, { agent = 'unknown', reason = 'activity', now = Date.now() } = {}) {
-  const sessionId = hookInput.session_id || hookInput.sessionId
-    || hookInput.conversation_id || hookInput.conversationId || null;
-  const transcriptPath = hookInput.transcript_path || hookInput.transcriptPath || null;
-  if (!sessionId && !transcriptPath) return null;
+function declineCapture(reason, details = {}) {
+  return { output: null, plan: null, queued: false, reason, ...details };
+}
+
+function createCaptureRequest(hookInput, {
+  agent = 'unknown',
+  reason = 'activity',
+  now = Date.now(),
+  cursorTranscriptRoot = defaultCursorTranscriptRoot(),
+} = {}) {
+  let sessionId;
+  let transcriptPath;
+  if (agent === AGENT.CURSOR) {
+    // Queue only identities proven at the hook boundary. A temporarily
+    // unavailable path cannot be persisted safely; later natural stop or
+    // preCompact events may retry. Once queued, process-time IO failures use
+    // the ordinary retry lease below instead of discarding the validated item.
+    const identity = validateCursorTranscriptPath(
+      hookInput.transcript_path,
+      hookInput.conversation_id,
+      { root: cursorTranscriptRoot },
+    );
+    if (!identity.ok) return identity;
+    sessionId = hookInput.conversation_id;
+    transcriptPath = identity.path;
+  } else {
+    sessionId = hookInput.session_id || hookInput.sessionId
+      || hookInput.conversation_id || hookInput.conversationId || null;
+    transcriptPath = hookInput.transcript_path || hookInput.transcriptPath || null;
+  }
+  if (!sessionId && !transcriptPath) {
+    return { ok: false, reason: SESSION_CAPTURE_DECLINE_REASON.MISSING_IDENTITY };
+  }
   if (
     transcriptPath
     && (!isDiscoverableTranscript(transcriptPath) || isActualSubagentTranscript(transcriptPath))
-  ) return null;
+  ) {
+    return { ok: false, reason: SESSION_CAPTURE_DECLINE_REASON.MISSING_IDENTITY };
+  }
   let observedMtime = null;
   if (transcriptPath) {
     try { observedMtime = statSync(transcriptPath).mtimeMs; } catch { /* daemon may resolve it later */ }
@@ -138,31 +181,43 @@ export function captureRequest(hookInput = {}, { agent = 'unknown', reason = 'ac
     dueAt: now + DELAY_MS[normalizedReason],
     attempts: 0,
   };
-  return { ...request, key: captureKey(request) };
+  return { ok: true, request: { ...request, key: captureKey(request) } };
+}
+
+export function captureRequest(hookInput = {}, options = {}) {
+  const result = createCaptureRequest(hookInput, options);
+  return result.ok ? result.request : null;
 }
 
 // Idempotent upsert. If a daemon response loses the race with the hook's
 // deadline, the hook writes the same key again in fallback mode; that is one
 // queue item, not two captures.
-export function enqueueSessionCapture(payload, { now = Date.now() } = {}) {
+export function enqueueSessionCapture(payload, {
+  now = Date.now(),
+  cursorTranscriptRoot = defaultCursorTranscriptRoot(),
+} = {}) {
   const hookInput = payload?.hookInput || payload;
   const host = validateHookHost(hookInput, payload?.agent);
   if (!host.ok) {
-    return { output: null, plan: null, queued: false, reason: host.reason };
+    return declineCapture(host.reason);
   }
-  const request = captureRequest(hookInput, {
+  const capture = createCaptureRequest(hookInput, {
     agent: payload?.agent,
     reason: payload?.reason,
     now,
+    cursorTranscriptRoot,
   });
-  if (!request) return { output: null, plan: null, queued: false, reason: 'missing_identity' };
+  if (!capture.ok) return declineCapture(capture.reason);
+  const { request } = capture;
   ensureSessionCaptureDirectories();
 
   const queuePath = join(SESSION_CAPTURE_QUEUE_DIR, `${request.key}.json`);
   const receiptPath = join(SESSION_CAPTURE_RECEIPT_DIR, `${request.key}.json`);
   const receipt = readJson(receiptPath);
   if (request.observedMtime !== null && receipt?.processedMtime >= request.observedMtime) {
-    return { output: null, plan: null, queued: false, reason: 'already_processed', key: request.key };
+    return declineCapture(SESSION_CAPTURE_DECLINE_REASON.ALREADY_PROCESSED, {
+      key: request.key,
+    });
   }
 
   const prior = readJson(queuePath);
@@ -197,6 +252,7 @@ function* walkJsonl(dir) {
 }
 
 export function resolveCaptureTranscript(request, searchRoots) {
+  if (request.agent === AGENT.CURSOR) return null;
   if (request.transcriptPath && existsSync(request.transcriptPath)) return request.transcriptPath;
   if (!request.sessionId) return null;
   const exact = `${request.sessionId}.jsonl`;
@@ -212,6 +268,17 @@ export function resolveCaptureTranscript(request, searchRoots) {
     }
   }
   return null;
+}
+
+function resolveQueuedTranscript(request, searchRoots, cursorTranscriptRoot) {
+  if (request.agent === AGENT.CURSOR) {
+    return validateCursorTranscriptPath(
+      request.transcriptPath,
+      request.sessionId,
+      { root: cursorTranscriptRoot },
+    );
+  }
+  return { ok: true, path: resolveCaptureTranscript(request, searchRoots) };
 }
 
 export function sessionCaptureQueueStatus(now = Date.now()) {
@@ -313,6 +380,7 @@ export async function processSessionCaptureQueue({
   now = Date.now(),
   limit = 1,
   searchRoots,
+  cursorTranscriptRoot = defaultCursorTranscriptRoot(),
   runHarvestFn,
 } = {}) {
   const harvest = runHarvestFn || (await import('./harvest.js')).runHarvest;
@@ -323,7 +391,15 @@ export async function processSessionCaptureQueue({
     if (!claim) continue;
     const { workingPath, leaseOwner } = claim;
     try {
-      const transcriptPath = resolveCaptureTranscript(request, searchRoots);
+      const resolved = resolveQueuedTranscript(request, searchRoots, cursorTranscriptRoot);
+      if (!resolved.ok) {
+        if (resolved.retryable) throw new Error(resolved.reason);
+        result.skipped++;
+        removeOwnedLease(workingPath, leaseOwner);
+        captureLog({ event: 'discarded', key: request.key, reason: resolved.reason });
+        continue;
+      }
+      const { path: transcriptPath } = resolved;
       if (!transcriptPath) throw new Error('transcript not found yet');
       if (!isDiscoverableTranscript(transcriptPath) || isActualSubagentTranscript(transcriptPath)) {
         result.skipped++;
