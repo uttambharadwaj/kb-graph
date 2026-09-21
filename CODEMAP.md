@@ -98,7 +98,7 @@ bin/
 | retrieval-outcomes.js | 421 | OUTCOME_SEMANTICS, retrievalOutcomesReady, parseTranscriptEvents, recordRetrievalOutcomesForSession, outcomeAdjustment | - |
 | retrieval.js | 233 | SURFACE, SURFACES, PUSH_SURFACES, READ_SURFACES, isKbNudge... | Read-path telemetry: the write path has always been logged (documents, |
 | schema.js | 98 | MIGRATE_COMMAND, PENDING_EXIT, SchemaOutOfDateError, hasTable, hasIndex... | Every command opens the default database, from whatever checkout it happens to |
-| secret-prompt.js | 34 | askHidden | - |
+| secret-prompt.js | 127 | askHidden | - |
 | server.js | 225 | start | - |
 | session-capture.js | 366 | SESSION_CAPTURE_QUEUE_DIR, SESSION_CAPTURE_RECEIPT_DIR, SESSION_CAPTURE_LOG, ensureSessionCaptureDirectories, writeJsonExclusive... | Durable, model-free handoff from lifecycle hooks to the resident daemon. |
 | session-map.js | 97 | SESSION_MAP_DIR, recordSessionMap, resolveMapEntry | harness_pid -> session_id map: the MCP server process is long-lived and one |

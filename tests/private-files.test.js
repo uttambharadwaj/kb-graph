@@ -4,6 +4,7 @@ import {
   renameSync, statSync, symlinkSync, writeFileSync,
 } from 'fs';
 import { execFileSync } from 'child_process';
+import { EventEmitter } from 'events';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -90,12 +91,15 @@ test('setup summary never renders passwords or API keys', () => {
 test('interactive secret prompts do not render their default value', async () => {
   assert.equal(typeof setup.askSecret, 'function');
   let renderedQuestion = '';
-  const rl = {
-    question(question, answer) {
-      renderedQuestion = question;
-      answer('');
-    },
+  const rl = new EventEmitter();
+  rl.output = new EventEmitter();
+  rl.output.write = (_value, callback) => callback?.();
+  rl._writeToOutput = () => {};
+  rl.question = (question, answer) => {
+    renderedQuestion = question;
+    answer('');
   };
+  rl.close = () => rl.emit('close');
 
   assert.equal(await setup.askSecret(rl, 'Dashboard password', 'generated-secret'), 'generated-secret');
   assert.doesNotMatch(renderedQuestion, /generated-secret/);
@@ -108,21 +112,41 @@ test('interactive secret prompts suppress typed input and restore output', async
   const originalWrite = function originalWrite(value) {
     writes.push(value);
   };
-  const rl = {
-    _writeToOutput: originalWrite,
-    question(question, answer) {
-      this._writeToOutput(question);
-      submit = answer;
-    },
+  const rl = new EventEmitter();
+  rl.output = new EventEmitter();
+  rl.output.write = (value, callback) => {
+    writes.push(value);
+    callback?.();
   };
+  rl._writeToOutput = originalWrite;
+  rl.question = function question(value, answer) {
+    this._writeToOutput(value);
+    submit = answer;
+  };
+  rl.close = () => rl.emit('close');
 
   const result = setup.askSecret(rl, 'Dashboard password', 'generated-secret');
   rl._writeToOutput('typed-dashboard-secret');
+  rl._writeToOutput('\n');
   submit('typed-dashboard-secret');
 
   assert.equal(await result, 'typed-dashboard-secret');
   assert.doesNotMatch(writes.join(''), /typed-dashboard-secret/);
+  assert.equal(writes.filter(value => value === '\n').length, 1);
   assert.equal(rl._writeToOutput, originalWrite);
+});
+
+test('interactive secret prompts fail closed when output cannot be muted', () => {
+  const rl = {
+    question() {
+      assert.fail('question must not run when secret input would be echoed');
+    },
+  };
+
+  assert.throws(
+    () => setup.askSecret(rl, 'Dashboard password', 'generated-secret'),
+    /cannot securely prompt/,
+  );
 });
 
 test('private-write crash artifacts are excluded from Git and package contents', () => {
