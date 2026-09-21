@@ -2,6 +2,7 @@ import { EventEmitter, once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { stripVTControlCharacters } from 'node:util';
 import assert from 'node:assert/strict';
 import { askHidden } from '../src/secret-prompt.js';
 
@@ -32,6 +33,10 @@ function assertPromptCleanedUp(rl, originalWrite) {
   assert.equal(rl.listenerCount('SIGINT'), 0);
   assert.equal(rl.output.listenerCount('error'), 0);
   assert.equal(rl.output.listenerCount('close'), 0);
+}
+
+function assertOnlyPromptAndLineBreakRendered(rendered) {
+  assert.equal(stripVTControlCharacters(rendered), 'Synthetic prompt: \r\n');
 }
 
 for (const [missingCapability, removeCapability, expectedMessage] of [
@@ -131,7 +136,7 @@ test('secret prompts terminate the prompt line without rendering secret values',
   input.write(`${entered}\n`);
 
   assert.equal(await result, entered);
-  assert.equal(rendered, 'Synthetic prompt: \r\n');
+  assertOnlyPromptAndLineBreakRendered(rendered);
   assert.equal(rl._writeToOutput, originalWrite);
   assert.equal(rl.listenerCount('error'), 0);
   assert.equal(rl.listenerCount('close'), initialCloseListeners);
@@ -156,7 +161,7 @@ test('secret prompts reveal only one line break from multi-line input', async ()
   input.write('synthetic-first\nsynthetic-tail\nsynthetic-last\n');
 
   assert.equal(await result, 'synthetic-first');
-  assert.equal(rendered, 'Synthetic prompt: \r\n');
+  assertOnlyPromptAndLineBreakRendered(rendered);
   assert.equal(rl._writeToOutput, originalWrite);
   assert.equal(rl.listenerCount('error'), 0);
   assert.equal(rl.listenerCount('close'), initialCloseListeners);
