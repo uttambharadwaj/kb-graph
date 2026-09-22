@@ -13,6 +13,7 @@ const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const readme = read('README.md');
 const onboarding = read('docs/ONBOARDING.md');
+const featureManifest = read('docs/FEATURE-MANIFEST.md');
 const contributing = read('CONTRIBUTING.md');
 const security = read('SECURITY.md');
 const bugReport = read('.github/ISSUE_TEMPLATE/bug_report.md');
@@ -187,6 +188,11 @@ describe('public documentation contract', () => {
         /Cursor CLI\/headless lifecycle\s+support (?:remains\s+unproven|is\s+not yet proven)/i,
       );
     }
+    assert.match(featureManifest, /Cursor Desktop lifecycle capture/i);
+    assert.match(featureManifest, /default-off native `stop` \+ `preCompact`/i);
+    assert.match(featureManifest, /queue\s+→\s+daemon\s+→\s+receipt\s+→\s+indexed note/i);
+    assert.match(featureManifest, /`sessionEnd` is unusable/i);
+    assert.match(featureManifest, /Cursor CLI\/headless remains unproven/i);
     assert.match(readme, /selected transcript text can pass through.+Claude CLI/is);
     assert.doesNotMatch(readme, /does not install prompt hints, trigger warnings, or lifecycle capture/i);
   });

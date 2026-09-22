@@ -11,6 +11,7 @@ have perfect recall while providing no useful signal.
 | Prompt hint precision on scrubbed real-agent shapes | `tests/hint-real-prompt-eval.test.js` grades every returned note and includes audited contamination strata | OK — 100% precision and 4/4 useful prompts recalled |
 | Query expansion remains bounded | `tests/hint-relevance.test.js` proves primary-candidate preservation, supplemental deduplication, a ten-candidate cap, supported `-se`/`-sal` recovery, and sibling sense-mismatch declines | OK |
 | Primary-path family scoring matches public/main | `tests/hint-relevance.test.js` includes the public/main differential `{reviewer, reviews, review}` and asserts its exact admitted families | OK — fallback-only transitive grouping does not change the primary partition |
+| Cursor Desktop lifecycle capture | PRs [#178](https://github.com/uttambharadwaj/kb-graph/pull/178), [#179](https://github.com/uttambharadwaj/kb-graph/pull/179), and [#180](https://github.com/uttambharadwaj/kb-graph/pull/180) cover host identity, primary transcript identity, marker gates, coalescing, and receipts; the 2026-09-21 PF-4112 canary naturally completed queue → daemon → receipt → indexed note | OK — default-off native `stop` + `preCompact` on Cursor Desktop; `sessionEnd` is unusable and Cursor CLI/headless remains unproven |
 
 See [Prompt hint retrieval](hint-retrieval.md) for the scorer invariants and
 replay procedure.
