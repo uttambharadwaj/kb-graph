@@ -13,6 +13,9 @@ node bin/kb.js setup
 node bin/kb.js status
 ```
 
+`npm link` is optional shorthand for exposing the `kb` executable. The commands
+below stay source-first and use `node bin/kb.js ...`.
+
 Do not use `npm install -g kb-graph`, npx, or a project-local dependency until
 a published package is linked from the README. `better-sqlite3` uses a native
 binary; when npm has no prebuilt binary for the platform, `npm ci` needs
@@ -59,8 +62,7 @@ systemctl --user list-timers | grep 'kb-'               # Linux
 
 Expect jobs named `harvest`, `reindex`, `synthesis`, and `reconcile`. Codex MCP
 registration is hand-managed: paste the block printed by
-`kb register --agents=codex` into `~/.codex/config.toml`. Source users can
-replace `kb` with `node bin/kb.js` in these verification commands.
+`node bin/kb.js register --agents=codex` into `~/.codex/config.toml`.
 
 Lifecycle hooks enqueue capture requests; processing that queue requires the
 optional resident daemon described in

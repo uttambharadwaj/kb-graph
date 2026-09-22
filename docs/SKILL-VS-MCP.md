@@ -1,4 +1,4 @@
-# Skill vs MCP Server — What's the Difference?
+# kb-graph Skill vs MCP Server
 
 This project ships two ways to use it. They solve different problems and work best together.
 
@@ -8,10 +8,10 @@ This project ships two ways to use it. They solve different problems and work be
 
 **How it works:** Your agent decides when to call a tool. It sends a request ("search for X"), gets back results, and uses them. No tokens are spent until a tool is called.
 
-**Install:** `kb register` adds it to Claude Code, Gemini, and Cursor, and
+**Install:** `node bin/kb.js register` adds it to Claude Code, Gemini, and Cursor, and
 prints the `~/.codex/config.toml` block to paste for Codex (that file is
 hand-curated, so nothing writes it for you). You can limit targets with
-`kb register --agents=claude,codex,cursor`. Restart Cursor after registration;
+`node bin/kb.js register --agents=claude,codex,cursor`. Restart Cursor after registration;
 the command synchronizes its user config and the nearest workspace override.
 
 **Token cost:** ~3.5k tokens for tool definitions (always in context) + whatever results come back per call. Most of that is the descriptions, and it is spent deliberately: an agent picks a tool from its description and nothing else, so a description that names the triggering situation is what makes the tool reachable at all.
@@ -24,7 +24,7 @@ the command synchronizes its user config and the nearest workspace override.
 
 **How it works:** When activated, the skill content (~1500 tokens) is injected into the agent's context. It tells the agent the retrieval strategy, when to search, what to capture, and the self-learning pattern.
 
-**Install:** Installed automatically by `kb setup`. Manual: copy each directory under `skills/` into `~/.claude/skills/`.
+**Install:** Installed automatically by `node bin/kb.js setup`. Manual: copy each directory under `skills/` into `~/.claude/skills/`.
 
 **Token cost:** ~1500 tokens when loaded. Zero when not loaded.
 
@@ -59,11 +59,13 @@ Without the MCP server, your agent has instructions but no tools. It knows it SH
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
 cd kb-graph
-npm install && npm link
-kb setup
-kb register   # Registers Claude Code, Gemini, and Cursor; prints the Codex block
+npm ci
+node bin/kb.js setup
 ```
 
+Setup registers Claude Code, Gemini, and Cursor and prints the Codex block.
+Run `node bin/kb.js register` when you need to repeat registration separately.
+`npm link` is optional shorthand only; it is not part of the source setup.
 Your agent now has all 26 KB tools.
 
 ### MCP Server + Skill (Recommended)
@@ -90,12 +92,12 @@ The skill is just a markdown file. Include its content in your agent's system pr
 
 | Platform | MCP Server | Skill |
 |----------|-----------|-------|
-| Claude Code / Gemini | `kb register` | Copy to skills dir |
+| Claude Code / Gemini | `node bin/kb.js register` | Copy to skills dir |
 | Claude Web | Connect via remote MCP | Not applicable (use custom instructions) |
 | ChatGPT | Import OpenAPI spec | Add to Custom GPT instructions |
-| Codex CLI | `[mcp_servers.knowledge-base]` in `~/.codex/config.toml` (`kb register` prints it) | Add to `instructions.md` |
+| Codex CLI | `[mcp_servers.knowledge-base]` in `~/.codex/config.toml` (`node bin/kb.js register` prints it) | Add to `instructions.md` |
 | Gemini CLI | MCP config in `settings.json` | Add to `GEMINI.md` |
-| Cursor | `kb register --agents=cursor`, then restart | Include in rules |
+| Cursor | `node bin/kb.js register --agents=cursor`, then restart | Include in rules |
 | Windsurf | MCP config | Include in rules |
 | Custom agents | REST API or MCP | Include in system prompt |
 

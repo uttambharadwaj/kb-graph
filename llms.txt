@@ -14,6 +14,10 @@ A personal knowledge base server that AI agents use to persist memory across ses
 6. (Optional) Set `OBSIDIAN_VAULT_PATH` to enable vault indexing and note writing
 7. (Optional) Set API keys for remote access: `KB_API_KEY_CLAUDE`, `KB_API_KEY_OPENAI`, `KB_API_KEY_GEMINI`
 
+`npm link` is optional shorthand for exposing the `kb` executable. This guide
+uses `node bin/kb.js ...` so a fresh source install does not depend on that
+link.
+
 Registry publication is deferred. Do not claim or use a global package, npx, or
 a project-local dependency until README.md links a published package. Keep the
 source clone at a stable path because setup persists it in registrations and
@@ -60,7 +64,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 | src/tools.js | Add new MCP tools. Central registry for all tool definitions. |
 | src/ingest.js | Add new content source types. Extend TYPE_MAP and extractors. |
 | src/db.js | Database migrations, queries, FTS5 config. Core tables: documents, vault_files, embeddings, facts, retrievals. Search and single-doc reads are metered here — pass a `surface` from src/retrieval.js. |
-| src/schema.js | Migration engine. Connecting verifies; only `kb migrate` executes DDL. |
+| src/schema.js | Migration engine. Connecting verifies; only `node bin/kb.js migrate` executes DDL. |
 | src/server.js | Express routes, middleware, auth chain. |
 | src/mcp-http.js | HTTP MCP transport. Session management, StreamableHTTP. |
 | src/mcp.js | Stdio MCP transport. Local agent integration. |
@@ -83,7 +87,7 @@ Each row says when to reach for the tool, not just what it does — an agent cho
 ## Integration Patterns
 
 ### Claude Code (local, stdio)
-Register with `kb register`. Uses stdio MCP transport. All 26 tools available.
+Register with `node bin/kb.js register`. Uses stdio MCP transport. All 26 tools available.
 
 ### Claude.ai (remote, HTTP MCP)
 Connect via remote MCP at `https://your-domain.com/mcp`. Authenticates with API key or OAuth. Admin-only tools are filtered out.

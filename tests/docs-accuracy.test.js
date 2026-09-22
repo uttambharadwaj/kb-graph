@@ -18,6 +18,7 @@ const bugReport = read('.github/ISSUE_TEMPLATE/bug_report.md');
 const agentTask = read('.github/ISSUE_TEMPLATE/agent_task.md');
 const pullRequestTemplate = read('.github/pull_request_template.md');
 const llms = read('llms.txt');
+const skillVsMcp = read('docs/SKILL-VS-MCP.md');
 const pkg = JSON.parse(read('package.json'));
 const privateReportUrl = 'https://github.com/uttambharadwaj/kb-graph/security/advisories/new';
 const issueTemplateDir = resolve(root, '.github/ISSUE_TEMPLATE');
@@ -34,6 +35,7 @@ const canonicalLabels = new Set([
   'question',
 ]);
 const between = (text, start, end) => text.split(start)[1]?.split(end)[0] ?? '';
+const bashBlocks = text => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map(match => match[1]);
 
 describe('public documentation contract', () => {
   it('keeps the README concise and honest about data egress', () => {
@@ -75,6 +77,37 @@ describe('public documentation contract', () => {
     assert.match(llmsInstall, /Registry publication is deferred/);
     assert.doesNotMatch(llmsInstall, /npm install -g kb-graph/);
     assert.doesNotMatch(readme, /img\.shields\.io\/npm|npmjs\.com\/package/);
+  });
+
+  it('keeps source-install command examples source-first', () => {
+    for (const [name, doc] of [
+      ['README.md', readme],
+      ['docs/ONBOARDING.md', onboarding],
+      ['llms.txt', llms],
+      ['docs/SKILL-VS-MCP.md', skillVsMcp],
+    ]) {
+      for (const block of bashBlocks(doc)) {
+        assert.doesNotMatch(block, /^kb(?:\s|$)/m, `${name}: bare kb command in bash block`);
+      }
+      assert.doesNotMatch(
+        doc,
+        /`kb (?!serve`|start`)[^`\n]+`/,
+        `${name}: operational prose must use node bin/kb.js`,
+      );
+    }
+  });
+
+  it('keeps both agent-facing guides aligned with issue 157', () => {
+    for (const [name, guide] of [
+      ['llms.txt', llms],
+      ['docs/SKILL-VS-MCP.md', skillVsMcp],
+    ]) {
+      assert.match(guide, /^# .*kb-graph/im, `${name}: missing kb-graph name`);
+      assert.match(guide, /npm ci/);
+      assert.match(guide, /node bin\/kb\.js setup/);
+      assert.match(guide, /npm link[\s\S]{0,80}optional|optional[\s\S]{0,80}npm link/i);
+      assert.doesNotMatch(guide, /npm install\b/i);
+    }
   });
 
   it('documents the shipped runtimes and every scheduled writer', () => {
@@ -229,6 +262,7 @@ describe('public documentation contract', () => {
     for (const [path, doc] of [
       ['README.md', readme],
       ['docs/ONBOARDING.md', onboarding],
+      ['docs/SKILL-VS-MCP.md', skillVsMcp],
       ['CONTRIBUTING.md', contributing],
       ['SECURITY.md', security],
     ]) {

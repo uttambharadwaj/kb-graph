@@ -51,6 +51,10 @@ node bin/kb.js setup
 node bin/kb.js status
 ```
 
+`npm link` is optional shorthand for exposing the `kb` executable. The
+source-first commands in this guide use `node bin/kb.js ...` and do not require
+that link.
+
 The generated Docker Compose option assumes the operator provides a Dockerfile.
 After setup writes
 `${KB_DIR:-~/.knowledge-base}/.env`, later integrations are best-effort and
@@ -63,12 +67,12 @@ users should read [Upgrading to 2.0](docs/UPGRADING-2.0.md).
 
 ## What setup changes
 
-Depending on your answers, `kb setup` (or `node bin/kb.js setup` from source):
+Depending on your answers, `node bin/kb.js setup`:
 
 - creates or updates the owner-only `${KB_DIR:-~/.knowledge-base}/.env`;
 - creates a Markdown vault (Obsidian is optional);
 - registers MCP for Claude Code, Gemini, and Cursor;
-- tells Codex users to run `kb register --agents=codex`, which
+- tells Codex users to run `node bin/kb.js register --agents=codex`, which
   prints the hand-managed `config.toml` block;
 - installs supported hooks for Claude Code, Codex, and Cursor;
 - installs four launchd or systemd-user jobs;
@@ -161,8 +165,11 @@ tool calls, detectable subagents, missing identities, and write-denied sessions
 never emit. Cursor post-tool checkpoints remain disabled until its
 write-approval contract is verified.
 
-Measure the default-off rollout with
-`kb capture-follow-through --since <ISO-8601> --through <ISO-8601> --json`.
+Measure the default-off rollout with:
+
+```bash
+node bin/kb.js capture-follow-through --since <ISO-8601> --through <ISO-8601> --json
+```
 The aggregate report separates emitted and log-only cohorts, waits for each
 30-minute immediate-capture window to mature, and reports delayed harvest
 salvage separately. Claude and Codex use exact agent/session correlation;
@@ -228,18 +235,17 @@ session briefing reports loop health; inspect the logs for per-run details.
 ## Everyday commands
 
 ```bash
-kb search "credential cache"        # terminal search
-kb status                           # store and HTTP server status
-kb harvest --dry-run                # preview transcript work
-kb capture-follow-through --json    # checkpoint outcome report
-kb serve --status                   # probe the optional daemon
-kb start                            # local dashboard/API
-kb migrate --check                  # read-only schema gate
-kb register --agents=cursor         # sync home + workspace MCP config
+node bin/kb.js search "credential cache"        # terminal search
+node bin/kb.js status                           # store and HTTP server status
+node bin/kb.js harvest --dry-run                # preview transcript work
+node bin/kb.js capture-follow-through --json    # checkpoint outcome report
+node bin/kb.js serve --status                   # probe the optional daemon
+node bin/kb.js start                            # local dashboard/API
+node bin/kb.js migrate --check                  # read-only schema gate
+node bin/kb.js register --agents=cursor         # sync home + workspace MCP config
 ```
 
-`kb --help` lists maintenance and migration commands. Source users can replace
-`kb` with `node bin/kb.js`; `npm link` is optional.
+`node bin/kb.js --help` lists maintenance and migration commands.
 
 All 26 stdio tools are documented here so clients and maintainers can audit the
 surface:
@@ -262,7 +268,7 @@ available over HTTP; seven administrative tools remain local-only. See
 
 `kb_write`, `kb_ingest`, REST ingest, and harvest own their fail-closed
 similarity check. `kb_check_duplicate` is an exploratory check, not a mandatory
-preflight. The bulk CLI command `kb ingest <path>` instead skips
+preflight. The bulk CLI command `node bin/kb.js ingest <path>` instead skips
 only filenames it has already imported; it does not silently drop a requested
 file because its content resembles an existing note.
 
@@ -270,8 +276,8 @@ file because its content resembles an existing note.
 
 - Primary application data lives in `${KB_DIR:-~/.knowledge-base}/`.
 - Setup configuration, the generated `.env`, databases, logs, and the embedding
-  model cache live under `KB_DIR`, outside the npm package. Global upgrades do
-  not replace them.
+  model cache live under `KB_DIR`, outside the source checkout. Source updates
+  do not replace them.
 - The vault path is configured by `OBSIDIAN_VAULT_PATH`; it is plain Markdown.
 - Retrieval uses SQLite FTS5 and `all-MiniLM-L6-v2` locally.
 - Claude-backed write-time operations can send selected content to your Claude
