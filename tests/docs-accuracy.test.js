@@ -83,6 +83,24 @@ describe('public documentation contract', () => {
     assert.match(readme, /register --force/);
   });
 
+  it('explains when simpler memory approaches are the better choice', () => {
+    const comparison = between(readme, '## Why not just', '## Architecture');
+    assert.match(comparison, /CLAUDE\.md/);
+    assert.match(comparison, /Memory Bank/);
+    assert.match(comparison, /basic MCP memory/i);
+    assert.match(comparison, /checked-in rule\s+file/i);
+    assert.match(comparison, /shared/i);
+    for (const capability of ['indexed history', 'provenance', 'supersession']) {
+      assert.match(comparison, new RegExp(capability, 'i'));
+    }
+    assert.match(comparison, /fact-backed[\s\S]+harvest/i);
+    for (const cost of ['database', 'daemon', 'scheduled jobs']) {
+      assert.match(comparison, new RegExp(cost, 'i'));
+    }
+    assert.match(comparison, /Claude-backed curation/i);
+    assert.match(comparison, /configured\s+provider/i);
+  });
+
   it('makes source installation primary while registry publication is deferred', () => {
     const docs = [
       { full: readme, install: between(readme, '## Install', '## What setup changes') },
