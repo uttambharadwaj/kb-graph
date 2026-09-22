@@ -52,18 +52,26 @@ describe('test runtime contract', () => {
 
   it('gates clean source setup on Linux and macOS without embedding preflight', () => {
     assert.strictEqual(pkg.scripts['smoke:source'], 'bash scripts/smoke-source.sh');
-    assert.match(workflow, /source-install-smoke:[\s\S]+timeout-minutes: 5/);
-    assert.match(workflow, /os: \[ubuntu-latest, macos-latest\]/);
-    const sourceJob = workflow.slice(
-      workflow.indexOf('source-install-smoke:'),
-      workflow.indexOf('package-smoke:'),
-    );
+    const sourceJobStart = workflow.indexOf('source-install-smoke:');
+    const sourceJobEnd = workflow.indexOf('package-smoke:');
+    assert.ok(sourceJobStart >= 0 && sourceJobEnd > sourceJobStart);
+    const sourceJob = workflow.slice(sourceJobStart, sourceJobEnd);
+    assert.match(sourceJob, /timeout-minutes: 5/);
+    assert.match(sourceJob, /os: \[ubuntu-latest, macos-latest\]/);
     assert.match(sourceJob, /node-version: 22/);
     assert.match(sourceJob, /run: npm ci/);
     assert.match(sourceJob, /run: npm run smoke:source/);
     assert.doesNotMatch(sourceJob, /test:preflight|ci-embedding/);
     assert.match(sourceSmoke, /node bin\/kb\.js setup --auto/);
+    assert.match(sourceSmoke, /--agents=claude/);
+    assert.doesNotMatch(sourceSmoke, /--agents=ollama|--no-load-jobs/);
+    assert.match(sourceSmoke, /\.claude\.json/);
     assert.match(sourceSmoke, /node bin\/kb\.js status/);
+    assert.match(sourceSmoke, /trap cleanup EXIT/);
+    assert.match(sourceSmoke, /trap 'exit 129' HUP/);
+    assert.match(sourceSmoke, /trap 'exit 130' INT/);
+    assert.match(sourceSmoke, /trap 'exit 143' TERM/);
+    assert.doesNotMatch(sourceSmoke, /trap cleanup EXIT HUP INT TERM/);
   });
 
   it('pins approved Node 24 actions and restores the model cache before preflight', () => {

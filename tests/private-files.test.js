@@ -111,6 +111,11 @@ test('setup next steps keep the global kb command for installed shims', () => {
     projectRoot: '/usr/local/lib/node_modules/kb-graph',
     cwd: '/tmp',
   }), 'kb');
+  assert.equal(setup.setupCliCommand({
+    argvPath: '/usr/local/lib/node_modules/kb-graph/bin/kb.js',
+    projectRoot: '/usr/local/lib/node_modules/kb-graph',
+    cwd: '/tmp',
+  }), 'kb');
 
   const text = setup.formatSetupSummary({
     steps: [],
@@ -119,6 +124,15 @@ test('setup next steps keep the global kb command for installed shims', () => {
 
   assert.match(text, /Run: kb start/);
   assert.doesNotMatch(text, /node bin\/kb\.js/);
+});
+
+test('a node_modules ancestor does not make a source checkout look globally installed', () => {
+  const projectRoot = '/workspace/node_modules/source-checkouts/kb-graph';
+  assert.equal(setup.setupCliCommand({
+    argvPath: `${projectRoot}/bin/kb.js`,
+    projectRoot,
+    cwd: projectRoot,
+  }), 'node bin/kb.js');
 });
 
 test('setup summary does not label refused steps as done', () => {

@@ -2,7 +2,7 @@ import { createInterface } from 'readline';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir, platform, release, type as osType } from 'os';
-import { basename, join, relative, resolve, sep } from 'path';
+import { basename, dirname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import Database from 'better-sqlite3';
@@ -53,7 +53,8 @@ export function setupCliCommand({
   cwd = process.cwd(),
 } = {}) {
   const invokedName = basename(argvPath || '').replace(/\.(cmd|exe)$/i, '');
-  const installedPackage = resolve(projectRoot).split(sep).includes('node_modules');
+  const installedPackage = basename(projectRoot) === 'kb-graph'
+    && basename(dirname(projectRoot)) === 'node_modules';
   if (invokedName === 'kb' || installedPackage) return 'kb';
 
   const entrypoint = join(projectRoot, 'bin', 'kb.js');
