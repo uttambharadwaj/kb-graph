@@ -1,6 +1,7 @@
 import './helpers/tmp-kb.js';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { dirname, resolve } from 'path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
@@ -36,6 +37,42 @@ const canonicalLabels = new Set([
 ]);
 const between = (text, start, end) => text.split(start)[1]?.split(end)[0] ?? '';
 const bashBlocks = text => [...text.matchAll(/```bash\n([\s\S]*?)```/g)].map(match => match[1]);
+const isPublicMarkdownPath = path =>
+  (!path.includes('/') && path.endsWith('.md'))
+  || (path.startsWith('docs/') && path.endsWith('.md'))
+  || /^skills\/(?:.*\/)?SKILL\.md$/.test(path);
+const discoverPublicMarkdown = (trackedPaths = null) => {
+  const paths = trackedPaths ?? execFileSync('git', ['ls-files', '-z'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).split('\0');
+  const publicDocs = paths.filter(Boolean).filter(isPublicMarkdownPath).sort();
+  assert.ok(publicDocs.length > 0, 'git ls-files found no tracked public Markdown');
+  return publicDocs;
+};
+const localMarkdownTargets = text => {
+  const inline = /!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)\n]+))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\)/g;
+  const reference = /^\s{0,3}\[[^\]\n]+\]:\s*(?:<([^>\n]+)>|(\S+?))(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*$/gm;
+  return [...text.matchAll(inline), ...text.matchAll(reference)]
+    .map(match => match[1] ?? match[2])
+    .filter(target => !/^(?:#|\/\/|[a-z][a-z\d+.-]*:)/i.test(target));
+};
+const resolveLocalMarkdownTarget = (sourcePath, target) => {
+  const pathOnly = target.split(/[?#]/, 1)[0];
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathOnly);
+  } catch {
+    assert.fail(`${sourcePath}: invalid encoded link target ${target}`);
+  }
+  const resolved = resolve(dirname(resolve(root, sourcePath)), decoded);
+  const fromRoot = relative(root, resolved);
+  assert.ok(
+    fromRoot !== '..' && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot),
+    `${sourcePath}: link target escapes repository: ${target}`,
+  );
+  return resolved;
+};
 
 describe('public documentation contract', () => {
   it('keeps the README concise and honest about data egress', () => {
@@ -259,17 +296,73 @@ describe('public documentation contract', () => {
   });
 
   it('keeps local Markdown links resolvable', () => {
-    for (const [path, doc] of [
-      ['README.md', readme],
-      ['docs/ONBOARDING.md', onboarding],
-      ['docs/SKILL-VS-MCP.md', skillVsMcp],
-      ['CONTRIBUTING.md', contributing],
-      ['SECURITY.md', security],
-    ]) {
-      const base = dirname(resolve(root, path));
-      for (const match of doc.matchAll(/\]\((?!https?:|#)([^)#]+)(?:#[^)]*)?\)/g)) {
-        assert.ok(existsSync(resolve(base, match[1])), `${path}: missing ${match[1]}`);
+    for (const relPath of discoverPublicMarkdown()) {
+      const fullPath = resolve(root, relPath);
+      const doc = readFileSync(fullPath, 'utf8');
+      for (const target of localMarkdownTargets(doc)) {
+        assert.ok(
+          existsSync(resolveLocalMarkdownTarget(relPath, target)),
+          `${relPath}: missing ${target}`,
+        );
       }
     }
+  });
+
+  it('limits link discovery to tracked public Markdown paths', () => {
+    assert.deepStrictEqual(
+      discoverPublicMarkdown([
+        'README.md',
+        'docs/ONBOARDING.md',
+        'docs/generated/NOTES.md',
+        'skills/example/SKILL.md',
+        '.github/SECURITY.md',
+        'skills/example/README.md',
+        'node_modules/pkg/README.md',
+        'llms.txt',
+      ]),
+      ['README.md', 'docs/ONBOARDING.md', 'docs/generated/NOTES.md', 'skills/example/SKILL.md'],
+    );
+    assert.throws(() => discoverPublicMarkdown(['src/private.md']), /no tracked public Markdown/);
+  });
+
+  it('extracts common local Markdown link destinations', () => {
+    const markdown = [
+      '[inline](docs/ONE.md)',
+      '[angle](<docs/TWO TWO.md> "title")',
+      "[single title](docs/THREE.md 'title')",
+      '[paren title](docs/FOUR.md (title))',
+      '[reference]: docs/FIVE.md "title"',
+      "[angle-reference]: <docs/SIX SIX.md> 'title'",
+      '[web](https://example.com/docs.md)',
+      '[custom](vscode://file/docs.md)',
+      '[protocol-relative](//example.com/docs.md)',
+      '[email](mailto:docs@example.com)',
+      '[anchor](#section)',
+    ].join('\n');
+    assert.deepStrictEqual(localMarkdownTargets(markdown), [
+      'docs/ONE.md',
+      'docs/TWO TWO.md',
+      'docs/THREE.md',
+      'docs/FOUR.md',
+      'docs/FIVE.md',
+      'docs/SIX SIX.md',
+    ]);
+  });
+
+  it('normalizes local targets without allowing repository escape', () => {
+    assert.strictEqual(
+      resolveLocalMarkdownTarget('docs/guide.md', '../README%2Emd?raw=1#intro'),
+      resolve(root, 'README.md'),
+    );
+    const outsideRoot = dirname(root);
+    assert.ok(existsSync(outsideRoot));
+    assert.throws(
+      () => resolveLocalMarkdownTarget('docs/guide.md', outsideRoot),
+      /escapes repository/,
+    );
+    assert.throws(
+      () => resolveLocalMarkdownTarget('docs/guide.md', '../..'),
+      /escapes repository/,
+    );
   });
 });
