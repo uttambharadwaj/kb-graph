@@ -98,19 +98,19 @@ describe('README knowledge-loop figure', () => {
     assert.match(toolsSource, /`Note\$\{idNote\} saved to \$\{result\.path\} as \$\{result\.tier\}/);
   });
 
-  it('places the asset after badges and before the concise introduction', () => {
-    const badgeEnd = readme.indexOf('](LICENSE)');
+  it('keeps the synthetic asset with the loop documentation', () => {
+    const loopHeading = readme.indexOf('## The loop');
     const image = readme.indexOf(
       '[![Three-step kb-graph loop: session briefing, targeted prompt hint, and durable capture](docs/assets/loop-demo.svg)](docs/assets/loop-demo.svg)',
     );
     const caption = readme.indexOf(
-      '*Static demonstration with synthetic data; open it for the full-size view. Claude Code is shown; Codex receives equivalent hook context; Cursor receives the session briefing and can call `kb_write` through MCP, but receives no pushed hints.*',
+      '*Deterministic documentation illustration with synthetic data.',
     );
-    const intro = readme.indexOf('kb-graph gives Claude Code');
+    const retrieve = readme.indexOf('### Retrieve');
 
-    assert.ok(badgeEnd < image);
+    assert.ok(loopHeading < image);
     assert.ok(image < caption);
-    assert.ok(caption < intro);
+    assert.ok(caption < retrieve);
   });
 
   it('stays compact, accessible, and within the supported SVG subset', () => {

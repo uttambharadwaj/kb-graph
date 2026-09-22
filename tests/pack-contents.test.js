@@ -60,6 +60,9 @@ test('npm pack contains the runtime and excludes repository-only material', () =
     'bin/weekly-synthesis.js',
     'docs/ONBOARDING.md',
     'docs/assets/loop-demo.svg',
+    'docs/assets/terminal-demo.json',
+    'docs/assets/terminal-demo.svg',
+    'docs/demo/terminal-demo-note.json',
     'eval/checkpoint-replay-v1.json',
     'llms.txt',
     'openapi.json',
@@ -103,5 +106,5 @@ test('npm pack contains the runtime and excludes repository-only material', () =
     /\b(?:CODEMAP|CONTRIBUTING|EXTENDING|SECURITY)\.md\b|\bkb-server\.service\b/,
     'packed llms.txt references an excluded repository-only file',
   );
-  assert.doesNotMatch(llms, /node bin\/kb\.js/, 'packed llms.txt uses a source-only command');
+  assert.match(llms, /node bin\/kb\.js setup/, 'packed llms.txt must lead with the supported source install');
 });

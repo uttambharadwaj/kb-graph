@@ -6,18 +6,19 @@ A personal knowledge base server that AI agents use to persist memory across ses
 
 ## Quick Setup
 
-1. Install globally: `npm install -g kb-graph`
-2. Configure state and integrations: `kb setup`
-3. Verify the installation: `kb status`
-4. (Optional) Start the local dashboard/API: `kb start`
-5. (Optional) Set `OBSIDIAN_VAULT_PATH` to enable vault indexing and note writing
-6. (Optional) Set API keys for remote access: `KB_API_KEY_CLAUDE`, `KB_API_KEY_OPENAI`, `KB_API_KEY_GEMINI`
+1. Clone `https://github.com/uttambharadwaj/kb-graph.git`
+2. Install locked dependencies: `npm ci`
+3. Configure state and integrations: `node bin/kb.js setup`
+4. Verify the installation: `node bin/kb.js status`
+5. (Optional) Start the local dashboard/API: `node bin/kb.js start`
+6. (Optional) Set `OBSIDIAN_VAULT_PATH` to enable vault indexing and note writing
+7. (Optional) Set API keys for remote access: `KB_API_KEY_CLAUDE`, `KB_API_KEY_OPENAI`, `KB_API_KEY_GEMINI`
 
-Global npm and source-clone installations are supported. npx and project-local
-dependency installs are not. Mutable state, `.env`, and the embedding cache
-live under `${KB_DIR:-~/.knowledge-base}` rather than inside the package. See
-README.md for source installation, native build prerequisites, and upgrade
-steps.
+Registry publication is deferred. Do not claim or use a global package, npx, or
+a project-local dependency until README.md links a published package. Keep the
+source clone at a stable path because setup persists it in registrations and
+hooks. Mutable state, `.env`, and the embedding cache live under
+`${KB_DIR:-~/.knowledge-base}` rather than inside the checkout.
 
 ## MCP Tools
 

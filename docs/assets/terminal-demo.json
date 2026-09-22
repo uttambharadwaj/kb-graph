@@ -1,0 +1,36 @@
+{
+  "title": "One process learns; fresh processes retrieve it",
+  "description": "Captured output from three real kb-graph commands using one temporary KB_DIR and vault. Each command ran in a separate Node process; temporary paths, the note date, and fresh-store maintenance warnings are normalized.",
+  "proof": {
+    "output": "captured, not authored",
+    "processes": 3,
+    "state": "isolated temporary KB_DIR and vault",
+    "externalAgentCli": false
+  },
+  "panels": [
+    {
+      "id": "write",
+      "step": "01",
+      "title": "Write",
+      "subtitle": "process A · kb_write",
+      "command": "node bin/kb.js tool kb_write --input docs/demo/terminal-demo-note.json",
+      "output": "Note #1 saved to agents/lessons/<date>-deploys-reset-shared-retry-budgets.md as inferred; indexed 1 changed, 0 unchanged"
+    },
+    {
+      "id": "retrieve",
+      "step": "02",
+      "title": "Retrieve",
+      "subtitle": "fresh process B · FTS5",
+      "command": "node bin/kb.js search \"shared retry budgets\"",
+      "output": "Found 1 result(s):\n\n1. [lesson] Deploys reset shared retry budgets\n   Tags: demo, retries\n   When a deployment activates, reset each worker's retry budget before accepting new work. This prevents stale retry state from crossing releases."
+    },
+    {
+      "id": "briefing",
+      "step": "03",
+      "title": "Brief",
+      "subtitle": "fresh process C · SessionStart hook",
+      "command": "printf '{}\\n' | node bin/kb.js wakeup-hook",
+      "output": "KB BRIEFING (knowledge-base MCP; 1 docs, 0 current facts; types: lesson 1)\nhealth: ⚠ <expected fresh-store maintenance warnings omitted>\nRecently updated:\n- Deploys reset shared retry budgets [demo-app] (lesson)\nBefore non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity); only a fresh reviewed projection is current state.\nAt a durable boundary, call kb_write directly; it owns duplicate gating and fails closed. Search and read before correcting an existing note, then pass supersedes. Lifecycle capture is automatic; /debrief is the higher-fidelity pass."
+    }
+  ]
+}

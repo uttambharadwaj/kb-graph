@@ -17,6 +17,7 @@ const security = read('SECURITY.md');
 const bugReport = read('.github/ISSUE_TEMPLATE/bug_report.md');
 const agentTask = read('.github/ISSUE_TEMPLATE/agent_task.md');
 const pullRequestTemplate = read('.github/pull_request_template.md');
+const llms = read('llms.txt');
 const pkg = JSON.parse(read('package.json'));
 const privateReportUrl = 'https://github.com/uttambharadwaj/kb-graph/security/advisories/new';
 const issueTemplateDir = resolve(root, '.github/ISSUE_TEMPLATE');
@@ -38,31 +39,41 @@ describe('public documentation contract', () => {
   it('keeps the README concise and honest about data egress', () => {
     assert.doesNotMatch(readme, /Nothing leaves your machine|No external services/i);
     assert.match(readme, /may send selected transcript or note content/i);
-    assert.match(readme, /npm install -g kb-graph/i);
+    assert.match(readme, /One coding agent learns.+Every agent and future session/s);
+    assert.match(readme, /hard problem\s+is not storing them.+keeping shared truth current/s);
     assert.match(readme, /register --force/);
   });
 
-  it('documents the supported install and durable-state boundaries', () => {
+  it('makes source installation primary while registry publication is deferred', () => {
     const docs = [
       { full: readme, install: between(readme, '## Install', '## What setup changes') },
       { full: onboarding, install: between(onboarding, '# Onboarding', '## Verify the install') },
     ];
     for (const { full, install } of docs) {
-      assert.match(install, /npm install -g kb-graph/i);
+      assert.match(install, /git clone|Clone `https:\/\/github\.com\/uttambharadwaj\/kb-graph\.git`/i);
+      assert.match(install, /npm ci/i);
+      assert.match(install, /node bin\/kb\.js setup/i);
+      assert.match(install, /Registry publication is deferred/i);
+      assert.doesNotMatch(install, /```(?:bash)?[\s\S]*?npm install -g kb-graph[\s\S]*?```/i);
       assert.match(install, /npx/i);
-      assert.match(install, /not supported|Do not use/i);
+      assert.match(install, /deferred|Do not use|Do not claim/i);
       assert.match(install, /better-sqlite3/i);
       assert.match(install, /compiler|node-gyp/i);
       assert.match(install, /KB_DIR/i);
       assert.match(install, /models|embedding/i);
       assert.match(install, /Docker Compose/i);
-      assert.match(install, /source-only/i);
       assert.match(install, /Dockerfile/i);
-      assert.match(full, /global (?:npm )?prefix|Node\/global prefix/i);
+      assert.match(full, /stable path|stable source clone/i);
       assert.match(full, /register --force/i);
       assert.match(full, /restart/i);
       assert.match(full, /agent|Cursor/i);
     }
+    const llmsInstall = between(llms, '## Quick Setup', '## MCP Tools');
+    assert.match(llmsInstall, /Clone `https:\/\/github\.com\/uttambharadwaj\/kb-graph\.git`/);
+    assert.match(llmsInstall, /npm ci/);
+    assert.match(llmsInstall, /node bin\/kb\.js setup/);
+    assert.match(llmsInstall, /Registry publication is deferred/);
+    assert.doesNotMatch(llmsInstall, /npm install -g kb-graph/);
     assert.doesNotMatch(readme, /img\.shields\.io\/npm|npmjs\.com\/package/);
   });
 
@@ -73,6 +84,23 @@ describe('public documentation contract', () => {
       for (const { name } of JOBS) assert.match(doc, new RegExp(`\\b${name}\\b`, 'i'));
     }
     assert.doesNotMatch(onboarding, /Node\s*(?:≥|>=)\s*18|\/tmp\/kb-/i);
+  });
+
+  it('states the proven Cursor Desktop lifecycle boundary exactly', () => {
+    for (const doc of [readme, onboarding]) {
+      assert.match(doc, /Cursor Desktop/i);
+      assert.match(doc, /default-off/i);
+      assert.match(doc, /`stop`/);
+      assert.match(doc, /`preCompact`/);
+      assert.match(doc, /cursor-capture-enabled/);
+      assert.match(doc, /queue-to-indexed-note round trip\s+is proven/i);
+      assert.match(
+        doc,
+        /Cursor CLI\/headless lifecycle\s+support (?:remains\s+unproven|is\s+not yet proven)/i,
+      );
+    }
+    assert.match(readme, /selected transcript text can pass through.+Claude CLI/is);
+    assert.doesNotMatch(readme, /does not install prompt hints, trigger warnings, or lifecycle capture/i);
   });
 
   it('keeps the resident daemon and HTTP server as separate processes', () => {

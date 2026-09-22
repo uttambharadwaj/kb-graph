@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="534" viewBox="0 0 1200 534" role="img" aria-labelledby="terminal-title terminal-desc">
+  <title id="terminal-title">One process learns; fresh processes retrieve it</title>
+  <desc id="terminal-desc">Captured output from three real kb-graph commands using one temporary KB_DIR and vault. Each command ran in a separate Node process; temporary paths, the note date, and fresh-store maintenance warnings are normalized.</desc>
+  <rect width="1200" height="534" rx="18" fill="#0b0d12"/>
+  <g id="panel-write">
+    <rect x="24" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <circle cx="46" cy="48" r="5" fill="#ff5f57"/>
+    <circle cx="62" cy="48" r="5" fill="#febc2e"/>
+    <circle cx="78" cy="48" r="5" fill="#28c840"/>
+    <text x="42" y="75" fill="#f8f8f2" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 15px; font-weight: 700;">01 · Write</text>
+    <text x="42" y="91" fill="#8b93a7" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 10px;">process A · kb_write</text>
+    <rect x="25" y="101" width="370" height="1" fill="#303746"/>
+    <text x="42" y="131" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">$ node bin/kb.js tool kb_write --input</text>
+    <text x="42" y="149" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">docs/demo/terminal-demo-note.json</text>
+    <text x="42" y="185" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">Note #1 saved to</text>
+    <text x="42" y="203" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">agents/lessons/&lt;date&gt;-deploys-reset-shared-</text>
+    <text x="42" y="221" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">retry-budgets.md as inferred; indexed 1</text>
+    <text x="42" y="239" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">changed, 0 unchanged</text>
+  </g>
+  <g id="panel-retrieve">
+    <rect x="414" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <circle cx="436" cy="48" r="5" fill="#ff5f57"/>
+    <circle cx="452" cy="48" r="5" fill="#febc2e"/>
+    <circle cx="468" cy="48" r="5" fill="#28c840"/>
+    <text x="432" y="75" fill="#f8f8f2" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 15px; font-weight: 700;">02 · Retrieve</text>
+    <text x="432" y="91" fill="#8b93a7" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 10px;">fresh process B · FTS5</text>
+    <rect x="415" y="101" width="370" height="1" fill="#303746"/>
+    <text x="432" y="131" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">$ node bin/kb.js search &quot;shared retry</text>
+    <text x="432" y="149" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">budgets&quot;</text>
+    <text x="432" y="185" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">Found 1 result(s):</text>
+    <text x="432" y="203" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve"></text>
+    <text x="432" y="221" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">1. [lesson] Deploys reset shared retry</text>
+    <text x="432" y="239" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">budgets</text>
+    <text x="432" y="257" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">   Tags: demo, retries</text>
+    <text x="432" y="275" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">   When a deployment activates, reset each</text>
+    <text x="432" y="293" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">worker&apos;s retry budget before accepting new</text>
+    <text x="432" y="311" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">work. This prevents stale retry state from</text>
+    <text x="432" y="329" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">crossing releases.</text>
+  </g>
+  <g id="panel-briefing">
+    <rect x="804" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <circle cx="826" cy="48" r="5" fill="#ff5f57"/>
+    <circle cx="842" cy="48" r="5" fill="#febc2e"/>
+    <circle cx="858" cy="48" r="5" fill="#28c840"/>
+    <text x="822" y="75" fill="#f8f8f2" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 15px; font-weight: 700;">03 · Brief</text>
+    <text x="822" y="91" fill="#8b93a7" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 10px;">fresh process C · SessionStart hook</text>
+    <rect x="805" y="101" width="370" height="1" fill="#303746"/>
+    <text x="822" y="131" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">$ printf &apos;{}\n&apos; | node bin/kb.js</text>
+    <text x="822" y="149" fill="#f8f8f2" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">wakeup-hook</text>
+    <text x="822" y="185" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">KB BRIEFING (knowledge-base MCP; 1 docs, 0</text>
+    <text x="822" y="203" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">current facts; types: lesson 1)</text>
+    <text x="822" y="221" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">health: ⚠ &lt;expected fresh-store maintenance</text>
+    <text x="822" y="239" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">warnings omitted&gt;</text>
+    <text x="822" y="257" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">Recently updated:</text>
+    <text x="822" y="275" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">- Deploys reset shared retry budgets</text>
+    <text x="822" y="293" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">[demo-app] (lesson)</text>
+    <text x="822" y="311" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">Before non-trivial work: kb_search(query,</text>
+    <text x="822" y="329" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">tags) or kb_context(query). Entity history:</text>
+    <text x="822" y="347" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">kb_fact_query(entity); only a fresh</text>
+    <text x="822" y="365" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">reviewed projection is current state.</text>
+    <text x="822" y="383" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">At a durable boundary, call kb_write</text>
+    <text x="822" y="401" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">directly; it owns duplicate gating and</text>
+    <text x="822" y="419" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">fails closed. Search and read before</text>
+    <text x="822" y="437" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">correcting an existing note, then pass</text>
+    <text x="822" y="455" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">supersedes. Lifecycle capture is automatic;</text>
+    <text x="822" y="473" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">/debrief is the higher-fidelity pass.</text>
+  </g>
+</svg>

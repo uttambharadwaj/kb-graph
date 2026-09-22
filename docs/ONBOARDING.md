@@ -2,21 +2,8 @@
 
 Requirements: macOS or Linux, Node.js 22/24/26, and an authenticated `claude`
 CLI for AI curation. Storage and retrieval remain local; curation commands can
-send selected content to the Claude provider. Install globally:
-
-```bash
-npm install -g kb-graph
-kb setup
-kb status
-```
-
-For npm, only global installation is supported. Do not use npx or add kb-graph
-as a project dependency: setup persists absolute executable paths that must
-remain stable. `better-sqlite3` uses a native binary; when npm has no prebuilt
-binary for the platform, installation needs Python, `make`, and a C/C++
-compiler.
-
-Source installation is also supported:
+send selected content to the Claude provider. Registry publication is deferred,
+so install from source:
 
 ```bash
 git clone https://github.com/uttambharadwaj/kb-graph.git
@@ -26,12 +13,17 @@ node bin/kb.js setup
 node bin/kb.js status
 ```
 
+Do not use `npm install -g kb-graph`, npx, or a project-local dependency until
+a published package is linked from the README. `better-sqlite3` uses a native
+binary; when npm has no prebuilt binary for the platform, `npm ci` needs
+Python, `make`, and a C/C++ compiler.
+
 Keep a source checkout at a stable path. The generated Docker Compose option
-is source-only and requires an operator-provided Dockerfile. npm and source
-setup both store mutable state outside the install under
+requires an operator-provided Dockerfile. Setup stores mutable state outside
+the checkout under
 `${KB_DIR:-~/.knowledge-base}`: `.env`, the database, logs, and the
 `models/` embedding cache. The model downloads on first semantic use and is not
-part of the npm tarball, so its disk use is additional. Package upgrades do not
+part of the source tree, so its disk use is additional. Source updates do not
 replace that state.
 
 ## Verify the install
@@ -40,7 +32,7 @@ Run the checks that match the agents you selected:
 
 ```bash
 # Store and HTTP server status
-kb status
+node bin/kb.js status
 
 # MCP registration files (run the checks for selected agents)
 grep -q 'knowledge-base' ~/.claude.json && echo 'Claude MCP configured'
@@ -80,7 +72,7 @@ a **KB BRIEFING**. Then ask the agent to save a synthetic onboarding note and
 verify it:
 
 ```bash
-kb search onboarding
+node bin/kb.js search onboarding
 ```
 
 ## What runs automatically
@@ -89,6 +81,11 @@ kb search onboarding
 - Every prompt: sparse hints for Claude Code and Codex only.
 - Before relevant shell commands: advisory or explicitly pinned trigger checks
   for Claude Code and Codex only.
+- Cursor Desktop: default-off lifecycle queueing from native `stop` and
+  `preCompact`; opt in with `KB_DIR/cursor-capture-enabled`. The disable marker
+  wins. The Desktop queue-to-indexed-note round trip is proven; `sessionEnd`
+  has no usable transcript path, and Cursor CLI/headless lifecycle support is
+  not yet proven.
 - 03:30 daily: best-effort transcript harvest from Claude Code, Codex, and
   Cursor.
 - Every 5 minutes: vault reindex and local embeddings.
@@ -121,8 +118,8 @@ Storage and retrieval are local. Harvesting and other AI curation invoke the
 authenticated Claude CLI and may send selected transcript or note content to
 its configured provider.
 
-After an npm upgrade or source update, run `kb migrate --check`, apply pending
-migrations, and restart `kb start`, `kb serve`, and agent sessions. Re-run
-`kb setup` and `kb register --force` after moving a source checkout or when a
-Node version manager changes the global npm prefix; the prior registrations
-still point at the old absolute path. Restart Cursor after re-registration.
+After a source update, run `node bin/kb.js migrate --check`, apply pending
+migrations, and restart configured services and agent sessions. Re-run
+`node bin/kb.js setup` and `node bin/kb.js register --force` after moving a
+source checkout; prior registrations still point at the old absolute path.
+Restart Cursor after re-registration.

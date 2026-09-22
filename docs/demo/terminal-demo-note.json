@@ -1,0 +1,7 @@
+{
+  "title": "Deploys reset shared retry budgets",
+  "content": "When a deployment activates, reset each worker's retry budget before accepting new work. This prevents stale retry state from crossing releases.",
+  "type": "lesson",
+  "tags": "demo,retries",
+  "project": "demo-app"
+}
