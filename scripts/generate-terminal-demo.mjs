@@ -16,23 +16,33 @@ const FIXTURE = 'docs/demo/terminal-demo-note.json';
 const JSON_OUTPUT = resolve(ROOT, 'docs/assets/terminal-demo.json');
 const SVG_OUTPUT = resolve(ROOT, 'docs/assets/terminal-demo.svg');
 const WIDTH = 1200;
-const MARGIN = 24;
-const GAP = 18;
+const OUTER_MARGIN = 24;
+const PANEL_GAP = 18;
 const PANEL_WIDTH = 372;
-const HEADER_HEIGHT = 78;
+const PANEL_HEADER_HEIGHT = 78;
+const PANEL_PADDING = 18;
+const BODY_TOP_SPACING = 28;
+const FIRST_LINE_BASELINE = 29;
+const BODY_BOTTOM_PADDING = 20;
 const LINE_HEIGHT = 18;
 const MAX_LINE_CHARS = 43;
+const FORWARDED_ENVIRONMENT_VARIABLES = [
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'HF_ENDPOINT',
+];
 
 function childEnvironment(tempRoot) {
-  const optional = [
-    'HTTP_PROXY',
-    'HTTPS_PROXY',
-    'NO_PROXY',
-    'http_proxy',
-    'https_proxy',
-    'no_proxy',
-    'HF_ENDPOINT',
-  ];
+  const forwardedEnvironment = Object.fromEntries(
+    FORWARDED_ENVIRONMENT_VARIABLES
+      .filter(name => process.env[name] != null)
+      .map(name => [name, process.env[name]]),
+  );
+
   return {
     PATH: process.env.PATH,
     HOME: join(tempRoot, 'home'),
@@ -44,9 +54,7 @@ function childEnvironment(tempRoot) {
     KB_DIR: join(tempRoot, 'kb'),
     OBSIDIAN_VAULT_PATH: join(tempRoot, 'vault'),
     KB_EMBEDDING_CACHE_DIR: resolve(ROOT, '.cache/test-embedding'),
-    ...Object.fromEntries(optional.flatMap(name =>
-      process.env[name] == null ? [] : [[name, process.env[name]]]
-    )),
+    ...forwardedEnvironment,
   };
 }
 
@@ -62,7 +70,7 @@ function normalizeOutput(output, tempRoot) {
     .trimEnd();
 }
 
-function runKb(args, { env, tempRoot, input } = {}) {
+function runKb(args, { env, tempRoot, input }) {
   const child = spawnSync(process.execPath, ['bin/kb.js', ...args], {
     cwd: ROOT,
     env,
@@ -155,31 +163,54 @@ function panelLines(panel) {
   );
 }
 
+function renderPanelBody(lines, x) {
+  return lines
+    .map((line, lineIndex) => {
+      if (line.kind === 'spacer') return '';
+      const color = line.kind === 'command' ? '#f8f8f2' : '#d6dae4';
+      const y =
+        OUTER_MARGIN
+        + PANEL_HEADER_HEIGHT
+        + FIRST_LINE_BASELINE
+        + lineIndex * LINE_HEIGHT;
+      return `    <text x="${x + PANEL_PADDING}" y="${y}" fill="${color}" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">${xmlEscape(line.text)}</text>`;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function renderPanel(panel, lines, index, panelHeight) {
+  const x = OUTER_MARGIN + index * (PANEL_WIDTH + PANEL_GAP);
+  const body = renderPanelBody(lines, x);
+
+  return [
+    `  <g id="panel-${xmlEscape(panel.id)}">`,
+    `    <rect x="${x}" y="${OUTER_MARGIN}" width="${PANEL_WIDTH}" height="${panelHeight}" rx="14" fill="#151821" stroke="#303746"/>`,
+    `    <circle cx="${x + 22}" cy="${OUTER_MARGIN + 24}" r="5" fill="#ff5f57"/>`,
+    `    <circle cx="${x + 38}" cy="${OUTER_MARGIN + 24}" r="5" fill="#febc2e"/>`,
+    `    <circle cx="${x + 54}" cy="${OUTER_MARGIN + 24}" r="5" fill="#28c840"/>`,
+    `    <text x="${x + PANEL_PADDING}" y="${OUTER_MARGIN + 51}" fill="#f8f8f2" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 15px; font-weight: 700;">${xmlEscape(panel.step)} · ${xmlEscape(panel.title)}</text>`,
+    `    <text x="${x + PANEL_PADDING}" y="${OUTER_MARGIN + 67}" fill="#8b93a7" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 10px;">${xmlEscape(panel.subtitle)}</text>`,
+    `    <rect x="${x + 1}" y="${OUTER_MARGIN + PANEL_HEADER_HEIGHT - 1}" width="${PANEL_WIDTH - 2}" height="1" fill="#303746"/>`,
+    body,
+    '  </g>',
+  ].join('\n');
+}
+
 export function renderTerminalDemo(capture) {
   const linesByPanel = capture.panels.map(panelLines);
   const lineCount = Math.max(...linesByPanel.map(lines => lines.length));
-  const panelHeight = HEADER_HEIGHT + 28 + lineCount * LINE_HEIGHT + 20;
-  const height = MARGIN * 2 + panelHeight;
-  const panels = capture.panels.map((panel, index) => {
-    const x = MARGIN + index * (PANEL_WIDTH + GAP);
-    const body = linesByPanel[index].map((line, lineIndex) => {
-      if (line.kind === 'spacer') return '';
-      const color = line.kind === 'command' ? '#f8f8f2' : '#d6dae4';
-      return `    <text x="${x + 18}" y="${MARGIN + HEADER_HEIGHT + 29 + lineIndex * LINE_HEIGHT}" fill="${color}" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">${xmlEscape(line.text)}</text>`;
-    }).filter(Boolean).join('\n');
-    return [
-      `  <g id="panel-${xmlEscape(panel.id)}">`,
-      `    <rect x="${x}" y="${MARGIN}" width="${PANEL_WIDTH}" height="${panelHeight}" rx="14" fill="#151821" stroke="#303746"/>`,
-      `    <circle cx="${x + 22}" cy="${MARGIN + 24}" r="5" fill="#ff5f57"/>`,
-      `    <circle cx="${x + 38}" cy="${MARGIN + 24}" r="5" fill="#febc2e"/>`,
-      `    <circle cx="${x + 54}" cy="${MARGIN + 24}" r="5" fill="#28c840"/>`,
-      `    <text x="${x + 18}" y="${MARGIN + 51}" fill="#f8f8f2" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 15px; font-weight: 700;">${xmlEscape(panel.step)} · ${xmlEscape(panel.title)}</text>`,
-      `    <text x="${x + 18}" y="${MARGIN + 67}" fill="#8b93a7" style="font-family: -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; font-size: 10px;">${xmlEscape(panel.subtitle)}</text>`,
-      `    <rect x="${x + 1}" y="${MARGIN + HEADER_HEIGHT - 1}" width="${PANEL_WIDTH - 2}" height="1" fill="#303746"/>`,
-      body,
-      '  </g>',
-    ].join('\n');
-  }).join('\n');
+  const panelHeight =
+    PANEL_HEADER_HEIGHT
+    + BODY_TOP_SPACING
+    + lineCount * LINE_HEIGHT
+    + BODY_BOTTOM_PADDING;
+  const height = OUTER_MARGIN * 2 + panelHeight;
+  const panels = capture.panels
+    .map((panel, index) =>
+      renderPanel(panel, linesByPanel[index], index, panelHeight)
+    )
+    .join('\n');
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -207,12 +238,13 @@ export function generateTerminalDemo() {
 }
 
 function main() {
-  const check = process.argv.slice(2);
-  if (check.some(arg => arg !== '--check') || check.length > 1) {
+  const args = process.argv.slice(2);
+  const checkMode = args.length === 1 && args[0] === '--check';
+  if (args.length > 0 && !checkMode) {
     throw new Error('Usage: node scripts/generate-terminal-demo.mjs [--check]');
   }
   const generated = generateTerminalDemo();
-  if (check[0] === '--check') {
+  if (checkMode) {
     if (
       readFileSync(JSON_OUTPUT, 'utf8') !== generated.json
       || readFileSync(SVG_OUTPUT, 'utf8') !== generated.svg
