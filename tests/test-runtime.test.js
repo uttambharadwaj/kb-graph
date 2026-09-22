@@ -18,6 +18,7 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
 const workflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
 const preflight = readFileSync(new URL('../scripts/test-preflight.mjs', import.meta.url), 'utf8');
+const sourceSmoke = readFileSync(new URL('../scripts/smoke-source.sh', import.meta.url), 'utf8');
 
 const supportedNodeRange = '22.x || 24.x || 26.x';
 
@@ -49,10 +50,36 @@ describe('test runtime contract', () => {
     assert.strictEqual((workflow.match(/node: \[22, 24, 26\]/g) || []).length, 1);
   });
 
+  it('gates clean source setup on Linux and macOS without embedding preflight', () => {
+    assert.strictEqual(pkg.scripts['smoke:source'], 'bash scripts/smoke-source.sh');
+    const sourceJobStart = workflow.indexOf('source-install-smoke:');
+    const sourceJobEnd = workflow.indexOf('package-smoke:');
+    assert.ok(sourceJobStart >= 0 && sourceJobEnd > sourceJobStart);
+    const sourceJob = workflow.slice(sourceJobStart, sourceJobEnd);
+    assert.match(sourceJob, /timeout-minutes: 5/);
+    assert.match(sourceJob, /os: \[ubuntu-latest, macos-latest\]/);
+    assert.match(sourceJob, /node-version: 22/);
+    assert.match(sourceJob, /run: npm ci/);
+    assert.match(sourceJob, /run: npm run smoke:source/);
+    assert.doesNotMatch(sourceJob, /test:preflight|ci-embedding/);
+    assert.match(sourceSmoke, /node bin\/kb\.js setup --auto/);
+    assert.match(sourceSmoke, /--agents=claude/);
+    assert.doesNotMatch(sourceSmoke, /--agents=ollama|--no-load-jobs/);
+    assert.match(sourceSmoke, /\.claude\.json/);
+    assert.match(sourceSmoke, /node bin\/kb\.js status/);
+    assert.match(sourceSmoke, /trap cleanup EXIT/);
+    assert.match(sourceSmoke, /trap 'exit 129' HUP/);
+    assert.match(sourceSmoke, /trap 'exit 130' INT/);
+    assert.match(sourceSmoke, /trap 'exit 143' TERM/);
+    assert.doesNotMatch(sourceSmoke, /trap cleanup EXIT HUP INT TERM/);
+  });
+
   it('pins approved Node 24 actions and restores the model cache before preflight', () => {
     const actions = [...workflow.matchAll(/uses:\s+([^@\s]+)@([^\s#]+)/g)]
       .map(([, name, revision]) => ({ name, revision }));
     assert.deepStrictEqual(actions, [
+      { name: 'actions/checkout', revision: '3d3c42e5aac5ba805825da76410c181273ba90b1' },
+      { name: 'actions/setup-node', revision: '820762786026740c76f36085b0efc47a31fe5020' },
       { name: 'actions/checkout', revision: '3d3c42e5aac5ba805825da76410c181273ba90b1' },
       { name: 'actions/setup-node', revision: '820762786026740c76f36085b0efc47a31fe5020' },
       { name: 'actions/checkout', revision: '3d3c42e5aac5ba805825da76410c181273ba90b1' },
