@@ -186,6 +186,30 @@ retain provenance and history; reviewed projections represent current state
 without rewriting raw evidence. Weekly synthesis reports themes,
 contradictions, and cross-domain links.
 
+## Why not just CLAUDE.md, a Memory Bank, or basic MCP memory?
+
+Use `CLAUDE.md` and equivalent rule files for stable instructions that you
+intend to curate by hand. They are simpler than kb-graph, and a checked-in rule
+file can be shared by every client that reads it. What the file does not provide
+by itself is indexed history, evidence and provenance, lifecycle capture, or
+supersession when a decision changes.
+
+A folder of session notes or a Memory Bank improves continuity and stays easy
+to inspect. The tradeoff is maintenance: notes accumulate, retrieval depends on
+what the agent happens to read, and stale statements can remain beside their
+replacements. kb-graph keeps Markdown as the source you can inspect while
+adding indexed retrieval, provenance, lifecycle capture, and supersession.
+Scheduled reconciliation is narrower: it revisits supported fact-backed
+decisions whose evidence came from harvest.
+
+Basic MCP memory servers are a good fit when you need a small
+store-and-retrieve tool. kb-graph is intentionally heavier because it also
+tries to maintain shared truth over time. That means a database, optional
+resident daemon, scheduled jobs, and more operational surface. It is not the
+right choice if a checked-in rule file is enough. Storage and retrieval stay
+local, but Claude-backed curation can send selected content to the configured
+provider.
+
 ## Architecture
 
 ```text
