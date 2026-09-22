@@ -2,7 +2,7 @@ import { createInterface } from 'readline';
 import { randomBytes } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { homedir, platform, release, type as osType } from 'os';
-import { join, resolve } from 'path';
+import { basename, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import Database from 'better-sqlite3';
@@ -40,6 +40,25 @@ function outln(text = '') { process.stdout.write(text + '\n'); }
 
 function genHex(bytes = 32) { return randomBytes(bytes).toString('hex'); }
 function genBase64(bytes = 32) { return randomBytes(bytes).toString('base64'); }
+function shellWord(value) {
+  const text = String(value);
+  return /^[A-Za-z0-9_./:-]+$/.test(text)
+    ? text
+    : `'${text.replaceAll("'", "'\"'\"'")}'`;
+}
+
+export function setupCliCommand({
+  argvPath = process.argv[1],
+  projectRoot = PROJECT_ROOT,
+  cwd = process.cwd(),
+} = {}) {
+  const invokedName = basename(argvPath || '').replace(/\.(cmd|exe)$/i, '');
+  const installedPackage = resolve(projectRoot).split(sep).includes('node_modules');
+  if (invokedName === 'kb' || installedPackage) return 'kb';
+
+  const entrypoint = join(projectRoot, 'bin', 'kb.js');
+  return `node ${shellWord(relative(cwd, entrypoint) || basename(entrypoint))}`;
+}
 
 function which(cmd) {
   try {
@@ -795,7 +814,9 @@ function applyConfig(cfg) {
 // Print summary
 // ---------------------------------------------------------------------------
 
-export function formatSetupSummary(results) {
+export function formatSetupSummary(results, {
+  cliCommand = setupCliCommand(),
+} = {}) {
   const lines = [
     '',
     '========================================',
@@ -805,7 +826,7 @@ export function formatSetupSummary(results) {
   ];
 
   for (const step of results.steps) {
-    lines.push(`  [done] ${step.action}`);
+    lines.push(`  [${step.error ? 'warning' : 'done'}] ${step.action}`);
     if (step.path) lines.push(`         ${step.path}`);
     if (step.hint) lines.push(`         ${step.hint}`);
     if (step.error) lines.push(`         Error: ${step.error}`);
@@ -828,10 +849,10 @@ export function formatSetupSummary(results) {
   lines.push('  Next steps:');
   lines.push('    1. Review .env and adjust if needed');
   if (results.ingestPath) {
-    lines.push(`    2. Run: kb ingest ${results.ingestPath}`);
-    lines.push('    3. Run: kb start');
+    lines.push(`    2. Run: ${cliCommand} ingest ${shellWord(results.ingestPath)}`);
+    lines.push(`    3. Run: ${cliCommand} start`);
   } else {
-    lines.push('    2. Run: kb start');
+    lines.push(`    2. Run: ${cliCommand} start`);
   }
   lines.push(`    Dashboard: ${formatHttpServerUrl({
     host: cfg.host || DEFAULT_HTTP_HOST,

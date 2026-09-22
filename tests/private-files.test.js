@@ -88,6 +88,52 @@ test('setup summary never renders passwords or API keys', () => {
   assert.match(text, new RegExp(`Credentials:\\s+stored in ${join(KB_DIR, '.env')}`));
 });
 
+test('setup next steps use the source entrypoint when run from a checkout', () => {
+  assert.equal(setup.setupCliCommand({
+    argvPath: '/workspace/kb-graph/bin/kb.js',
+    projectRoot: '/workspace/kb-graph',
+    cwd: '/workspace/kb-graph',
+  }), 'node bin/kb.js');
+
+  const text = setup.formatSetupSummary({
+    steps: [],
+    ingestPath: '/tmp/vault with spaces',
+    cfg: { port: 3838, vaultPath: '/tmp/vault with spaces', agents: [], deploy: 'manual' },
+  }, { cliCommand: 'node bin/kb.js' });
+
+  assert.match(text, /Run: node bin\/kb\.js ingest '\/tmp\/vault with spaces'/);
+  assert.match(text, /Run: node bin\/kb\.js start/);
+});
+
+test('setup next steps keep the global kb command for installed shims', () => {
+  assert.equal(setup.setupCliCommand({
+    argvPath: '/usr/local/bin/kb',
+    projectRoot: '/usr/local/lib/node_modules/kb-graph',
+    cwd: '/tmp',
+  }), 'kb');
+
+  const text = setup.formatSetupSummary({
+    steps: [],
+    cfg: { port: 3838, vaultPath: '', agents: [], deploy: 'manual' },
+  }, { cliCommand: 'kb' });
+
+  assert.match(text, /Run: kb start/);
+  assert.doesNotMatch(text, /node bin\/kb\.js/);
+});
+
+test('setup summary does not label refused steps as done', () => {
+  const text = setup.formatSetupSummary({
+    steps: [{
+      action: 'Refused to move the MCP registration for cursor',
+      error: 'points at another checkout',
+    }],
+    cfg: { port: 3838, vaultPath: '', agents: ['cursor'], deploy: 'manual' },
+  }, { cliCommand: 'kb' });
+
+  assert.match(text, /\[warning\] Refused to move the MCP registration for cursor/);
+  assert.doesNotMatch(text, /\[done\] Refused to move/);
+});
+
 test('interactive secret prompts do not render their default value', async () => {
   assert.equal(typeof setup.askSecret, 'function');
   let renderedQuestion = '';

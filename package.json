@@ -41,6 +41,7 @@
   ],
   "scripts": {
     "pretest": "npm run test:preflight",
+    "smoke:source": "bash scripts/smoke-source.sh",
     "test": "npm run test:suite",
     "test:preflight": "node scripts/test-preflight.mjs",
     "test:suite": "node --test tests/*.test.js"
