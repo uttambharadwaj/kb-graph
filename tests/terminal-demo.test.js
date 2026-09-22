@@ -1,11 +1,23 @@
 import './helpers/tmp-kb.js';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
+  createExternalAgentCliSentinel,
+  EXPECTED_FRESH_STORE_WARNINGS,
   generateTerminalDemo,
+  normalizeFreshStoreHealth,
   renderTerminalDemo,
 } from '../scripts/generate-terminal-demo.mjs';
+import { assertPublicArtifactSafe } from './helpers/public-artifact-policy.js';
 
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const committedJson = read('docs/assets/terminal-demo.json');
@@ -38,15 +50,38 @@ describe('real-process terminal demo', () => {
 
   it('contains only public synthetic input and normalized captured output', () => {
     const publicBytes = `${fixture}\n${committedJson}\n${committedSvg}`;
-    const forbidden = [
-      /\/(?:Users|home)\//i,
-      /\b(?:tinyfish|mino)\b/i,
-      /\bPF-\d+\b/i,
-      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
-      /\b(?:Bearer\s+|sk-|ghp_|phc_|xox[baprs]-)[A-Za-z0-9._-]{8,}/i,
-    ];
-    for (const pattern of forbidden) assert.doesNotMatch(publicBytes, pattern);
+    assertPublicArtifactSafe(publicBytes);
     assert.doesNotMatch(publicBytes, /\d{4}-\d{2}-\d{2}-deploys-reset/);
+  });
+
+  it('refuses to hide an unexpected health warning', () => {
+    const expected = `health: ⚠ ${EXPECTED_FRESH_STORE_WARNINGS.join(' | ')}`;
+    assert.equal(
+      normalizeFreshStoreHealth(expected),
+      'health: ⚠ <expected fresh-store maintenance warnings omitted>',
+    );
+    assert.throws(
+      () => normalizeFreshStoreHealth(`${expected} | unexpected provider failure`),
+      /fresh-store health warnings changed.+unexpected provider failure/,
+    );
+  });
+
+  it('fails if the external-agent invocation sentinel is called', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'kb-demo-agent-sentinel-test-'));
+    try {
+      const sentinel = createExternalAgentCliSentinel(tempRoot);
+      sentinel.assertNotInvoked();
+      const invoked = spawnSync(sentinel.executable, [], {
+        env: { ...process.env, ...sentinel.environment },
+      });
+      assert.equal(invoked.status, 97);
+      assert.throws(
+        () => sentinel.assertNotInvoked(),
+        /external agent CLI was invoked/,
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it('is the README hero without pretending to record cross-agent UI', () => {

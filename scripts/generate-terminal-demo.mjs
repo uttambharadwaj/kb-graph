@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -26,6 +27,14 @@ const FIRST_LINE_BASELINE = 29;
 const BODY_BOTTOM_PADDING = 20;
 const LINE_HEIGHT = 18;
 const MAX_LINE_CHARS = 43;
+export const EXPECTED_FRESH_STORE_WARNINGS = Object.freeze([
+  'reindex heartbeat never recorded — check com.kb.reindex launchd job',
+  'harvest never ran — check com.kb.harvest launchd job',
+  'synthesis never recorded — check com.kb.synthesis launchd job',
+  'reconcile heartbeat never recorded — check com.kb.reconcile launchd job',
+]);
+const NORMALIZED_FRESH_STORE_HEALTH =
+  'health: ⚠ <expected fresh-store maintenance warnings omitted>';
 const FORWARDED_ENVIRONMENT_VARIABLES = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -36,7 +45,7 @@ const FORWARDED_ENVIRONMENT_VARIABLES = [
   'HF_ENDPOINT',
 ];
 
-function childEnvironment(tempRoot) {
+function childEnvironment(tempRoot, externalAgentEnvironment) {
   const forwardedEnvironment = Object.fromEntries(
     FORWARDED_ENVIRONMENT_VARIABLES
       .filter(name => process.env[name] != null)
@@ -55,22 +64,52 @@ function childEnvironment(tempRoot) {
     OBSIDIAN_VAULT_PATH: join(tempRoot, 'vault'),
     KB_EMBEDDING_CACHE_DIR: resolve(ROOT, '.cache/test-embedding'),
     ...forwardedEnvironment,
+    ...externalAgentEnvironment,
   };
 }
 
-function normalizeOutput(output, tempRoot) {
-  return output
+export function normalizeFreshStoreHealth(output) {
+  const healthLines = output.match(/^health: .*$/gm) ?? [];
+  if (healthLines.length !== 1 || !healthLines[0].startsWith('health: ⚠ ')) {
+    throw new Error(
+      `expected exactly one fresh-store warning line, found ${healthLines.length}`,
+    );
+  }
+
+  const warnings = healthLines[0].slice('health: ⚠ '.length).split(' | ');
+  const expected = new Set(EXPECTED_FRESH_STORE_WARNINGS);
+  const actual = new Set(warnings);
+  const missing = EXPECTED_FRESH_STORE_WARNINGS.filter(warning => !actual.has(warning));
+  const unexpected = warnings.filter(warning => !expected.has(warning));
+  if (
+    warnings.length !== EXPECTED_FRESH_STORE_WARNINGS.length
+    || missing.length
+    || unexpected.length
+  ) {
+    throw new Error(
+      `fresh-store health warnings changed; missing: ${missing.join('; ') || 'none'}; `
+      + `unexpected: ${unexpected.join('; ') || 'none'}`,
+    );
+  }
+
+  return output.replace(healthLines[0], NORMALIZED_FRESH_STORE_HEALTH);
+}
+
+function normalizeOutput(output, tempRoot, { expectFreshStoreHealth = false } = {}) {
+  const portable = output
     .replaceAll(ROOT, '<repo>')
     .replaceAll(tempRoot, '<isolated>')
-    .replace(/\b\d{4}-\d{2}-\d{2}-(?=[a-z0-9-]+\.md\b)/g, '<date>-')
-    .replace(
-      /^health: ⚠ .*$/m,
-      'health: ⚠ <expected fresh-store maintenance warnings omitted>',
-    )
+    .replace(/\b\d{4}-\d{2}-\d{2}-(?=[a-z0-9-]+\.md\b)/g, '<date>-');
+  return (expectFreshStoreHealth ? normalizeFreshStoreHealth(portable) : portable)
     .trimEnd();
 }
 
-function runKb(args, { env, tempRoot, input }) {
+function runKb(args, {
+  env,
+  tempRoot,
+  input,
+  expectFreshStoreHealth = false,
+}) {
   const child = spawnSync(process.execPath, ['bin/kb.js', ...args], {
     cwd: ROOT,
     env,
@@ -87,12 +126,39 @@ function runKb(args, { env, tempRoot, input }) {
   if (child.stderr.trim()) {
     throw new Error(`kb ${args.join(' ')} wrote to stderr\n${child.stderr}`);
   }
-  return normalizeOutput(child.stdout, tempRoot);
+  return normalizeOutput(child.stdout, tempRoot, { expectFreshStoreHealth });
+}
+
+export function createExternalAgentCliSentinel(tempRoot) {
+  const binDir = join(tempRoot, 'external-agent-sentinel-bin');
+  const marker = join(tempRoot, 'external-agent-cli-invoked');
+  const executable = join(binDir, 'claude');
+  const markerLiteral = marker.replaceAll("'", "'\"'\"'");
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(
+    executable,
+    `#!/bin/sh\nprintf invoked > '${markerLiteral}'\nexit 97\n`,
+    { mode: 0o700 },
+  );
+
+  return {
+    executable,
+    environment: {
+      CLAUDE_PATH: executable,
+      PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    },
+    assertNotInvoked() {
+      if (existsSync(marker)) {
+        throw new Error('external agent CLI was invoked during terminal demo generation');
+      }
+    },
+  };
 }
 
 export function captureTerminalDemo() {
   const tempRoot = mkdtempSync(join(tmpdir(), 'kb-graph-terminal-demo-'));
-  const env = childEnvironment(tempRoot);
+  const externalAgent = createExternalAgentCliSentinel(tempRoot);
+  const env = childEnvironment(tempRoot, externalAgent.environment);
   mkdirSync(env.HOME, { recursive: true });
   mkdirSync(env.OBSIDIAN_VAULT_PATH, { recursive: true });
 
@@ -107,8 +173,9 @@ export function captureTerminalDemo() {
     );
     const briefing = runKb(
       ['wakeup-hook'],
-      { env, tempRoot, input: '{}\n' },
+      { env, tempRoot, input: '{}\n', expectFreshStoreHealth: true },
     );
+    externalAgent.assertNotInvoked();
 
     return {
       title: 'One process learns; fresh processes retrieve it',

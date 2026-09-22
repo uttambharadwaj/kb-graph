@@ -7,6 +7,7 @@ import {
   hasRenderDrift,
   renderLoopFigure,
 } from '../scripts/render-loop-figure.mjs';
+import { assertPublicArtifactSafe } from './helpers/public-artifact-policy.js';
 
 function readText(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
@@ -44,16 +45,7 @@ describe('README knowledge-loop figure', () => {
   });
 
   it('excludes known private-data patterns from the fixture and SVG', () => {
-    const publicBytes = `${fixtureText}\n${committedSvg}`;
-    const forbidden = [
-      /\/(?:Users|home)\//i,
-      /\b(?:tinyfish|mino)\b/i,
-      /\bPF-\d+\b/i,
-      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
-      /\b(?:Bearer\s+|sk-|ghp_|phc_|xox[baprs]-)[A-Za-z0-9._-]{8,}/i,
-    ];
-
-    for (const pattern of forbidden) assert.doesNotMatch(publicBytes, pattern);
+    assertPublicArtifactSafe(`${fixtureText}\n${committedSvg}`);
   });
 
   it('uses current runtime prefixes and handler response shape', () => {
