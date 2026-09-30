@@ -33,8 +33,13 @@ test('installs the closed bundled skill set and reruns idempotently', () => {
   const first = installBundledSkills({ home, projectRoot });
   const second = installBundledSkills({ home, projectRoot });
 
-  assert.deepEqual(first.map(item => item.action), BUNDLED_SKILL_NAMES.map(name => `Installed ${name} skill`));
-  assert.deepEqual(second.map(item => item.action), BUNDLED_SKILL_NAMES.map(name => `Skill ${name} already present — left untouched`));
+  assert.deepEqual(first.map(item => item.action), [...BUNDLED_SKILL_NAMES, ...BUNDLED_SKILL_NAMES].map(name => `Installed ${name} skill`));
+  assert.deepEqual(second.map(item => item.action), [...BUNDLED_SKILL_NAMES, ...BUNDLED_SKILL_NAMES].map(name => `Skill ${name} already present — left untouched`));
+  for (const directory of ['.claude', '.agents']) {
+    for (const name of BUNDLED_SKILL_NAMES) {
+      assert.equal(readFileSync(join(home, directory, 'skills', name, 'SKILL.md'), 'utf8'), `${name} canonical\n`);
+    }
+  }
 });
 
 test('preserves customized skills byte-for-byte', () => {
@@ -42,10 +47,14 @@ test('preserves customized skills byte-for-byte', () => {
   const destination = join(home, '.claude', 'skills', 'debrief', 'SKILL.md');
   mkdirSync(join(destination, '..'), { recursive: true });
   writeFileSync(destination, 'user customization\n');
+  const codexDestination = join(home, '.agents', 'skills', 'debrief', 'SKILL.md');
+  mkdirSync(join(codexDestination, '..'), { recursive: true });
+  writeFileSync(codexDestination, 'codex customization\n');
 
   installBundledSkills({ home, projectRoot });
 
   assert.equal(readFileSync(destination, 'utf8'), 'user customization\n');
+  assert.equal(readFileSync(codexDestination, 'utf8'), 'codex customization\n');
   assert.equal(
     readFileSync(join(home, '.claude', 'skills', 'kb-workflow', 'SKILL.md'), 'utf8'),
     'kb-workflow canonical\n',
@@ -62,7 +71,7 @@ test('rolls back every newly installed skill when a later commit fails', () => {
       projectRoot,
       rename(from, to) {
         commits += 1;
-        if (commits === 2) throw new Error('injected skill commit failure');
+        if (commits === 4) throw new Error('injected skill commit failure');
         renameSync(from, to);
       },
     }),
@@ -71,6 +80,7 @@ test('rolls back every newly installed skill when a later commit fails', () => {
 
   for (const name of BUNDLED_SKILL_NAMES) {
     assert.equal(existsSync(join(home, '.claude', 'skills', name)), false);
+    assert.equal(existsSync(join(home, '.agents', 'skills', name)), false);
   }
 });
 

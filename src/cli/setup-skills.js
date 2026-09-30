@@ -19,22 +19,24 @@ export function installBundledSkills({
   if (!projectRoot) throw new Error('installBundledSkills requires projectRoot');
 
   const sourceRoot = join(projectRoot, 'skills');
-  const destinationRoot = join(home, '.claude', 'skills');
+  const destinationRoots = [join(home, '.claude', 'skills'), join(home, '.agents', 'skills')];
   const results = [];
   const staged = [];
   const committed = [];
   try {
-    for (const name of BUNDLED_SKILL_NAMES) {
-      const destination = join(destinationRoot, name);
-      if (exists(destination)) {
-        results.push({ action: `Skill ${name} already present — left untouched`, path: destination });
-        continue;
-      }
+    for (const destinationRoot of destinationRoots) {
+      for (const name of BUNDLED_SKILL_NAMES) {
+        const destination = join(destinationRoot, name);
+        if (exists(destination)) {
+          results.push({ action: `Skill ${name} already present — left untouched`, path: destination });
+          continue;
+        }
 
-      mkdir(destinationRoot, { recursive: true });
-      const temporaryPath = `${destination}.kb-stage-${process.pid}-${randomUUID()}`;
-      staged.push({ name, destination, temporaryPath });
-      copy(join(sourceRoot, name), temporaryPath, { recursive: true });
+        mkdir(destinationRoot, { recursive: true });
+        const temporaryPath = `${destination}.kb-stage-${process.pid}-${randomUUID()}`;
+        staged.push({ name, destination, temporaryPath });
+        copy(join(sourceRoot, name), temporaryPath, { recursive: true });
+      }
     }
 
     for (const { name, destination, temporaryPath } of staged) {
