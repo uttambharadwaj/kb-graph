@@ -24,7 +24,7 @@ the command synchronizes its user config and the nearest workspace override.
 
 **How it works:** When activated, the skill content (~1500 tokens) is injected into the agent's context. It tells the agent the retrieval strategy, when to search, what to capture, and the self-learning pattern.
 
-**Install:** Installed automatically by `node bin/kb.js setup`. Manual: copy each directory under `skills/` into `~/.claude/skills/`.
+**Install:** Installed automatically by `node bin/kb.js setup` into `~/.claude/skills/` and `~/.agents/skills/` (Codex). Manual: copy each directory under `skills/` into the corresponding directory.
 
 **Token cost:** ~1500 tokens when loaded. Zero when not loaded.
 

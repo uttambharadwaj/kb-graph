@@ -76,7 +76,7 @@ Depending on your answers, `node bin/kb.js setup`:
   prints the hand-managed `config.toml` block;
 - installs supported hooks for Claude Code, Codex, and Cursor;
 - installs four launchd or systemd-user jobs;
-- copies bundled skills into `~/.claude/skills` without overwriting existing
+- copies bundled skills into `~/.claude/skills` and `~/.agents/skills` (Codex) without overwriting existing
   customizations; and
 - optionally configures the HTTP server as a service.
 
@@ -113,8 +113,8 @@ conversation/session identity for correlation.
 - **Other clients:** point any MCP client at
   `node /absolute/path/to/kb-graph/bin/kb.js mcp-shim`.
 
-Bundled `/debrief` and `kb-workflow` skills are installed only for Claude's
-skill directory. Other agents can call the underlying MCP tools directly.
+Bundled `debrief` and `kb-workflow` skills are installed for Claude Code and
+Codex. Other agents can call the underlying MCP tools directly.
 Lifecycle hooks enqueue capture requests; the optional `kb serve` daemon is
 what drains that queue. Without it, the nightly transcript sweep remains the
 automatic capture path. Cursor Desktop lifecycle capture is opt-in because
