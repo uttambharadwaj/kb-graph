@@ -146,16 +146,6 @@ describe('wakeup-hook post-compact recovery', () => {
     assert.match(stdout, /body worth recovering/);
   });
 
-  it('does not append anything when source is not compact', () => {
-    const db = getDb();
-    insertStateNote(db, { title: 'State: no injection', content: 'should not appear' });
-
-    const stdout = runHook('wakeup-hook', { session_id: 'sess-not-compact' });
-
-    assert.doesNotMatch(stdout, /post-compact recovery/);
-    assert.doesNotMatch(stdout, /should not appear/);
-  });
-
   it('prefers the state note this session read over the most recently updated one', () => {
     const db = getDb();
     const older = insertStateNote(db, { title: 'State: session read', content: 'what this session was actually doing', updatedAt: '2020-01-01T00:00:00Z' });
@@ -187,6 +177,31 @@ describe('wakeup-hook post-compact recovery', () => {
     assert.match(stdout, new RegExp(`\\[truncated at 6000 chars — kb_read\\(${id}\\) for the rest\\]`));
     assert.ok(!stdout.includes(longContent), 'full untruncated content should not appear');
     assert.ok(stdout.includes('x'.repeat(6000)), 'truncated content up to the cap should appear');
+  });
+
+  it('includes only the newest state note at session start', () => {
+    const db = getDb();
+    insertStateNote(db, { title: 'State: startup older', content: 'older workstream body', updatedAt: '2035-01-01T00:00:00Z' });
+    const id = insertStateNote(db, { title: 'State: startup current', content: 'current workstream body', updatedAt: '2035-06-01T00:00:00Z' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-startup-current' });
+
+    assert.match(stdout, new RegExp(`--- Current workstream: State: startup current \\(#${id}\\) ---`));
+    assert.match(stdout, /current workstream body/);
+    assert.doesNotMatch(stdout, /older workstream body/);
+    assert.doesNotMatch(stdout, /post-compact recovery/);
+  });
+
+  it('truncates the session-start workstream at the same cap', () => {
+    const db = getDb();
+    const longContent = 'y'.repeat(7000);
+    const id = insertStateNote(db, { title: 'State: startup oversized', content: longContent, updatedAt: '2035-12-01T00:00:00Z' });
+
+    const stdout = runHook('wakeup-hook', { session_id: 'sess-startup-truncate' });
+
+    assert.match(stdout, new RegExp(`\\[truncated at 6000 chars — kb_read\\(${id}\\) for the rest\\]`));
+    assert.ok(!stdout.includes(longContent), 'full untruncated content should not appear');
+    assert.ok(stdout.includes('y'.repeat(6000)), 'truncated content up to the cap should appear');
   });
 });
 
@@ -441,7 +456,7 @@ describe('is_test flag', () => {
 // own fixture being the freshest state note in the shared per-file DB.
 describe('wakeup-hook briefing cut to top 3 state notes', () => {
   function activeWorkstreamsSection(stdout) {
-    const start = stdout.indexOf('Active workstreams (kb_read for current state):');
+    const start = stdout.indexOf('Active workstreams (newest included below; kb_read the others):');
     const end = stdout.indexOf('Recently updated:');
     return stdout.slice(start, end);
   }

@@ -49,10 +49,21 @@ function activeStateNote(db, session, states) {
 // — this is injected on top of a context that just got compacted for size.
 const ACTIVE_NOTE_CAP = 6000;
 
-// Measured: 6 of 9 state notes had zero reads across ~150 briefing exposures
-// (4.9% event follow-through) — printing 8 was mostly wasted tokens. Cut to
-// the 3 most-recent; the rest are one kb_search/kb_read away.
+// Measured twice: 4.9% follow-through when eight titles were printed, then
+// 1/414 session-start briefings (2026-09-11 through 2026-10-03) after the
+// list was cut to three titles that said "kb_read for current state." The
+// titles are not what a session starts knowing. Include the newest note's
+// body, and keep the other two as titles.
 const BRIEFING_STATE_LIMIT = 3;
+
+function appendBoundedNote(lines, { heading, title, documentId, content, cap }) {
+  const truncated = content.length > cap;
+  lines.push(
+    `--- ${heading}: ${title} (#${documentId}) ---`,
+    truncated ? content.slice(0, cap) : content,
+    ...(truncated ? [`[truncated at ${cap} chars — kb_read(${documentId}) for the rest]`] : []),
+  );
+}
 
 const USAGE = 'Usage: kb wakeup-hook [--agent <claude|codex|cursor>]';
 
@@ -132,7 +143,7 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
       healthLine,
       ...(showTier ? [`standing: ${tiers.map(t => `${tierLabel(t.tier)} ${t.count}`).join(', ')} — ⚠ ${TIER.INFERRED} notes are unconfirmed model conclusions; confirm one with kb_promote when a session proves it`] : []),
       ...(states.length ? [
-        'Active workstreams (kb_read for current state):',
+        'Active workstreams (newest included below; kb_read the others):',
         ...states.map(s => `- #${s.document_id} ${s.title} (${showTier ? `${tierLabel(s.tier)}, ` : ''}as of ${s.updated_at?.slice(0, 10)})`),
         ...(stateCount > states.length ? ['More workstreams: kb_search(query, tags="state") or kb_read a state note by name.'] : []),
       ] : []),
@@ -141,6 +152,24 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
       'Before non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity); only a fresh reviewed projection is current state.',
       'At a durable boundary, call kb_write directly; it owns duplicate gating and fails closed. Search and read before correcting an existing note, then pass supersedes. Lifecycle capture is automatic; /debrief is the higher-fidelity pass.',
     ];
+
+    if (hookInput.source !== 'compact' && states[0]) {
+      try {
+        const current = states[0];
+        const doc = getDocument(current.document_id);
+        if (doc?.content) {
+          appendBoundedNote(lines, {
+            heading: 'Current workstream',
+            title: current.title,
+            documentId: current.document_id,
+            content: doc.content,
+            cap: ACTIVE_NOTE_CAP,
+          });
+        }
+      } catch {
+        // A missing body must not drop the title list.
+      }
+    }
 
     if (hookInput.source === 'compact') {
       if (continuityText) lines.push(continuityText);
@@ -152,8 +181,6 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
           // active note previously owned by itself. The exact in-flight
           // snapshot wins; state still gets at least 1k chars.
           const noteCap = Math.max(1000, ACTIVE_NOTE_CAP - (continuityText?.length ?? 0));
-          const truncated = doc.content.length > noteCap;
-          const body = truncated ? doc.content.slice(0, noteCap) : doc.content;
           // Already logged/planned above if this note is also in `states`;
           // add it here only when it isn't, so the session-scoped pick
           // doesn't double-count.
@@ -161,11 +188,13 @@ export function computeWakeupHook({ hookInput, session, agent = null, fastWrite 
             if (commit) logRetrieval({ docId: active.document_id, surface: SURFACE.BRIEFING, session, eventId, agent, fastWrite });
             else plannedDocIds.push(active.document_id);
           }
-          lines.push(
-            `--- Active workstream state (post-compact recovery): ${active.title} (#${active.document_id}) ---`,
-            body,
-            ...(truncated ? [`[truncated at ${noteCap} chars — kb_read(${active.document_id}) for the rest]`] : []),
-          );
+          appendBoundedNote(lines, {
+            heading: 'Active workstream state (post-compact recovery)',
+            title: active.title,
+            documentId: active.document_id,
+            content: doc.content,
+            cap: noteCap,
+          });
         }
       } catch {
         // Never let post-compact recovery be the reason the briefing fails.
