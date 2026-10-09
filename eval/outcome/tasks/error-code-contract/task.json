@@ -1,0 +1,7 @@
+{
+  "id": "error-code-contract",
+  "kind": "lesson",
+  "lessons": ["error-codes-public-contract"],
+  "promptA": "Release 4.12 was blocked yesterday. From the platform team: \"The developer-portal build in the platform repo parses docs/error-codes.md from every API repo and fails the release when src/errors.js defines a code the table does not list. Nothing in the API repo's own CI catches this. Every error code is a public contract: add a row (code, HTTP status, client action) in the same change that adds the code.\" Our last release added a CONFLICT (409) code to src/errors.js and a row was missing; I reverted the code, so please add CONFLICT (409, message 'The resource changed; reload and retry.') back properly, plus a test that every code in ERRORS appears in docs/error-codes.md. Run the tests before you finish.",
+  "promptB": "Accounts carry `requestsThisMinute` and `limitPerMinute`. Make `checkQuota(account)` in src/quota.js throw an API error with a new code `RATE_LIMITED` (HTTP 429) when `requestsThisMinute >= limitPerMinute`. Add tests and run them before you finish."
+}

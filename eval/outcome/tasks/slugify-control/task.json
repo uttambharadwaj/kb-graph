@@ -1,0 +1,6 @@
+{
+  "id": "slugify-control",
+  "kind": "control",
+  "lessons": [],
+  "promptB": "Add and export `slugify(title)` in src/text.js: trim, lowercase, replace every run of characters other than a-z and 0-9 with a single `-`, and strip leading and trailing `-`. Add tests and run them before you finish."
+}

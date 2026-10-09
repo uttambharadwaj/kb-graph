@@ -1,0 +1,9 @@
+{
+  "name": "shop-ops",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "prod:orders": "node scripts/prod-orders-count.js"
+  }
+}

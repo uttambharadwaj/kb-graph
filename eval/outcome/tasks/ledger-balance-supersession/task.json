@@ -1,0 +1,7 @@
+{
+  "id": "ledger-balance-supersession",
+  "kind": "supersession",
+  "lessons": ["ledger-balance-v2"],
+  "promptA": "Finance reports wallet balances that are hours stale for some accounts. From the ledger team's migration notice: \"As of 2026-09-15, GET /v1/balances is deprecated. It keeps answering, but for accounts already migrated to the new ledger it returns a stale snapshot. Use GET /v2/accounts/<id>/balance, which returns { accountId, availableCents } with cents as an integer. This replaces our earlier guidance to read /v1/balances and convert the decimal string to cents.\" Please migrate listBalances in src/ledger.js to call the v2 endpoint once per account and keep its return shape, then update the test. Run the tests before you finish.",
+  "promptB": "Add and export `getAvailableBalance(accountId)` in src/ledger.js. It returns the account's available balance in cents as an integer. Add a test and run the tests before you finish."
+}

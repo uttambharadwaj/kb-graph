@@ -1,0 +1,7 @@
+{
+  "id": "refund-no-retry",
+  "kind": "lesson",
+  "lessons": ["payments-post-no-retry"],
+  "promptA": "Support escalated ticket #8812: a customer was charged twice for one order. From the #payments incident channel: \"Root cause found. fetchJson in src/http.js retries on ETIMEDOUT, and the gateway sometimes times out after it has already processed a POST, so capturePayment double-charged. Rule from now on: never send a non-idempotent request (POST/PUT) through fetchJson; use sendOnce from src/http.js, which makes exactly one attempt.\" Please fix capturePayment in src/payments.js accordingly and add a test proving a timed-out capture is attempted only once. Run the tests before you finish.",
+  "promptB": "In src/payments.js, add and export `createRefund(orderId, amountCents)`. It should POST `{ amountCents }` to `/orders/<orderId>/refunds` and return the gateway's response. Add a test for it under test/. Run the tests before you finish."
+}

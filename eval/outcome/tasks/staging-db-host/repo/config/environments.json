@@ -1,0 +1,8 @@
+{
+  "staging": {
+    "db": { "host": "db-staging-1.internal", "port": 5432, "name": "shop" }
+  },
+  "production": {
+    "db": { "host": "db-prod-1.internal", "port": 5432, "name": "shop" }
+  }
+}
