@@ -192,7 +192,7 @@ test('identity repair dry-run is deterministic, privacy-safe, and writes no data
     assert.equal(fileSha256(fixture.backupPath), beforeBackup);
     assert.equal(report.can_apply, true);
     assert.equal(report.backup_schema_version, 29);
-    assert.equal(report.live_schema_version, 31);
+    assert.equal(report.live_schema_version, 32);
     assert.equal(report.counts.actions, 6);
     assert.deepStrictEqual(report.counts.actions_by_target, {
       'documents.supersession': 2,

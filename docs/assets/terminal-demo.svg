@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="534" viewBox="0 0 1200 534" role="img" aria-labelledby="terminal-title terminal-desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="588" viewBox="0 0 1200 588" role="img" aria-labelledby="terminal-title terminal-desc">
   <title id="terminal-title">One process learns; fresh processes retrieve it</title>
   <desc id="terminal-desc">Captured output from three real kb-graph commands using one temporary KB_DIR and vault. Each command ran in a separate Node process; temporary paths, the note date, and fresh-store maintenance warnings are normalized.</desc>
-  <rect width="1200" height="534" rx="18" fill="#0b0d12"/>
+  <rect width="1200" height="588" rx="18" fill="#0b0d12"/>
   <g id="panel-write">
-    <rect x="24" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <rect x="24" y="24" width="372" height="540" rx="14" fill="#151821" stroke="#303746"/>
     <circle cx="46" cy="48" r="5" fill="#ff5f57"/>
     <circle cx="62" cy="48" r="5" fill="#febc2e"/>
     <circle cx="78" cy="48" r="5" fill="#28c840"/>
@@ -19,7 +19,7 @@
     <text x="42" y="239" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">changed, 0 unchanged</text>
   </g>
   <g id="panel-retrieve">
-    <rect x="414" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <rect x="414" y="24" width="372" height="540" rx="14" fill="#151821" stroke="#303746"/>
     <circle cx="436" cy="48" r="5" fill="#ff5f57"/>
     <circle cx="452" cy="48" r="5" fill="#febc2e"/>
     <circle cx="468" cy="48" r="5" fill="#28c840"/>
@@ -39,7 +39,7 @@
     <text x="432" y="329" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">crossing releases.</text>
   </g>
   <g id="panel-briefing">
-    <rect x="804" y="24" width="372" height="486" rx="14" fill="#151821" stroke="#303746"/>
+    <rect x="804" y="24" width="372" height="540" rx="14" fill="#151821" stroke="#303746"/>
     <circle cx="826" cy="48" r="5" fill="#ff5f57"/>
     <circle cx="842" cy="48" r="5" fill="#febc2e"/>
     <circle cx="858" cy="48" r="5" fill="#28c840"/>
@@ -63,7 +63,10 @@
     <text x="822" y="401" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">directly; it owns duplicate gating and</text>
     <text x="822" y="419" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">fails closed. Search and read before</text>
     <text x="822" y="437" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">correcting an existing note, then pass</text>
-    <text x="822" y="455" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">supersedes. Lifecycle capture is automatic;</text>
-    <text x="822" y="473" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">/debrief is the higher-fidelity pass.</text>
+    <text x="822" y="455" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">supersedes. When the user states a rule,</text>
+    <text x="822" y="473" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">decision, or correction a later session</text>
+    <text x="822" y="491" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">will need, kb_write it before you finish:</text>
+    <text x="822" y="509" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">automatic capture skips short sessions.</text>
+    <text x="822" y="527" fill="#d6dae4" style="font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px;" xml:space="preserve">/debrief is the higher-fidelity pass.</text>
   </g>
 </svg>

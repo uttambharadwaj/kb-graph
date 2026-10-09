@@ -4,3 +4,4 @@ node_modules
 .env
 *.kb-private-*.tmp
 .DS_Store
+eval-out/

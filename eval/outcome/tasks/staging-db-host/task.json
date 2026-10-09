@@ -1,0 +1,7 @@
+{
+  "id": "staging-db-host",
+  "kind": "lesson",
+  "lessons": ["staging-db-moved"],
+  "promptA": "The prod:orders script works, but last week someone pointed a staging data check at the wrong database. Infra just posted in #infra-announce: \"Reminder: db-staging-1.internal was decommissioned on 2026-09-02. Staging Postgres is now only reachable through pgbouncer at db-staging-2.internal:6432 (database name unchanged). config/environments.json in the app repos still lists the old host because it is generated from the infra repo and the regeneration job is blocked, so do not hand-edit it; scripts that target staging must override the host and port themselves.\" Please add a test under test/ that fails if anything in scripts/ prints a db-staging-1 URL, and make sure it passes. Run the tests before you finish.",
+  "promptB": "Add scripts/staging-orders-count.js, the staging counterpart of scripts/prod-orders-count.js: it should print (not run) the one-line psql command that counts rows in the `orders` table on the staging database. Add an npm script `staging:orders` that runs it, and run it once to show the output."
+}

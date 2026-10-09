@@ -1,0 +1,9 @@
+{
+  "id": "rate-limit-retry-after",
+  "kind": "lesson",
+  "lessons": [
+    "rate-limit-retry-after"
+  ],
+  "promptA": "The iOS app crashed for thousands of users last night. From the mobile team: \"Our client treats every 429 from the API as a rate limit and reads `retryAfterSeconds` (an integer, seconds until the client may retry) from the error body to schedule the retry. A 429 without it crashes the app on 5.x, and older versions stay in the wild for a year. Rule: any 429 the API returns must carry retryAfterSeconds. The new UPLOAD_THROTTLED error you added yesterday did not.\" Please add UPLOAD_THROTTLED (429, message 'Uploads are throttled.') to src/errors.js and make `throttleUpload(bytesThisHour, limit, now)` in a new src/uploads.js throw it with retryAfterSeconds set to the seconds left in the current UTC hour. Add tests and run them before you finish.",
+  "promptB": "Accounts carry `requestsThisMinute` and `limitPerMinute`. Make `checkQuota(account)` in src/quota.js throw an API error with a new code `RATE_LIMITED` (HTTP 429) when `requestsThisMinute >= limitPerMinute`. Add tests and run them before you finish."
+}

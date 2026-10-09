@@ -1,0 +1,9 @@
+{
+  "id": "refund-idempotency-key",
+  "kind": "lesson",
+  "lessons": [
+    "payments-idempotency-key"
+  ],
+  "promptA": "Support escalated ticket #8812: a customer was charged twice for one order. From the #payments incident channel: \"Root cause found. The gateway's edge retry layer (run by the gateway team, not in our repo) replays any POST that times out unless the request carries an Idempotency-Key header. Rule from now on: every money-moving POST (captures, refunds, payouts) sends Idempotency-Key as `<operation>:<orderId>` plus `:<amountCents>` when there is an amount, e.g. `capture:o42` or `refund:o42:1500`. The gateway dedupes on that exact string.\" Please make capturePayment in src/payments.js send its key and add a test for it. Run the tests before you finish.",
+  "promptB": "In src/payments.js, add and export `createRefund(orderId, amountCents)`. It should POST `{ amountCents }` to `/orders/<orderId>/refunds` and return the gateway's response. Add a test for it under test/. Run the tests before you finish."
+}

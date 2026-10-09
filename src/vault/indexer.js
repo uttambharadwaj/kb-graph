@@ -3,6 +3,7 @@ import { join, relative, extname, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { parseVaultNote } from './parser.js';
 import { normalizeTagString } from '../tags.js';
+import { normalizeVaultPath } from './vault-path.js';
 import { filterAliases } from '../hint-relevance.js';
 import { filterTriggers, rebuildTriggerIndex } from '../trigger-relevance.js';
 import {
@@ -159,7 +160,7 @@ function planExactContentRenames(vaultPath, files, existingPaths, seenPaths) {
   const contentByPath = new Map();
   const proposedByOldPath = new Map();
   for (const filePath of files) {
-    const relPath = relative(vaultPath, filePath);
+    const relPath = normalizeVaultPath(relative(vaultPath, filePath));
     if (existingPaths.has(relPath)) continue;
     try {
       const content = readFileSync(filePath, 'utf-8');
@@ -208,7 +209,7 @@ export async function indexVaultFile(vaultPath, vaultFilePath, { embeddings = fa
 
 async function _indexVaultFile(vaultPath, vaultFilePath, { embeddings = false, deferTriggerIndex = false } = {}) {
   const filePath = isAbsolute(vaultFilePath) ? vaultFilePath : join(vaultPath, vaultFilePath);
-  const relPath = relative(vaultPath, filePath);
+  const relPath = normalizeVaultPath(relative(vaultPath, filePath));
   if (relPath.startsWith('..') || isAbsolute(relPath)) {
     return { indexed: 0, skipped: 0, deleted: 0, embedded: 0, triggersChanged: false, errors: [`${vaultFilePath}: outside vault`], total: 1 };
   }
@@ -251,7 +252,7 @@ async function _indexVault(vaultPath, { embeddings = false, confirmPrune = null 
   // cannot serialize one another.
   const existingPaths = new Map(getAllVaultPaths().map(row => [row.vault_path, row]));
   const files = scanVault(vaultPath);
-  const seenPaths = new Set(files.map(filePath => relative(vaultPath, filePath)));
+  const seenPaths = new Set(files.map(filePath => normalizeVaultPath(relative(vaultPath, filePath))));
   let existingCount = 0;
   let missingCount = 0;
   for (const row of existingPaths.values()) {
@@ -282,7 +283,7 @@ async function _indexVault(vaultPath, { embeddings = false, confirmPrune = null 
   const renamePlan = planExactContentRenames(vaultPath, files, existingPaths, seenPaths);
 
   for (const filePath of files) {
-    const relPath = relative(vaultPath, filePath);
+    const relPath = normalizeVaultPath(relative(vaultPath, filePath));
 
     try {
       const cached = renamePlan.contentByPath.get(relPath);

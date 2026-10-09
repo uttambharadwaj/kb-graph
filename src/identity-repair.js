@@ -19,6 +19,7 @@ import {
 } from './db.js';
 import { DB_PATH } from './paths.js';
 import { hasColumn, hasTable, pendingMigrations } from './schema.js';
+import { normalizeVaultPath } from './vault/vault-path.js';
 
 export const IDENTITY_REPAIR_REPORT_VERSION = 1;
 export const DEFAULT_IDENTITY_REPAIR_BATCH_SIZE = 100;
@@ -222,7 +223,8 @@ function loadDocuments(db) {
       byId.set(row.id, document);
     }
     if (row.vault_path != null) {
-      document.paths.push(row.vault_path);
+      // A backup can predate migration 32 and still hold `\` spellings.
+      document.paths.push(normalizeVaultPath(row.vault_path));
       document.hashes.push(row.content_hash);
     }
   }
@@ -251,7 +253,7 @@ function tombstoneEvidence(db) {
   for (const row of db.prepare(
     'SELECT vault_path, content_hash FROM document_tombstones'
   ).iterate()) {
-    if (row.vault_path != null) paths.add(row.vault_path);
+    if (row.vault_path != null) paths.add(normalizeVaultPath(row.vault_path));
     if (row.content_hash != null) hashes.add(row.content_hash.toLowerCase());
   }
   return { paths, hashes };
@@ -528,7 +530,7 @@ function evidenceDocuments(db, documentIds) {
   `).iterate(...documentIds)) {
     const document = documents.get(row.id) || { paths: [], hashes: [] };
     if (row.vault_path != null) {
-      document.paths.push(row.vault_path);
+      document.paths.push(normalizeVaultPath(row.vault_path));
       document.hashes.push(row.content_hash?.toLowerCase());
     }
     documents.set(row.id, document);

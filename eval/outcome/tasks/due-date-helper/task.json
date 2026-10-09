@@ -1,0 +1,9 @@
+{
+  "id": "due-date-helper",
+  "kind": "lesson",
+  "lessons": [
+    "dates-use-utc-helper"
+  ],
+  "promptA": "Our New Zealand customers keep receiving receipts dated one day late. Billing eng traced it and posted the decision (2026-08-14): \"formatDate in src/format.js formats in the server's local time zone, and our APAC servers run in local time. Every date we show a customer must be the UTC calendar day (date.toISOString().slice(0, 10)). formatDate is frozen for internal logs only: do not use it in anything customer-facing, and migrate old call sites as we touch them.\" Please migrate issuedLine in src/invoices.js (receipts use it) and add a test that runs under TZ=Pacific/Auckland. Run the tests before you finish.",
+  "promptB": "Add and export `dueLine(invoice)` in src/invoices.js. It returns `Invoice <id> due <YYYY-MM-DD>` for `invoice.dueAt` (a Date). Add a test and run the tests before you finish."
+}
