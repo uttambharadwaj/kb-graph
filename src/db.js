@@ -14,6 +14,7 @@ import { authoredBody } from './embeddings/embed.js';
 import { FTS_OUTCOME_TIE_BUCKET, compareByOutcomeSignal } from './outcome-ranking.js';
 import { addColumn, applyMigrations, ensureSchemaReady, hasColumn, hasIndex, hasTable } from './schema.js';
 import { sessionCaptureQueueStatus } from './session-capture.js';
+import { normalizeVaultPath } from './vault/vault-path.js';
 
 let db = null;
 
@@ -1124,7 +1125,131 @@ export const MIGRATIONS = [{
       ON identity_repair_ledger(run_id, sequence DESC)
       WHERE undone_at IS NULL;
   `),
+}, {
+  version: 32,
+  // A Windows indexer stored `\`-separated vault paths, which a WSL/Linux
+  // process sharing the vault and database joins as literal filename
+  // characters (#190). Rewrite every stored spelling to `/` (see
+  // normalizeVaultPath), merge the rows that become one path, then refuse a
+  // `\` key at the boundary so an un-upgraded Windows checkout fails loudly
+  // instead of forking a note's identity again. The guards are created in the
+  // same transaction as the rewrite, so their presence is the applied check.
+  name: 'portable vault path separators',
+  applied: db => db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sqlite_master
+    WHERE type = 'trigger' AND name IN (${VAULT_PATH_SEPARATOR_TRIGGERS.map(name => `'${name}'`).join(', ')})
+  `).get().count === VAULT_PATH_SEPARATOR_TRIGGERS.length,
+  preview: db => {
+    const plan = planVaultPathSeparators(db);
+    return `${plan.rewrite.length} vault paths rewritten to / separators, `
+      + `${plan.drop.length} duplicate rows merged`;
+  },
+  up: db => {
+    // Every write below is skipped when it has nothing to change: preparing a
+    // write on these tables compiles migration 30's writer-version triggers,
+    // which need a connection from configureKnowledgeBaseConnection.
+    const plan = planVaultPathSeparators(db);
+    for (const loser of plan.drop) {
+      db.prepare('DELETE FROM vault_files WHERE id = ?').run(loser.id);
+      if (
+        loser.document_id != null
+        && !db.prepare('SELECT 1 FROM vault_files WHERE document_id = ?').get(loser.document_id)
+      ) {
+        detachDocumentRecord(db, loser.document_id, DOCUMENT_DETACH_REASON.VAULT_MISSING);
+      }
+    }
+    for (const { id, vault_path } of plan.rewrite) {
+      db.prepare('UPDATE vault_files SET vault_path = ? WHERE id = ?').run(vault_path, id);
+    }
+    for (const [table, column, scope] of [
+      ['documents', 'source', "source LIKE 'vault:%' AND "],
+      ['embeddings', 'vault_path', ''],
+      ['document_tombstones', 'vault_path', ''],
+    ]) {
+      const where = `WHERE ${scope}instr(${column}, char(92)) > 0`;
+      if (!db.prepare(`SELECT 1 FROM ${table} ${where} LIMIT 1`).get()) continue;
+      db.exec(`UPDATE ${table} SET ${column} = replace(${column}, char(92), '/') ${where}`);
+    }
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS vault_files_require_portable_path_insert
+      BEFORE INSERT ON vault_files
+      WHEN instr(new.vault_path, char(92)) > 0
+      BEGIN
+        SELECT RAISE(ABORT, '${VAULT_PATH_SEPARATOR_ERROR}');
+      END;
+      CREATE TRIGGER IF NOT EXISTS vault_files_require_portable_path_update
+      BEFORE UPDATE OF vault_path ON vault_files
+      WHEN instr(new.vault_path, char(92)) > 0
+      BEGIN
+        SELECT RAISE(ABORT, '${VAULT_PATH_SEPARATOR_ERROR}');
+      END;
+      CREATE TRIGGER IF NOT EXISTS documents_require_portable_vault_source_insert
+      BEFORE INSERT ON documents
+      WHEN new.source LIKE 'vault:%' AND instr(new.source, char(92)) > 0
+      BEGIN
+        SELECT RAISE(ABORT, '${VAULT_PATH_SEPARATOR_ERROR}');
+      END;
+      CREATE TRIGGER IF NOT EXISTS documents_require_portable_vault_source_update
+      BEFORE UPDATE OF source ON documents
+      WHEN new.source LIKE 'vault:%' AND instr(new.source, char(92)) > 0
+      BEGIN
+        SELECT RAISE(ABORT, '${VAULT_PATH_SEPARATOR_ERROR}');
+      END;
+    `);
+  },
 }];
+
+const VAULT_PATH_SEPARATOR_TRIGGERS = [
+  'vault_files_require_portable_path_insert',
+  'vault_files_require_portable_path_update',
+  'documents_require_portable_vault_source_insert',
+  'documents_require_portable_vault_source_update',
+];
+const VAULT_PATH_SEPARATOR_ERROR = 'vault paths must use / separators; update this kb-graph checkout';
+
+/**
+ * What migration 32 will do: `rewrite` re-spells a row's path, `drop` lists
+ * the rows that lose a collision with another spelling of the same path.
+ *
+ * A collision means one note was indexed from both platforms, so the file
+ * exists once and so must its row. The survivor is the live row if exactly
+ * one side is live — a detached row already lost the file — and otherwise the
+ * older document, which carries the note's promotion, retrieval history, and
+ * links. Its stored hash may predate the file; the next reindex sees the
+ * mismatch and refreshes the document in place. A loser's document is
+ * detached rather than deleted, so its history stays auditable and the
+ * ordinary grace-period purge owns its removal.
+ */
+function planVaultPathSeparators(db) {
+  const rows = db.prepare(`
+    SELECT id, vault_path, document_id, missing_at
+    FROM vault_files
+    WHERE replace(vault_path, char(92), '/') IN (
+      SELECT replace(vault_path, char(92), '/') FROM vault_files
+      WHERE instr(vault_path, char(92)) > 0
+    )
+    ORDER BY id
+  `).all();
+  const byPath = new Map();
+  for (const row of rows) {
+    const path = normalizeVaultPath(row.vault_path);
+    if (!byPath.has(path)) byPath.set(path, []);
+    byPath.get(path).push(row);
+  }
+
+  const rewrite = [];
+  const drop = [];
+  for (const [path, group] of byPath) {
+    const [survivor, ...losers] = [...group].sort((a, b) =>
+      (a.missing_at != null) - (b.missing_at != null)
+      || (a.document_id ?? Infinity) - (b.document_id ?? Infinity)
+      || a.id - b.id);
+    drop.push(...losers);
+    if (survivor.vault_path !== path) rewrite.push({ id: survivor.id, vault_path: path });
+  }
+  return { rewrite, drop };
+}
 
 // SQL's restatement of isTestSession() (src/retrieval.js) -- SQLite has no
 // REGEXP by default, so the prefix match becomes LIKE. The two must change

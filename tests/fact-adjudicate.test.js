@@ -49,7 +49,7 @@ describe('migration 24 — append-only fact reviews', () => {
     applyMigrations(fixture, MIGRATIONS.filter(migration => migration.version < 24));
     assert.deepStrictEqual(
       pendingMigrations(fixture, MIGRATIONS).map(migration => migration.version),
-      [24, 25, 26, 27, 28, 30, 31],
+      [24, 25, 26, 27, 28, 30, 31, 32],
     );
 
     applyMigrations(fixture, MIGRATIONS);
