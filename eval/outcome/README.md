@@ -101,6 +101,37 @@ rather than averaging it in. With a handful of tasks and ten repetitions, only
 large differences are meaningful. Treat the per-task table as the result and
 the per-arm rate as a summary of it.
 
+## Results so far (2026-10-09)
+
+The default model was Claude Sonnet 5.5, with 5 repetitions for each task and
+arm. The three redesigned tasks were rerun after the change described below.
+
+| Task | cold | rules | kb-seeded |
+| --- | --- | --- | --- |
+| due-date-helper | 0/5 | 5/5 | 5/5 |
+| ledger-balance-supersession | 0/5 | 5/5 | 5/5 |
+| rate-limit-retry-after | 0/5 | 5/5 | 5/5 |
+| refund-idempotency-key | 0/5 | 5/5 | 5/5 |
+| staging-db-host | 0/5 | 5/5 | 5/5 |
+| slugify-control | 5/5 | 5/5 | 5/5 |
+
+- When a lesson is in the knowledge base, a session finds and applies it as
+  reliably as it applies a hand-curated `CLAUDE.md`, at about $0.01–0.03 and
+  2–3 turns more per session. Superseded guidance never won.
+- The suite does not separate `kb-seeded` from `rules` yet. With 18 notes, any
+  retrieval works. A pool of hundreds of notes would test retrieval precision.
+- In the end-to-end pilot (one repetition), nothing session A learned reached
+  B. A never called `kb_write`, even when its prompt stated a team rule. Harvest
+  also skipped every A session as too short: about 1,000–1,400 characters of
+  conversation text against a 4,000-character minimum. The lifecycle-capture
+  daemon calls the same harvest, so it would not have helped either.
+- The first versions of three tasks leaked their lesson through the fixture,
+  and cold sessions solved them from the code: a `sendOnce` helper, a visible
+  docs table, and a `vendor/legacy` path. They were rewritten so the knowledge
+  has no trace in the repository.
+
+Total spend for these runs was about $19.
+
 ## Limits
 
 The tasks are synthetic and small. Each one isolates a single piece of
