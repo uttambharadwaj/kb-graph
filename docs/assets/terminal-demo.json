@@ -30,7 +30,7 @@
       "title": "Brief",
       "subtitle": "fresh process C · SessionStart hook",
       "command": "printf '{}\\n' | node bin/kb.js wakeup-hook",
-      "output": "KB BRIEFING (knowledge-base MCP; 1 docs, 0 current facts; types: lesson 1)\nhealth: ⚠ <expected fresh-store maintenance warnings omitted>\nRecently updated:\n- Deploys reset shared retry budgets [demo-app] (lesson)\nBefore non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity); only a fresh reviewed projection is current state.\nAt a durable boundary, call kb_write directly; it owns duplicate gating and fails closed. Search and read before correcting an existing note, then pass supersedes. Lifecycle capture is automatic; /debrief is the higher-fidelity pass."
+      "output": "KB BRIEFING (knowledge-base MCP; 1 docs, 0 current facts; types: lesson 1)\nhealth: ⚠ <expected fresh-store maintenance warnings omitted>\nRecently updated:\n- Deploys reset shared retry budgets [demo-app] (lesson)\nBefore non-trivial work: kb_search(query, tags) or kb_context(query). Entity history: kb_fact_query(entity); only a fresh reviewed projection is current state.\nAt a durable boundary, call kb_write directly; it owns duplicate gating and fails closed. Search and read before correcting an existing note, then pass supersedes. When the user states a rule, decision, or correction a later session will need, kb_write it before you finish: automatic capture skips short sessions. /debrief is the higher-fidelity pass."
     }
   ]
 }

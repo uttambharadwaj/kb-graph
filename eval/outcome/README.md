@@ -125,12 +125,22 @@ arm. The three redesigned tasks were rerun after the change described below.
   also skipped every A session as too short: about 1,000–1,400 characters of
   conversation text against a 4,000-character minimum. The lifecycle-capture
   daemon calls the same harvest, so it would not have helped either.
+- A follow-up ran `kb-e2e` with 5 repetitions, with the briefing's capture
+  line before and after it was changed. The old line ended "Lifecycle capture
+  is automatic", which is false for short sessions. The new line tells the
+  agent to `kb_write` a rule, decision, or correction it was told, because
+  automatic capture skips short sessions. Session A captured the lesson in 0
+  of 25 lesson-task runs before the change and 5 of 24 after it (one run was
+  lost to a container restart). Session B passed in exactly the runs where A
+  had captured the lesson. The control stayed at 5/5, and cost per run was
+  unchanged. Capture is now the bottleneck: when a lesson is in the knowledge
+  base, it is applied every time.
 - The first versions of three tasks leaked their lesson through the fixture,
   and cold sessions solved them from the code: a `sendOnce` helper, a visible
   docs table, and a `vendor/legacy` path. They were rewritten so the knowledge
   has no trace in the repository.
 
-Total spend for these runs was about $19.
+Total spend for these runs was about $29.
 
 ## Limits
 
