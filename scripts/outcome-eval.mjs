@@ -271,8 +271,8 @@ async function runOne({ task, arm, rep, lessons, options }) {
 
   if (KB_ARMS.has(arm)) seedLessons(seededLessons(arm, task, lessons), env);
 
-  if (arm === 'kb-e2e') {
-    if (!task.promptA) return { ...row, skipped: 'task has no promptA' };
+  // A control has nothing to learn, so its end-to-end run is B alone.
+  if (arm === 'kb-e2e' && task.promptA) {
     const repoA = join(runDir, 'repo-a');
     prepareRepo(task, repoA);
     git(repoA, 'init', '-q');
@@ -283,13 +283,20 @@ async function runOne({ task, arm, rep, lessons, options }) {
       transcriptPath: join(runDir, 'session-a.jsonl'), options,
     });
     row.session_a = summarizeSession(a.events);
+    row.session_a.kb_writes = a.events
+      .filter(event => event.type === 'assistant')
+      .flatMap(event => event.message?.content ?? [])
+      .filter(block => block.type === 'tool_use' && block.name === 'mcp__knowledge-base__kb_write').length;
     const transcript = findTranscript(home, row.session_a.session_id);
     if (transcript) {
-      execFileSync(process.execPath, [KB_JS, 'harvest', `--path=${transcript}`], {
-        env: { ...env, KB_HARVEST_SDK_SESSIONS: '1' }, stdio: 'ignore', timeout: 900_000,
+      const output = execFileSync(process.execPath, [KB_JS, 'harvest', `--path=${transcript}`], {
+        env: { ...env, KB_HARVEST_SDK_SESSIONS: '1' }, encoding: 'utf8', timeout: 900_000,
       });
+      // The harvest's own one-line verdict, e.g. "0 notes" or "too short".
+      row.harvest = output.split('\n').filter(line => /Harvest done|too short|Skipped/.test(line)).join(' | ');
+    } else {
+      row.harvest = 'transcript not found';
     }
-    row.harvested = Boolean(transcript);
   }
 
   const b = await runSession({
