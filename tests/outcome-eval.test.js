@@ -86,12 +86,12 @@ describe('outcome eval arms', () => {
     try {
       execFileSync(process.execPath, [
         join(ROOT, 'scripts', 'outcome-eval.mjs'),
-        '--dry-run', '--out', out, '--tasks', 'refund-no-retry', '--arms', 'cold,rules,kb-seeded',
+        '--dry-run', '--out', out, '--tasks', 'refund-idempotency-key', '--arms', 'cold,rules,kb-seeded',
       ], { stdio: 'ignore' });
-      const run = arm => join(out, 'runs', `refund-no-retry--${arm}--1`);
+      const run = arm => join(out, 'runs', `refund-idempotency-key--${arm}--1`);
 
       assert.ok(!existsSync(join(run('cold'), 'repo', 'CLAUDE.md')));
-      assert.match(readFileSync(join(run('rules'), 'repo', 'CLAUDE.md'), 'utf8'), /use sendOnce/);
+      assert.match(readFileSync(join(run('rules'), 'repo', 'CLAUDE.md'), 'utf8'), /Idempotency-Key/);
       assert.deepStrictEqual(JSON.parse(readFileSync(join(run('cold'), 'mcp.json'), 'utf8')), { mcpServers: {} });
 
       const kbRun = run('kb-seeded');

@@ -1,9 +1,9 @@
-import { formatDate } from './vendor/legacy-dates.js';
+import { formatDate, formatMoney } from './format.js';
 
 export function issuedLine(invoice) {
   return `Invoice ${invoice.id} issued ${formatDate(invoice.issuedAt)}`;
 }
 
-export function paidLine(invoice) {
-  return `Invoice ${invoice.id} paid ${formatDate(invoice.paidAt)}`;
+export function totalLine(invoice) {
+  return `Invoice ${invoice.id} total ${formatMoney(invoice.totalCents, invoice.currency)}`;
 }

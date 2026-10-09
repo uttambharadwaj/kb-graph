@@ -9,11 +9,11 @@
       "content": "Read wallet balances from the ledger service with GET /v1/balances?accounts=<ids>. Each row has `available` as a decimal string such as \"12.34\"; convert it to integer cents with Math.round(Number(value) * 100) before doing arithmetic."
     },
     {
-      "id": "payments-post-no-retry",
-      "title": "Never send payment POSTs through fetchJson; use sendOnce",
+      "id": "payments-idempotency-key",
+      "title": "Money-moving POSTs must send an Idempotency-Key",
       "type": "lesson",
       "tags": "payments, http, retries, idempotency, incident",
-      "content": "fetchJson in the payments service's src/http.js retries on ETIMEDOUT. The gateway sometimes times out after it has already processed a POST, so a retried capture charged a customer twice (ticket #8812). Rule: never send a non-idempotent request (POST/PUT: captures, refunds, payouts) through fetchJson. Use sendOnce from src/http.js, which makes exactly one attempt; surface the timeout to the caller instead of retrying."
+      "content": "The payments gateway's edge retry layer (run by the gateway team, outside our repos) replays any POST that times out unless it carries an Idempotency-Key header; a replayed capture charged a customer twice (ticket #8812). Every money-moving POST (captures, refunds, payouts) sends Idempotency-Key as `<operation>:<orderId>`, plus `:<amountCents>` when there is an amount, e.g. `capture:o42` or `refund:o42:1500`. The gateway dedupes on that exact string."
     },
     {
       "id": "staging-db-moved",
@@ -23,18 +23,18 @@
       "content": "db-staging-1.internal was decommissioned on 2026-09-02. Staging Postgres is now only reachable through pgbouncer at db-staging-2.internal:6432; the database name is unchanged. config/environments.json in the app repos still lists the old host because it is generated from the infra repo and the regeneration job is blocked, so do not hand-edit it. Scripts that target staging must override the host and port themselves."
     },
     {
-      "id": "error-codes-public-contract",
-      "title": "Every API error code needs a row in docs/error-codes.md",
+      "id": "rate-limit-retry-after",
+      "title": "Every 429 must carry retryAfterSeconds",
       "type": "lesson",
-      "tags": "api, errors, docs, release, developer-portal",
-      "content": "API error codes are a public contract. The developer-portal build in the platform repo parses docs/error-codes.md from every API repo and fails the release when src/errors.js defines a code the table does not list; nothing in the API repo's own CI catches it (release 4.12 was blocked this way). Add the table row (code, HTTP status, client action) in the same change that adds the code."
+      "tags": "api, errors, rate-limit, mobile, incident",
+      "content": "The mobile clients treat every 429 from the API as a rate limit and read `retryAfterSeconds` (integer seconds until the client may retry) from the error to schedule the retry. A 429 without it crashed iOS 5.x, and old app versions stay in the wild for a year. Rule: any API error with HTTP 429 carries retryAfterSeconds, computed from the window that was exceeded."
     },
     {
       "id": "dates-use-utc-helper",
-      "title": "Format dates with formatIsoDate; legacy formatDate is frozen",
+      "title": "Customer-facing dates are the UTC calendar day; formatDate is internal only",
       "type": "decision",
       "tags": "dates, timezone, billing, invoices, decision",
-      "content": "Decision 2026-08-14 (billing): formatDate in src/vendor/legacy-dates.js formats in the server's local time zone, and APAC servers run in local time, so New Zealand customers saw dates one day late. All new date formatting uses formatIsoDate from src/lib/dates.js, which formats the UTC calendar day. legacy-dates.js is frozen: add no new call sites, and migrate old ones as they are touched."
+      "content": "Decision 2026-08-14 (billing): formatDate in src/format.js formats in the server's local time zone, and APAC servers run in local time, so New Zealand customers saw dates one day late. Every date shown to a customer (invoices, receipts, emails) must be the UTC calendar day: date.toISOString().slice(0, 10). formatDate is frozen for internal logs only; migrate old customer-facing call sites as they are touched."
     },
     {
       "id": "ledger-balance-v2",
