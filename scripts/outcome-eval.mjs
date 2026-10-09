@@ -193,7 +193,11 @@ function runSession({ prompt, cwd, env, mcpConfigPath, transcriptPath, options }
   if (options.model) args.push('--model', options.model);
   return new Promise((resolveRun, reject) => {
     const child = spawn(options.claudeBin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
-    const timer = setTimeout(() => child.kill('SIGTERM'), options.timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, options.timeoutMs);
     let buffer = '';
     let stderr = '';
     const events = [];
@@ -212,12 +216,12 @@ function runSession({ prompt, cwd, env, mcpConfigPath, transcriptPath, options }
     child.on('error', reject);
     child.on('close', code => {
       clearTimeout(timer);
-      resolveRun({ code, events, stderr: stderr.slice(-2000) });
+      resolveRun({ code, events, timedOut, stderr: stderr.slice(-2000) });
     });
   });
 }
 
-export function summarizeSession(events) {
+export function summarizeSession(events, { timedOut = false } = {}) {
   const result = events.findLast(event => event.type === 'result') ?? {};
   const toolCalls = events
     .filter(event => event.type === 'assistant')
@@ -225,7 +229,10 @@ export function summarizeSession(events) {
     .filter(block => block.type === 'tool_use')
     .map(block => block.name);
   return {
-    session_id: result.session_id ?? null,
+    // A session killed before its result event still names itself on its
+    // other events, and the harvest needs that id to find the transcript.
+    session_id: result.session_id ?? events.findLast(event => event.session_id)?.session_id ?? null,
+    ...(timedOut ? { timed_out: true } : {}),
     completed: result.subtype === 'success',
     cost_usd: result.total_cost_usd ?? null,
     turns: result.num_turns ?? null,
@@ -282,7 +289,7 @@ async function runOne({ task, arm, rep, lessons, options }) {
       prompt: task.promptA, cwd: repoA, env, mcpConfigPath,
       transcriptPath: join(runDir, 'session-a.jsonl'), options,
     });
-    row.session_a = summarizeSession(a.events);
+    row.session_a = summarizeSession(a.events, a);
     row.session_a.kb_writes = a.events
       .filter(event => event.type === 'assistant')
       .flatMap(event => event.message?.content ?? [])
@@ -307,7 +314,7 @@ async function runOne({ task, arm, rep, lessons, options }) {
   if (b.code !== 0 && b.stderr) row.stderr = b.stderr;
   return {
     ...row,
-    ...summarizeSession(b.events),
+    ...summarizeSession(b.events, b),
     ...runCheck(task, repoDir),
     finished_at: new Date().toISOString(),
   };
